@@ -939,6 +939,7 @@ internal fun ControlBarPlayButton(
     isPlaying: Boolean,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
+    tooltipAnchorAbove: Boolean = true,
 ) {
     val height = ControlBarPlayHeight
     val width by animateDpAsState(
@@ -963,7 +964,7 @@ internal fun ControlBarPlayButton(
         label = "control-bar-play-content",
     )
     val label = stringResource(if (isPlaying) Res.string.player_pause else Res.string.player_play)
-    PlayerTooltip(label, shortcut = "Space") {
+    PlayerTooltip(label, shortcut = "Space", anchorAbove = tooltipAnchorAbove) {
         Box(
             contentAlignment = Alignment.Center,
             modifier = modifier
@@ -993,6 +994,139 @@ private val ControlBarPlayHeight = 34.dp
 private val ControlBarPlayIconSize = 20.dp
 private const val ControlBarPlayingWidthRatio = 1.24f
 private const val ControlBarPlayingCornerRatio = 0.29f
+
+/**
+ * 控制条中的一体化播放控制簇：当中央簇不激活（键鼠模式、关闭触控中央控件或隐藏中央播放键）时，
+ * 将 `[ 外左 ] [ 内左 ] [ 播放/暂停 ] [ 内右 ] [ 外右 ]` 作为单一整体迁至控制条的 `PlayPause` 位置，
+ * 以底栏按钮尺寸紧凑排布。
+ */
+@Composable
+internal fun ControlBarTransportCluster(
+    config: CenterClusterConfig,
+    isPlaying: Boolean,
+    canPrevious: Boolean,
+    canNext: Boolean,
+    allowSeek: Boolean,
+    onTogglePlayPause: () -> Unit,
+    onPrevious: () -> Unit,
+    onNext: () -> Unit,
+    onSeekDeltaMillis: (Long) -> Unit,
+    tooltipAnchorAbove: Boolean = true,
+    modifier: Modifier = Modifier,
+) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = modifier,
+    ) {
+        ControlBarTransportSideButton(
+            slot = config.outerLeft,
+            canPrevious = canPrevious,
+            canNext = canNext,
+            allowSeek = allowSeek,
+            onPrevious = onPrevious,
+            onNext = onNext,
+            onSeekDeltaMillis = onSeekDeltaMillis,
+            tooltipAnchorAbove = tooltipAnchorAbove,
+        )
+        ControlBarTransportSideButton(
+            slot = config.innerLeft,
+            canPrevious = canPrevious,
+            canNext = canNext,
+            allowSeek = allowSeek,
+            onPrevious = onPrevious,
+            onNext = onNext,
+            onSeekDeltaMillis = onSeekDeltaMillis,
+            tooltipAnchorAbove = tooltipAnchorAbove,
+        )
+        ControlBarPlayButton(
+            isPlaying = isPlaying,
+            onClick = onTogglePlayPause,
+            tooltipAnchorAbove = tooltipAnchorAbove,
+        )
+        ControlBarTransportSideButton(
+            slot = config.innerRight,
+            canPrevious = canPrevious,
+            canNext = canNext,
+            allowSeek = allowSeek,
+            onPrevious = onPrevious,
+            onNext = onNext,
+            onSeekDeltaMillis = onSeekDeltaMillis,
+            tooltipAnchorAbove = tooltipAnchorAbove,
+        )
+        ControlBarTransportSideButton(
+            slot = config.outerRight,
+            canPrevious = canPrevious,
+            canNext = canNext,
+            allowSeek = allowSeek,
+            onPrevious = onPrevious,
+            onNext = onNext,
+            onSeekDeltaMillis = onSeekDeltaMillis,
+            tooltipAnchorAbove = tooltipAnchorAbove,
+        )
+    }
+}
+
+@Composable
+private fun ControlBarTransportSideButton(
+    slot: CenterSlotConfig,
+    canPrevious: Boolean,
+    canNext: Boolean,
+    allowSeek: Boolean,
+    onPrevious: () -> Unit,
+    onNext: () -> Unit,
+    onSeekDeltaMillis: (Long) -> Unit,
+    tooltipAnchorAbove: Boolean,
+) {
+    when (val action = slot.action.sanitized()) {
+        CenterSlotAction.None -> Unit
+        CenterSlotAction.Previous -> if (canPrevious || canNext) {
+            val prevLabel = stringResource(Res.string.player_previous)
+            PlayerTooltip(prevLabel, anchorAbove = tooltipAnchorAbove) {
+                PlayerIconButton(
+                    onClick = onPrevious,
+                    enabled = canPrevious,
+                    icon = Icons.Filled.SkipPrevious,
+                    contentDescription = prevLabel,
+                    showBackground = slot.showBackground,
+                )
+            }
+        }
+        CenterSlotAction.Next -> if (canPrevious || canNext) {
+            val nextLabel = stringResource(Res.string.player_next)
+            PlayerTooltip(nextLabel, anchorAbove = tooltipAnchorAbove) {
+                PlayerIconButton(
+                    onClick = onNext,
+                    enabled = canNext,
+                    icon = Icons.Filled.SkipNext,
+                    contentDescription = nextLabel,
+                    showBackground = slot.showBackground,
+                )
+            }
+        }
+        is CenterSlotAction.SeekBackward -> if (allowSeek) {
+            val label = stringResource(Res.string.player_seek_backward_seconds, action.seconds)
+            PlayerTooltip(label, anchorAbove = tooltipAnchorAbove) {
+                PlayerIconButton(
+                    onClick = { onSeekDeltaMillis(-action.seconds * 1_000L) },
+                    icon = Icons.Filled.FastRewind,
+                    contentDescription = label,
+                    showBackground = slot.showBackground,
+                )
+            }
+        }
+        is CenterSlotAction.SeekForward -> if (allowSeek) {
+            val label = stringResource(Res.string.player_seek_forward_seconds, action.seconds)
+            PlayerTooltip(label, anchorAbove = tooltipAnchorAbove) {
+                PlayerIconButton(
+                    onClick = { onSeekDeltaMillis(action.seconds * 1_000L) },
+                    icon = Icons.Filled.FastForward,
+                    contentDescription = label,
+                    showBackground = slot.showBackground,
+                )
+            }
+        }
+    }
+}
 
 /**
  * 内嵌时 56dp:360dp 宽的屏上画面约 202dp 高,顶上返回键占 56、底下一行控制条约 68,
@@ -1038,7 +1172,7 @@ internal fun CenterControlCluster(
 
     fun isSlotVisible(slot: CenterSlotConfig): Boolean {
         if (previewMode) return true
-        if (!showSideButtons) return false
+        if (!showSideButtons || !config.showCenterPlay) return false
         return when (slot.action) {
             CenterSlotAction.None -> false
             CenterSlotAction.Previous, CenterSlotAction.Next -> canPrevious || canNext

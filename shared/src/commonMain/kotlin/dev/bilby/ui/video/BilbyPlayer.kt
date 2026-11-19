@@ -61,6 +61,7 @@ import dev.bilby.ui.components.LocalPointerSource
 import dev.bilby.ui.player.ControlBarDanmaku
 import dev.bilby.ui.player.ControlBarDanmakuField
 import dev.bilby.ui.player.ControlBarPlayButton
+import dev.bilby.ui.player.ControlBarTransportCluster
 import dev.bilby.ui.player.ControlButton
 import dev.bilby.ui.player.FullscreenButton
 import dev.bilby.ui.player.InlineDanmakuBarMinWidth
@@ -499,6 +500,7 @@ fun BilbyPlayer(
                     keepControlsAwake()
                 },
                 layoutPrefs = layoutPrefs,
+                allowSeek = gestures.seek,
                 pip = pip,
             )
         },
@@ -633,6 +635,7 @@ private fun PlayerControlBar(
     danmakuEnabled: Boolean,
     onDanmakuEnabledChange: (Boolean) -> Unit,
     layoutPrefs: PlayerLayoutPrefs = PlayerLayoutPrefs.Default,
+    allowSeek: Boolean = true,
     /**
      * 小窗:只留读数和进度条。弹幕、设置、全屏都藏起来 —— 几百 dp 宽的小窗排不下一整排,
      * 小窗里要做的也只是看到哪了、拖一下;要调什么回到窗口里调。
@@ -645,6 +648,14 @@ private fun PlayerControlBar(
     val isTouchLike = LocalPointerSource.current.isTouchLike
     val activeLayout = layoutPrefs.layoutFor(isLargeOrFullscreen = largePlayer && !pip)
     val centerActive = layoutPrefs.isCenterControlsActive(isTouchLike)
+    val transportInCenter = centerActive && activeLayout.center.showCenterPlay
+    val transportInAnyBar = !transportInCenter &&
+        (activeLayout.hasInBottomBar(PlayerControlId.PlayPause) || activeLayout.hasInTopBar(PlayerControlId.PlayPause))
+
+    fun isHiddenByTransportCluster(id: PlayerControlId): Boolean = when (id) {
+        PlayerControlId.PlayPause -> transportInCenter
+        else -> (transportInCenter || transportInAnyBar) && activeLayout.center.hasControl(id)
+    }
 
     val seekBar: @Composable (Modifier) -> Unit = { modifier ->
         BoundSeekBar(
@@ -688,13 +699,13 @@ private fun PlayerControlBar(
         }
         if (pip) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                if (!isTouchLike) {
+                if (!transportInCenter) {
                     ControlBarPlayButton(isPlaying = playWhenReady, onClick = onTogglePlayPause)
                 }
                 BoundTimeLabel(
                     progress = progress,
                     isDuration = false,
-                    modifier = Modifier.padding(start = if (isTouchLike) Spacing.Tight else Spacing.Hair),
+                    modifier = Modifier.padding(start = if (transportInCenter) Spacing.Tight else Spacing.Hair),
                 )
                 seekBar(Modifier.weight(1f))
                 BoundTimeLabel(progress = progress, isDuration = true, secondary = true, modifier = Modifier.padding(end = Spacing.Tight))
@@ -742,12 +753,19 @@ private fun PlayerControlBar(
                                 }
                             }
                             is PlayerPanelItem.Control -> {
-                                if (activeLayout.isHiddenByCenter(item.id, centerActive)) continue
+                                if (isHiddenByTransportCluster(item.id)) continue
                                 val showBg = item.showBackground
                                 when (item.id) {
-                                    PlayerControlId.PlayPause -> ControlBarPlayButton(
+                                    PlayerControlId.PlayPause -> ControlBarTransportCluster(
+                                        config = activeLayout.center,
                                         isPlaying = playWhenReady,
-                                        onClick = onTogglePlayPause,
+                                        canPrevious = canPrevious,
+                                        canNext = canNext,
+                                        allowSeek = allowSeek,
+                                        onTogglePlayPause = onTogglePlayPause,
+                                        onPrevious = onPrevious,
+                                        onNext = onNext,
+                                        onSeekDeltaMillis = onSeekByMillis,
                                     )
                                     PlayerControlId.Previous -> if (canPrevious || canNext) {
                                         val prevLabel = stringResource(Res.string.player_previous)
@@ -773,7 +791,7 @@ private fun PlayerControlBar(
                                             )
                                         }
                                     }
-                                    PlayerControlId.SeekBackward -> {
+                                    PlayerControlId.SeekBackward -> if (allowSeek) {
                                         val sec = layoutPrefs.seekButtonSeconds
                                         val label = stringResource(Res.string.player_seek_backward_seconds, sec)
                                         PlayerTooltip(label) {
@@ -785,7 +803,7 @@ private fun PlayerControlBar(
                                             )
                                         }
                                     }
-                                    PlayerControlId.SeekForward -> {
+                                    PlayerControlId.SeekForward -> if (allowSeek) {
                                         val sec = layoutPrefs.seekButtonSeconds
                                         val label = stringResource(Res.string.player_seek_forward_seconds, sec)
                                         PlayerTooltip(label) {
@@ -801,7 +819,7 @@ private fun PlayerControlBar(
                                         BoundTimeLabel(
                                             progress = progress,
                                             isDuration = false,
-                                            modifier = Modifier.padding(start = if (isTouchLike) Spacing.Tight else Spacing.Hair),
+                                            modifier = Modifier.padding(start = if (transportInCenter) Spacing.Tight else Spacing.Hair),
                                         )
                                         seekBar(Modifier.weight(1f))
                                         renderedSeekBar = true
@@ -885,11 +903,21 @@ private fun PlayerControlBar(
                                 }
                             }
                             is PlayerPanelItem.Control -> {
-                                if (activeLayout.isHiddenByCenter(item.id, centerActive)) continue
+                                if (isHiddenByTransportCluster(item.id)) continue
                                 val showBg = item.showBackground
                                 when (item.id) {
                                     PlayerControlId.PlayPause -> if (!composing || roomy) {
-                                        ControlBarPlayButton(isPlaying = playWhenReady, onClick = onTogglePlayPause)
+                                        ControlBarTransportCluster(
+                                            config = activeLayout.center,
+                                            isPlaying = playWhenReady,
+                                            canPrevious = canPrevious,
+                                            canNext = canNext,
+                                            allowSeek = allowSeek,
+                                            onTogglePlayPause = onTogglePlayPause,
+                                            onPrevious = onPrevious,
+                                            onNext = onNext,
+                                            onSeekDeltaMillis = onSeekByMillis,
+                                        )
                                     }
                                     PlayerControlId.Previous -> if ((!composing || roomy) && (canPrevious || canNext)) {
                                         val prevLabel = stringResource(Res.string.player_previous)
@@ -915,7 +943,7 @@ private fun PlayerControlBar(
                                             )
                                         }
                                     }
-                                    PlayerControlId.SeekBackward -> if (!composing || roomy) {
+                                    PlayerControlId.SeekBackward -> if ((!composing || roomy) && allowSeek) {
                                         val sec = layoutPrefs.seekButtonSeconds
                                         val label = stringResource(Res.string.player_seek_backward_seconds, sec)
                                         PlayerTooltip(label) {
@@ -927,7 +955,7 @@ private fun PlayerControlBar(
                                             )
                                         }
                                     }
-                                    PlayerControlId.SeekForward -> if (!composing || roomy) {
+                                    PlayerControlId.SeekForward -> if ((!composing || roomy) && allowSeek) {
                                         val sec = layoutPrefs.seekButtonSeconds
                                         val label = stringResource(Res.string.player_seek_forward_seconds, sec)
                                         PlayerTooltip(label) {
@@ -943,7 +971,7 @@ private fun PlayerControlBar(
                                         Row(
                                             verticalAlignment = Alignment.Bottom,
                                             modifier = Modifier.padding(
-                                                start = if (isTouchLike) Spacing.Tight else Spacing.Hair,
+                                                start = if (transportInCenter) Spacing.Tight else Spacing.Hair,
                                                 end = Spacing.Tight,
                                             ),
                                         ) {

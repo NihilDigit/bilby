@@ -116,6 +116,7 @@ import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.PointerType
 import dev.bilby.data.CenterClusterConfig
 import dev.bilby.data.CenterSlotAction
+import dev.bilby.data.CenterSlotConfig
 import dev.bilby.data.DEFAULT_DOUBLE_TAP_SEEK_SECONDS
 import dev.bilby.data.DEFAULT_DOUBLE_TAP_ZONE_FRACTION
 import dev.bilby.data.DEFAULT_VERTICAL_ZONE_FRACTION
@@ -1375,6 +1376,9 @@ fun PlayerShell(
         // 小窗里页面的全屏状态可能还是 true(全屏里进的小窗),顶栏、锁、内嵌右上角都另看 pip。
         val activeLayout = layoutPrefs.layoutFor(isLargeOrFullscreen = largePlayer && !pip)
         val centerControlsActive = layoutPrefs.isCenterControlsActive(pointerSource.isTouchLike)
+        val transportInCenter = centerControlsActive && activeLayout.center.showCenterPlay
+        val transportInAnyBar = !transportInCenter &&
+            (activeLayout.hasInBottomBar(PlayerControlId.PlayPause) || activeLayout.hasInTopBar(PlayerControlId.PlayPause))
 
         AnimatedVisibility(
             visible = isFullscreen && !pip && controlsVisible && !locked,
@@ -1398,7 +1402,12 @@ fun PlayerShell(
                     when (item) {
                         PlayerPanelItem.Spacer -> Spacer(Modifier.weight(1f))
                         is PlayerPanelItem.Control -> {
-                            if (activeLayout.isHiddenByCenter(item.id, centerControlsActive)) continue
+                            val hiddenByTransport = if (item.id == PlayerControlId.PlayPause) {
+                                transportInCenter
+                            } else {
+                                (transportInCenter || transportInAnyBar) && activeLayout.center.hasControl(item.id)
+                            }
+                            if (hiddenByTransport) continue
                             when (item.id) {
                                 PlayerControlId.Back -> {
                                     val exitFullscreenLabel = stringResource(Res.string.player_exit_fullscreen)
@@ -1424,9 +1433,17 @@ fun PlayerShell(
                                     showBackground = item.showBackground,
                                     modifier = Modifier.padding(horizontal = Spacing.Tight),
                                 )
-                                PlayerControlId.PlayPause -> ControlBarPlayButton(
+                                PlayerControlId.PlayPause -> ControlBarTransportCluster(
+                                    config = activeLayout.center,
                                     isPlaying = playWhenReady,
-                                    onClick = togglePlayPause,
+                                    canPrevious = scope.canPrevious,
+                                    canNext = scope.canNext,
+                                    allowSeek = gestures.seek,
+                                    onTogglePlayPause = togglePlayPause,
+                                    onPrevious = actions.seekToPrevious,
+                                    onNext = actions.seekToNext,
+                                    onSeekDeltaMillis = actions.seekByMillis,
+                                    tooltipAnchorAbove = false,
                                 )
                                 PlayerControlId.Previous -> if (scope.canPrevious || scope.canNext) {
                                     val prevLabel = stringResource(Res.string.player_previous)
@@ -1618,31 +1635,16 @@ fun PlayerShell(
         // 暂停那个方块就压在进退读数上。手势进行中没有人要去点播放键,松手后读数淡出、它再回来。
         // 触屏模式保留正中播放键；键鼠模式下播放键已移至底部控制条最左端，不再遮挡视频正中，
         // 仅在加载缓冲时于正中保留轻量化指示器。
-        val centerConfig = if (centerControlsActive) {
-            activeLayout.center
-        } else {
-            CenterClusterConfig(showCenterPlay = false)
-        }
-        val hasVisibleCenterSide = listOf(
-            centerConfig.outerLeft,
-            centerConfig.innerLeft,
-            centerConfig.innerRight,
-            centerConfig.outerRight,
-        ).any { slot ->
-            when (slot.action) {
-                CenterSlotAction.None -> false
-                CenterSlotAction.Previous, CenterSlotAction.Next -> scope.canPrevious || scope.canNext
-                is CenterSlotAction.SeekBackward, is CenterSlotAction.SeekForward -> gestures.seek
-            }
-        }
-        val showCenterControls = (controlsVisible && !locked) && (centerConfig.showCenterPlay || hasVisibleCenterSide)
+        val showCenterCluster = transportInCenter && controlsVisible && !locked && !pip
+        val showCenterPlayInPip = transportInCenter && controlsVisible && !locked && pipWindow != null
+        val centerConfig = if (transportInCenter) activeLayout.center else EmptyCenterCluster
 
         AnimatedVisibility(
             // Android 小窗里不画:那里的播放键是系统给的。桌面小窗在触屏模式下照画，键鼠模式走底栏左端播放键。
             visible = (!pip || pipWindow != null) && currentGesture !is PlayerGesture.Seek &&
                 !episodeSwipeActive &&
                 speedController?.active != true &&
-                (showCenterControls || loadingVisible || (centerConfig.showCenterPlay && flashVisible)),
+                (showCenterCluster || showCenterPlayInPip || loadingVisible || (transportInCenter && flashVisible)),
             enter = scaleIn(scaleSpec, initialScale = CenterButtonEnterScale) + fadeIn(effectsSpec),
             exit = scaleOut(scaleSpec, targetScale = CenterButtonEnterScale) + fadeOut(effectsSpec),
             modifier = Modifier.align(Alignment.Center).hoverable(controlsHover),
@@ -1652,7 +1654,7 @@ fun PlayerShell(
                 isPlaying = playWhenReady,
                 loading = loadingVisible,
                 large = isFullscreen && !pip,
-                showSideButtons = controlsVisible && !locked && !pip,
+                showSideButtons = showCenterCluster,
                 canPrevious = scope.canPrevious,
                 canNext = scope.canNext,
                 allowSeek = gestures.seek,
@@ -2054,3 +2056,11 @@ private fun inSeekCancelZone(point: Offset, width: Float, height: Float): Boolea
 
 private const val SeekCancelZoneFraction = 0.15f
 private const val EPISODE_SWIPE_THRESHOLD_FRACTION = 0.14f
+
+private val EmptyCenterCluster = CenterClusterConfig(
+    showCenterPlay = false,
+    outerLeft = CenterSlotConfig(CenterSlotAction.None),
+    innerLeft = CenterSlotConfig(CenterSlotAction.None),
+    innerRight = CenterSlotConfig(CenterSlotAction.None),
+    outerRight = CenterSlotConfig(CenterSlotAction.None),
+)
