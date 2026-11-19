@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -97,6 +98,7 @@ import dev.bilby.ui.AdaptiveContent
 import dev.bilby.ui.LocalWindowCaption
 import dev.bilby.ui.components.BilbyTooltip
 import dev.bilby.ui.components.BilbyTopBar
+import dev.bilby.ui.components.DestructiveConfirmButton
 import dev.bilby.ui.components.InlineProgress
 import dev.bilby.ui.components.PaneSheet
 import dev.bilby.ui.components.trackEditableFocus
@@ -196,6 +198,17 @@ fun SettingsScreen(
                     row { position ->
                         CategoryRow(
                             position = position,
+                            title = stringResource(Res.string.settings_section_navigation_customization),
+                            icon = Icons.Outlined.Explore,
+                            value = state.loaded.then { startupDestinationLabel(state.navigationPrefs.startupPage) },
+                            target = RowTarget.Page,
+                            onClick = { onOpenSection(SettingsSection.Navigation) },
+                            selected = selected(SettingsSection.Navigation),
+                        )
+                    }
+                    row { position ->
+                        CategoryRow(
+                            position = position,
                             title = stringResource(Res.string.settings_section_playback),
                             icon = Icons.Outlined.PlayCircleOutline,
                             // 写这一页有什么,不写某一项的当前值:四组设置里挑哪一项的值都只说出了
@@ -204,6 +217,29 @@ fun SettingsScreen(
                             target = RowTarget.Page,
                             onClick = { onOpenSection(SettingsSection.Playback) },
                             selected = selected(SettingsSection.Playback),
+                        )
+                    }
+                    row { position ->
+                        CategoryRow(
+                            position = position,
+                            title = stringResource(Res.string.settings_section_player_customization),
+                            icon = Icons.Outlined.Tune,
+                            value = stringResource(Res.string.settings_player_customization_summary),
+                            target = RowTarget.Page,
+                            onClick = { onOpenSection(SettingsSection.Gestures) },
+                            selected = selected(SettingsSection.Gestures),
+                        )
+                    }
+                }
+                Spacer(modifier = Modifier.height(Spacing.Tight))
+                SettingsGroup {
+                    row { position ->
+                        NightModeCategoryRow(
+                            position = position,
+                            loaded = state.loaded,
+                            nightPrefs = state.nightMode,
+                            selected = selected(SettingsSection.NightMode),
+                            onClick = { onOpenSection(SettingsSection.NightMode) },
                         )
                     }
                     row { position ->
@@ -236,15 +272,9 @@ fun SettingsScreen(
                             selected = selected(SettingsSection.Privacy),
                         )
                     }
-                    row { position ->
-                        NightModeCategoryRow(
-                            position = position,
-                            loaded = state.loaded,
-                            nightPrefs = state.nightMode,
-                            selected = selected(SettingsSection.NightMode),
-                            onClick = { onOpenSection(SettingsSection.NightMode) },
-                        )
-                    }
+                }
+                Spacer(modifier = Modifier.height(Spacing.Tight))
+                SettingsGroup {
                     row { position ->
                         CategoryRow(
                             position = position,
@@ -254,30 +284,6 @@ fun SettingsScreen(
                             target = RowTarget.Page,
                             onClick = { onOpenSection(SettingsSection.About) },
                             selected = selected(SettingsSection.About),
-                        )
-                    }
-                }
-                SettingsGroup(title = stringResource(Res.string.settings_group_customization)) {
-                    row { position ->
-                        CategoryRow(
-                            position = position,
-                            title = stringResource(Res.string.settings_section_player_customization),
-                            icon = Icons.Outlined.Tune,
-                            value = stringResource(Res.string.settings_player_customization_summary),
-                            target = RowTarget.Page,
-                            onClick = { onOpenSection(SettingsSection.Gestures) },
-                            selected = selected(SettingsSection.Gestures),
-                        )
-                    }
-                    row { position ->
-                        CategoryRow(
-                            position = position,
-                            title = stringResource(Res.string.settings_section_navigation_customization),
-                            icon = Icons.Outlined.Explore,
-                            value = state.loaded.then { startupDestinationLabel(state.navigationPrefs.startupPage) },
-                            target = RowTarget.Page,
-                            onClick = { onOpenSection(SettingsSection.Navigation) },
-                            selected = selected(SettingsSection.Navigation),
                         )
                     }
                 }
@@ -304,16 +310,13 @@ fun SettingsScreen(
             title = { Text(stringResource(Res.string.settings_logout)) },
             text = { Text(stringResource(Res.string.settings_logout_message)) },
             confirmButton = {
-                Button(
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = MaterialTheme.colorScheme.error,
-                        contentColor = MaterialTheme.colorScheme.onError,
-                    ),
+                DestructiveConfirmButton(
+                    text = stringResource(Res.string.settings_logout),
                     onClick = {
                         confirmingLogout = false
                         onLogout()
                     },
-                ) { Text(stringResource(Res.string.settings_logout)) }
+                )
             },
             dismissButton = {
                 TextButton(onClick = { confirmingLogout = false }) {
