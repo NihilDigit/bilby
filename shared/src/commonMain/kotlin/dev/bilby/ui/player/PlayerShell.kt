@@ -32,6 +32,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
@@ -1401,11 +1402,27 @@ fun PlayerShell(
                     .windowInsetsPadding(WindowInsets.barsAndCutout)
                     .padding(end = Spacing.Tight, bottom = Spacing.Comfortable),
             ) {
-                val hasTopSpacer = activeLayout.topBar.any { it == PlayerPanelItem.Spacer }
+                val titleIndex = activeLayout.topBar.indexOfFirst {
+                    it is PlayerPanelItem.Control && it.id == PlayerControlId.Title
+                }
+                // Title 与紧邻其后的 Spacer 合并为单一 weight(1f)：若两者同时带 weight（哪怕 Title 用 fill=false），
+                // Row 会按权重平分剩余空间，Title 未用完的那一半不会分给 Spacer，导致右侧按钮停在 75% 处而非贴右沿。
+                val absorbedSpacerIndex = if (
+                    titleIndex >= 0 && activeLayout.topBar.getOrNull(titleIndex + 1) == PlayerPanelItem.Spacer
+                ) {
+                    titleIndex + 1
+                } else {
+                    -1
+                }
+                val hasRemainingTopSpacer = activeLayout.topBar.withIndex().any { (idx, item) ->
+                    item == PlayerPanelItem.Spacer && idx != absorbedSpacerIndex
+                }
                 var renderedLegacyActions = false
-                for (item in activeLayout.topBar) {
+                for ((index, item) in activeLayout.topBar.withIndex()) {
                     when (item) {
-                        PlayerPanelItem.Spacer -> Spacer(Modifier.weight(1f))
+                        PlayerPanelItem.Spacer -> if (index != absorbedSpacerIndex) {
+                            Spacer(Modifier.weight(1f))
+                        }
                         is PlayerPanelItem.Control -> {
                             val hiddenByTransport = if (item.id == PlayerControlId.PlayPause) {
                                 transportInCenter
@@ -1431,7 +1448,11 @@ fun PlayerShell(
                                     color = FixedColors.OnMedia,
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis,
-                                    modifier = if (hasTopSpacer) Modifier.weight(1f, fill = false) else Modifier.weight(1f),
+                                    modifier = if (hasRemainingTopSpacer) {
+                                        Modifier.widthIn(max = 360.dp)
+                                    } else {
+                                        Modifier.weight(1f)
+                                    },
                                 )
                                 PlayerControlId.SystemStatus -> PlayerStatusCluster(
                                     status = systemStatus,

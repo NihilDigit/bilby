@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
@@ -77,7 +78,6 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.FilledTonalToggleButtonDefaults
 import androidx.compose.material3.FilterChip
-import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.LocalTextStyle
@@ -890,7 +890,6 @@ private fun ThemeModeRow(position: RowPosition, selected: ThemeMode, onSelect: (
  * **折行,不横滑。** 十格在窄屏上折成两行放得下,横滑的话后几个色要拖一下才看得到,而这一项
  * 选的就是颜色,挑之前得先一眼看全。
  */
-@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun PaletteRow(position: RowPosition, selected: String, onSelect: (String) -> Unit) {
     val dark = LocalIsDarkTheme.current
@@ -909,31 +908,60 @@ private fun PaletteRow(position: RowPosition, selected: String, onSelect: (Strin
         title = stringResource(Res.string.settings_theme_palette),
         value = paletteLabel(selected),
     ) {
-        // **每行格数按行数平均分，不按"放得下几格"放满。** 放满时十格在手机上排成 6 + 4，第二行
-        // 缺一截；按实际测量宽度计算行数后再均分到各行，消除 BoxWithConstraints 子组合开销。
+        // **多行按统一网格列严格对齐，不按每行独立 SpaceBetween 分散。** 9 格拆成 5+4 时，
+        // 每行用等宽 weight(1f) 单元加末尾空占位，保证第二行 4 个色块与第一行前 4 列垂直对齐。
         var rowWidthPx by remember { mutableIntStateOf(0) }
         val rowWidthDp = with(LocalDensity.current) { rowWidthPx.toDp() }
         val fit = if (rowWidthPx > 0) (rowWidthDp / SwatchTouchSize).toInt().coerceAtLeast(1) else 5
         val rows = (swatches.size + fit - 1) / fit
         val perRow = (swatches.size + rows - 1) / rows
-        FlowRow(
-            maxItemsInEachRow = perRow,
-            horizontalArrangement = if (rows > 1) Arrangement.SpaceBetween else Arrangement.Start,
+        Column(
             modifier = Modifier
                 .fillMaxWidth()
                 .onSizeChanged { if (it.width != rowWidthPx) rowWidthPx = it.width }
                 .selectableGroup(),
         ) {
-            swatches.forEach { swatch ->
-                val scheme = if (dark) swatch.schemes.dark else swatch.schemes.light
-                ColorSwatch(
-                    color = scheme.primary,
-                    onColor = scheme.onPrimary,
-                    label = swatch.label,
-                    selected = swatch.key == effective,
-                    idleIcon = swatch.idleIcon,
-                    onClick = { onSelect(swatch.key) },
-                )
+            if (rows <= 1) {
+                Row(
+                    horizontalArrangement = Arrangement.Start,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    swatches.forEach { swatch ->
+                        val scheme = if (dark) swatch.schemes.dark else swatch.schemes.light
+                        ColorSwatch(
+                            color = scheme.primary,
+                            onColor = scheme.onPrimary,
+                            label = swatch.label,
+                            selected = swatch.key == effective,
+                            idleIcon = swatch.idleIcon,
+                            onClick = { onSelect(swatch.key) },
+                        )
+                    }
+                }
+            } else {
+                swatches.chunked(perRow).forEach { rowSwatches ->
+                    Row(modifier = Modifier.fillMaxWidth()) {
+                        rowSwatches.forEach { swatch ->
+                            val scheme = if (dark) swatch.schemes.dark else swatch.schemes.light
+                            Box(
+                                contentAlignment = Alignment.Center,
+                                modifier = Modifier.weight(1f),
+                            ) {
+                                ColorSwatch(
+                                    color = scheme.primary,
+                                    onColor = scheme.onPrimary,
+                                    label = swatch.label,
+                                    selected = swatch.key == effective,
+                                    idleIcon = swatch.idleIcon,
+                                    onClick = { onSelect(swatch.key) },
+                                )
+                            }
+                        }
+                        repeat(perRow - rowSwatches.size) {
+                            Spacer(Modifier.weight(1f))
+                        }
+                    }
+                }
             }
         }
     }
@@ -1784,31 +1812,34 @@ private fun ScheduleRuleEditorSheet(
                         color = colors.onSurfaceVariant,
                     )
                 }
-                val chipColors = FilterChipDefaults.filterChipColors(
-                    containerColor = colors.surfaceContainer,
-                    labelColor = colors.onSurfaceVariant,
-                    selectedContainerColor = colors.secondaryContainer,
-                    selectedLabelColor = colors.onSecondaryContainer,
-                )
-                FlowRow(
-                    horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
-                    verticalArrangement = Arrangement.spacedBy(Spacing.Hair),
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(Spacing.Hair),
                     modifier = Modifier.fillMaxWidth(),
                 ) {
                     dayShortLabels.forEach { (isoDay, label) ->
                         val selected = isoDay in daysOfWeek
-                        FilterChip(
+                        Surface(
                             selected = selected,
                             onClick = {
                                 val next = if (selected) daysOfWeek - isoDay else daysOfWeek + isoDay
                                 daysOfWeek = if (next.size == 7) emptySet() else next
                             },
-                            label = { Text(label) },
                             shape = CircleShape,
-                            border = null,
-                            colors = chipColors,
-                            modifier = Modifier.minimumInteractiveComponentSize(),
-                        )
+                            color = if (selected) colors.secondaryContainer else colors.surfaceContainer,
+                            contentColor = if (selected) colors.onSecondaryContainer else colors.onSurfaceVariant,
+                            modifier = Modifier
+                                .weight(1f)
+                                .heightIn(min = 40.dp),
+                        ) {
+                            Box(contentAlignment = Alignment.Center) {
+                                Text(
+                                    text = label,
+                                    style = MaterialTheme.typography.labelLarge,
+                                    maxLines = 1,
+                                    softWrap = false,
+                                )
+                            }
+                        }
                     }
                 }
             }

@@ -710,7 +710,10 @@ private fun PlayerControlBar(
         } else if (!stacked) {
             val hasTimeItem = activeLayout.hasInBottomBar(PlayerControlId.TimeLabel)
             var renderedSeekBar = false
-            Row(verticalAlignment = Alignment.CenterVertically) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(Spacing.Hair),
+            ) {
                 if (composing && danmakuField != null) {
                     ControlBarDanmakuField(
                         draft = danmakuField.draft,
@@ -726,7 +729,7 @@ private fun PlayerControlBar(
                         },
                         autoFocus = true,
                         focusRequestNonce = danmakuFocusNonce,
-                        modifier = Modifier.weight(1f).padding(horizontal = Spacing.Tight),
+                        modifier = Modifier.weight(1f).widthIn(min = 72.dp),
                     )
                     if (activeLayout.hasInBottomBar(PlayerControlId.Volume)) PlayerVolumeControl()
                     if (isFullscreen && activeLayout.hasInBottomBar(PlayerControlId.DanmakuToggle)) {
@@ -816,7 +819,7 @@ private fun PlayerControlBar(
                                         BoundTimeLabel(
                                             progress = progress,
                                             isDuration = false,
-                                            modifier = Modifier.padding(start = if (transportInCenter) Spacing.Tight else Spacing.Hair),
+                                            modifier = Modifier.padding(start = if (transportInCenter) Spacing.Tight else 0.dp),
                                         )
                                         seekBar(Modifier.weight(1f))
                                         renderedSeekBar = true
@@ -824,7 +827,6 @@ private fun PlayerControlBar(
                                             progress = progress,
                                             isDuration = true,
                                             secondary = true,
-                                            modifier = Modifier.padding(end = Spacing.Hair),
                                         )
                                     }
                                     PlayerControlId.DanmakuInput -> if (danmakuField != null) {
@@ -844,8 +846,7 @@ private fun PlayerControlBar(
                                             focusRequestNonce = danmakuFocusNonce,
                                             modifier = Modifier
                                                 .weight(1f)
-                                                .widthIn(min = 84.dp)
-                                                .padding(horizontal = Spacing.Hair),
+                                                .widthIn(min = 72.dp),
                                         )
                                     }
                                     PlayerControlId.Volume -> PlayerVolumeControl(showBackground = showBg)
@@ -897,7 +898,11 @@ private fun PlayerControlBar(
                 val hasDanmakuPill = danmakuField != null && activeLayout.hasInBottomBar(PlayerControlId.DanmakuInput)
                 // 弹幕输入框本身以 weight(1f) 弹性胶囊占位，自带弹性空白能力，避免与相邻 Spacer 重复瓜分宽度。
                 val danmakuAbsorbsSpacer = hasDanmakuPill
-                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
                     for (item in activeLayout.bottomBar) {
                         when (item) {
                             PlayerPanelItem.Spacer -> {
@@ -974,8 +979,7 @@ private fun PlayerControlBar(
                                         Row(
                                             verticalAlignment = Alignment.Bottom,
                                             modifier = Modifier.padding(
-                                                start = if (transportInCenter) Spacing.Tight else Spacing.Hair,
-                                                end = Spacing.Tight,
+                                                start = if (transportInCenter) Spacing.Tight else 0.dp,
                                             ),
                                         ) {
                                             BoundTimeLabel(progress = progress, isDuration = false, large = true)
@@ -1004,8 +1008,7 @@ private fun PlayerControlBar(
                                             focusRequestNonce = danmakuFocusNonce,
                                             modifier = Modifier
                                                 .weight(1f)
-                                                .widthIn(min = 84.dp)
-                                                .padding(horizontal = Spacing.Tight),
+                                                .widthIn(min = 72.dp),
                                         )
                                     }
                                     PlayerControlId.Speed -> if (wide && !composing) {

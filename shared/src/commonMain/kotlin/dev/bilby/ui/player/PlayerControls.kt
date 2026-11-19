@@ -100,7 +100,6 @@ import dev.bilby.resources.*
 import dev.bilby.ui.LocalPlaybackHost
 import dev.bilby.ui.components.BilbyIcons
 import dev.bilby.ui.components.BilbyTooltip
-import dev.bilby.ui.components.LocalPointerSource
 import dev.bilby.ui.barsAndCutout
 import dev.bilby.ui.theme.Dimens
 import dev.bilby.ui.theme.FixedColors
@@ -701,8 +700,8 @@ private const val VolumeWheelStep = 0.05f
 /**
  * 桌面端软件音量控件:静音切换 + 悬停/拖拽展开的紧凑横向滑杆,且控件上可直接滚轮微调。
  *
- * 只在播放宿主具备应用内软件音量([dev.bilby.player.PlaybackHost.hasSoftwareVolume])且当前指针不是触屏时渲染:
- * 移动端与平板走系统硬件音量键与右侧竖滑手势,控制条里不再重复塞滑杆。
+ * 只要播放宿主具备应用内软件音量([dev.bilby.player.PlaybackHost.hasSoftwareVolume])就渲染
+ * (含 Windows 触屏平板);Android 等无应用内软件音量的宿主由系统硬件音量键与右侧竖滑手势负责。
  *
  * @param surfaceTone 放在普通页面顶栏(如听视频界面)而非深色画面控制条上时传 true,容器取页面的 `surfaceContainerHigh`。
  */
@@ -713,7 +712,7 @@ internal fun PlayerVolumeControl(
     showBackground: Boolean = true,
 ) {
     val playback = LocalPlaybackHost.current
-    if (!playback.hasSoftwareVolume || LocalPointerSource.current.isTouchLike) return
+    if (!playback.hasSoftwareVolume) return
 
     val volume by playback.softwareVolume.collectAsStateWithLifecycle()
     val muted by playback.softwareMuted.collectAsStateWithLifecycle()
@@ -750,6 +749,7 @@ internal fun PlayerVolumeControl(
     Box(
         contentAlignment = Alignment.Center,
         modifier = modifier
+            .requiredWidthIn(min = if (surfaceTone) ControlChipHeight else 40.dp)
             .sizeIn(minHeight = if (surfaceTone) ControlChipHeight else Dimens.MinTouchTarget)
             .hoverable(hoverSource)
             .pointerInput(playback) {
@@ -1129,11 +1129,10 @@ private fun ControlBarTransportSideButton(
 }
 
 /**
- * 内嵌时 56dp:360dp 宽的屏上画面约 202dp 高,顶上返回键占 56、底下一行控制条约 68,
- * 中间留得下 56 再加上下各一点空。全屏 72。
+ * 内嵌时 48dp(贴合最小触控热区):360dp 宽的屏上画面约 202dp 高,留白更从容;全屏 60dp。
  */
-private val CenterButtonHeight = 56.dp
-private val CenterButtonHeightLarge = 72.dp
+private val CenterButtonHeight = 48.dp
+private val CenterButtonHeightLarge = 60.dp
 private const val PlayingWidthRatio = 1.15f
 private const val PlayingCornerRatio = 0.3f
 private const val LoadingRatio = 0.72f
