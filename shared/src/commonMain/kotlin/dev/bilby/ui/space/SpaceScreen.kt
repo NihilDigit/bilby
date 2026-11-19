@@ -29,6 +29,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.sizeIn
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.staggeredgrid.StaggeredGridCells
@@ -52,7 +53,6 @@ import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material.icons.outlined.SelectAll
-import androidx.compose.material3.AppBarRow
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -841,250 +841,270 @@ fun SpaceScreen(
         state.archivesAvailable == true && state.archives.appliedKeyword.isBlank() && it > 0
     }
 
-    Scaffold(
-        modifier = modifier,
-        topBar = {
-            SpaceTopBar(
-                profile = state.profile,
-                collapseFraction = { headerScroll.collapsedFraction },
-                overlayHero = overlayHero,
-                searching = searching,
-                keyword = state.archives.keyword,
-                refreshing = state.refreshing,
-                onRefresh = { onRefresh(visibleTabs) },
-                onKeywordChanged = onArchiveKeywordChanged,
-                onSearch = onArchiveSearch,
-                onOpenSearch = {
-                    searchOpen = true
-                    onTabSelected(SpaceTab.Archives)
-                },
-                onCloseSearch = {
-                    searchOpen = false
-                    onArchiveKeywordChanged("")
-                    if (state.archives.appliedKeyword.isNotEmpty()) onArchiveSearch()
-                },
-                onShare = { system.shareSpace(mid, state.profile?.name.orEmpty()) },
-                onBack = onBack,
-                dynamicsSheetOpen = state.dynamicsSheet?.open?.takeIf { sheetAvailable },
-                onDynamicsSheetOpenChange = onDynamicsSheetOpenChange,
-                canSearch = SpaceTab.Archives in allTabs,
-            )
-        },
-    ) { insets ->
-        val density = LocalDensity.current
-        val layoutDirection = LocalLayoutDirection.current
-        val topInset = insets.calculateTopPadding()
-        val targetMinVisiblePx = if (overlayHero) with(density) { topInset.toPx() } else 0f
-        if (headerScroll.minVisiblePx != targetMinVisiblePx) {
-            headerScroll.minVisiblePx = targetMinVisiblePx
-            if (headerScroll.heightPx > 0f) {
-                headerScroll.offsetPx = headerScroll.offsetPx.coerceIn(
-                    -(headerScroll.heightPx - targetMinVisiblePx).coerceAtLeast(0f),
-                    0f,
+    val profileGate: @Composable (@Composable () -> Unit) -> Unit = { content ->
+        when {
+            state.loading && state.profile == null -> FullScreenLoading()
+            state.error != null && state.profile == null ->
+                FullScreenError(stringResource(state.error), onRetry)
+            !sectionsKnown -> FullScreenLoading()
+            else -> content()
+        }
+    }
+
+    val dynamicsList: @Composable (Modifier) -> Unit = { listModifier ->
+        DynamicListTab(
+            state = state.dynamics,
+            onLoadMore = onLoadMoreDynamics,
+            onAction = onDynamicAction,
+            onLikeDynamic = onLikeDynamic,
+            onOpenOwnVideo = onDynamicVideoClick,
+            flat = wide,
+            modifier = listModifier,
+        )
+    }
+
+    val mainScaffold: @Composable (Modifier) -> Unit = { scaffoldModifier ->
+        Scaffold(
+            modifier = scaffoldModifier,
+            topBar = {
+                SpaceTopBar(
+                    profile = state.profile,
+                    collapseFraction = { headerScroll.collapsedFraction },
+                    overlayHero = overlayHero,
+                    searching = searching,
+                    keyword = state.archives.keyword,
+                    refreshing = state.refreshing,
+                    onRefresh = { onRefresh(visibleTabs) },
+                    onKeywordChanged = onArchiveKeywordChanged,
+                    onSearch = onArchiveSearch,
+                    onOpenSearch = {
+                        searchOpen = true
+                        onTabSelected(SpaceTab.Archives)
+                    },
+                    onCloseSearch = {
+                        searchOpen = false
+                        onArchiveKeywordChanged("")
+                        if (state.archives.appliedKeyword.isNotEmpty()) onArchiveSearch()
+                    },
+                    onShare = { system.shareSpace(mid, state.profile?.name.orEmpty()) },
+                    onBack = onBack,
+                    dynamicsSheetOpen = state.dynamicsSheet?.open?.takeIf { sheetAvailable },
+                    onDynamicsSheetOpenChange = onDynamicsSheetOpenChange,
+                    canSearch = SpaceTab.Archives in allTabs,
                 )
-            }
-        }
-
-        val baseBannerHeight = if (wide) HeroBannerExpandedHeight else HeroBannerCompactHeight
-        val bannerHeight = if (overlayHero) {
-            (topInset - TopBarStandardHeight).coerceAtLeast(0.dp) + baseBannerHeight
-        } else {
-            baseBannerHeight
-        }
-
-        val header: @Composable (Modifier) -> Unit = { paneModifier ->
-            state.profile?.let { profile ->
-                SpaceHeader(
-                    profile = profile,
-                    archiveCount = archiveTotal,
-                    bannerHeight = bannerHeight,
-                    overlayTopBar = overlayHero,
-                    onToggleFollow = onToggleFollow,
-                    onSetBlocked = onSetBlocked,
-                    onOpenGroupPicker = onOpenGroupPicker,
-                    onLiveClick = if (vodOnly) null else onLiveClick,
-                    modifier = paneModifier,
-                )
-            }
-        }
-
-        val listColumns = GridCells.Fixed(1)
-
-        val profileGate: @Composable (@Composable () -> Unit) -> Unit = { content ->
-            when {
-                state.loading && state.profile == null -> FullScreenLoading()
-                state.error != null && state.profile == null ->
-                    FullScreenError(stringResource(state.error), onRetry)
-                !sectionsKnown -> FullScreenLoading()
-                else -> content()
-            }
-        }
-
-        val dynamicsList: @Composable (Modifier) -> Unit = { listModifier ->
-            DynamicListTab(
-                state = state.dynamics,
-                onLoadMore = onLoadMoreDynamics,
-                onAction = onDynamicAction,
-                onLikeDynamic = onLikeDynamic,
-                onOpenOwnVideo = onDynamicVideoClick,
-                flat = wide,
-                modifier = listModifier,
-            )
-        }
-
-        val tabbedPane: @Composable ColumnScope.(List<SpaceTab>) -> Unit = { tabs ->
-            val pagerState = rememberPagerState(initialPage = tabs.indexOf(state.activeTab).coerceAtLeast(0)) {
-                tabs.size
-            }
-            val scope = rememberCoroutineScope()
-
-            val currentTab by rememberUpdatedState(state.activeTab)
-            LaunchedEffect(pagerState, tabs) {
-                snapshotFlow { pagerState.currentPage }
-                    .collect { page -> tabs.getOrNull(page)?.let { if (it != currentTab) onTabSelected(it) } }
-            }
-            LaunchedEffect(state.activeTab, tabs) {
-                val target = tabs.indexOf(state.activeTab)
-                if (target >= 0 && target != pagerState.currentPage) pagerState.animateScrollToPage(target)
-            }
-
-            if (sectionsKnown && tabs.isNotEmpty()) {
-                val tabItems: @Composable () -> Unit = {
-                    tabs.forEachIndexed { index, tab ->
-                        val selected = pagerState.currentPage == index
-                        Tab(
-                            selected = selected,
-                            onClick = { scope.launch { pagerState.animateScrollToPage(index) } },
-                            text = {
-                                Text(
-                                    text = stringResource(tab.label),
-                                    style = if (selected) {
-                                        MaterialTheme.typography.titleSmallEmphasized
-                                    } else {
-                                        MaterialTheme.typography.titleSmall
-                                    },
-                                )
-                            },
-                        )
-                    }
-                }
-                val selectedIndex = pagerState.currentPage.coerceIn(tabs.indices)
-                val tabIndicator: @Composable TabIndicatorScope.() -> Unit = {
-                    SpacePagerTabIndicator(pagerState = pagerState)
-                }
-                if (wide) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
-                        modifier = Modifier.fillMaxWidth().padding(end = Spacing.Comfortable),
-                    ) {
-                        if (tabs.size > 1) {
-                            PrimaryScrollableTabRow(
-                                selectedTabIndex = selectedIndex,
-                                edgePadding = 0.dp,
-                                indicator = tabIndicator,
-                                divider = {},
-                                tabs = tabItems,
-                                modifier = Modifier.weight(1f),
-                            )
-                        } else {
-                            PaneTitle(stringResource(tabs.first().label), Modifier.weight(1f))
-                        }
-                        if (tabs.getOrNull(pagerState.currentPage) == SpaceTab.Archives) {
-                            ArchiveListenButton(state.archives, onListenUp)
-                            ArchiveSortMenu(state.archives, onArchiveOrderChanged)
-                        }
-                    }
-                } else if (tabs.size == 1) {
-                    PaneTitle(stringResource(tabs.first().label))
-                } else {
-                    PrimaryTabRow(
-                        selectedTabIndex = selectedIndex,
-                        indicator = tabIndicator,
-                        divider = {},
-                        tabs = tabItems,
+            },
+        ) { insets ->
+            val density = LocalDensity.current
+            val layoutDirection = LocalLayoutDirection.current
+            val topInset = insets.calculateTopPadding()
+            val targetMinVisiblePx = if (overlayHero) with(density) { topInset.toPx() } else 0f
+            if (headerScroll.minVisiblePx != targetMinVisiblePx) {
+                headerScroll.minVisiblePx = targetMinVisiblePx
+                if (headerScroll.heightPx > 0f) {
+                    headerScroll.offsetPx = headerScroll.offsetPx.coerceIn(
+                        -(headerScroll.heightPx - targetMinVisiblePx).coerceAtLeast(0f),
+                        0f,
                     )
                 }
             }
-            RefreshBox(
-                refreshing = state.refreshing,
-                onRefresh = { onRefresh(visibleTabs) },
-                modifier = Modifier.weight(1f),
-            ) {
-                profileGate {
-                    HorizontalPager(
-                        state = pagerState,
-                        userScrollEnabled = LocalPointerSource.current.isTouchLike,
-                        modifier = Modifier.fillMaxSize().nestedScroll(headerScroll.connection),
-                    ) { page ->
-                        when (tabs.getOrNull(page)) {
-                            SpaceTab.Archives -> ArchivesTab(
-                                state.archives,
-                                onOrderChanged = onArchiveOrderChanged,
-                                onListenUp = onListenUp,
-                                onLoadMore = onLoadMoreArchives,
-                                onVideoClick = onVideoClick,
-                                columns = listColumns,
-                                showControls = !wide,
-                            )
 
-                            SpaceTab.Dynamics -> dynamicsList(
-                                if (wide) {
-                                    Modifier
-                                        .padding(
-                                            start = Spacing.Comfortable,
-                                            end = Spacing.Comfortable,
-                                            bottom = Spacing.Comfortable,
-                                        )
-                                        .panelCard()
-                                } else {
-                                    Modifier
+            val baseBannerHeight = if (wide) HeroBannerExpandedHeight else HeroBannerCompactHeight
+            val bannerHeight = if (overlayHero) {
+                (topInset - TopBarStandardHeight).coerceAtLeast(0.dp) + baseBannerHeight
+            } else {
+                baseBannerHeight
+            }
+
+            val header: @Composable (Modifier) -> Unit = { paneModifier ->
+                state.profile?.let { profile ->
+                    SpaceHeader(
+                        profile = profile,
+                        archiveCount = archiveTotal,
+                        bannerHeight = bannerHeight,
+                        overlayTopBar = overlayHero,
+                        onToggleFollow = onToggleFollow,
+                        onSetBlocked = onSetBlocked,
+                        onOpenGroupPicker = onOpenGroupPicker,
+                        onLiveClick = if (vodOnly) null else onLiveClick,
+                        modifier = paneModifier,
+                    )
+                }
+            }
+
+            val listColumns = GridCells.Fixed(1)
+
+            val tabbedPane: @Composable ColumnScope.(List<SpaceTab>) -> Unit = { tabs ->
+                val pagerState = rememberPagerState(initialPage = tabs.indexOf(state.activeTab).coerceAtLeast(0)) {
+                    tabs.size
+                }
+                val scope = rememberCoroutineScope()
+
+                val currentTab by rememberUpdatedState(state.activeTab)
+                LaunchedEffect(pagerState, tabs) {
+                    snapshotFlow { pagerState.currentPage }
+                        .collect { page -> tabs.getOrNull(page)?.let { if (it != currentTab) onTabSelected(it) } }
+                }
+                LaunchedEffect(state.activeTab, tabs) {
+                    val target = tabs.indexOf(state.activeTab)
+                    if (target >= 0 && target != pagerState.currentPage) pagerState.animateScrollToPage(target)
+                }
+
+                if (sectionsKnown && tabs.isNotEmpty()) {
+                    val tabItems: @Composable () -> Unit = {
+                        tabs.forEachIndexed { index, tab ->
+                            val selected = pagerState.currentPage == index
+                            Tab(
+                                selected = selected,
+                                onClick = { scope.launch { pagerState.animateScrollToPage(index) } },
+                                text = {
+                                    Text(
+                                        text = stringResource(tab.label),
+                                        style = if (selected) {
+                                            MaterialTheme.typography.titleSmallEmphasized
+                                        } else {
+                                            MaterialTheme.typography.titleSmall
+                                        },
+                                    )
                                 },
                             )
+                        }
+                    }
+                    val selectedIndex = pagerState.currentPage.coerceIn(tabs.indices)
+                    val tabIndicator: @Composable TabIndicatorScope.() -> Unit = {
+                        SpacePagerTabIndicator(pagerState = pagerState)
+                    }
+                    if (wide) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
+                            modifier = Modifier.fillMaxWidth().padding(end = Spacing.Comfortable),
+                        ) {
+                            if (tabs.size > 1) {
+                                PrimaryScrollableTabRow(
+                                    selectedTabIndex = selectedIndex,
+                                    edgePadding = 0.dp,
+                                    indicator = tabIndicator,
+                                    divider = {},
+                                    tabs = tabItems,
+                                    modifier = Modifier.weight(1f),
+                                )
+                            } else {
+                                PaneTitle(stringResource(tabs.first().label), Modifier.weight(1f))
+                            }
+                            if (tabs.getOrNull(pagerState.currentPage) == SpaceTab.Archives) {
+                                ArchiveListenButton(state.archives, onListenUp)
+                                ArchiveSortMenu(state.archives, onArchiveOrderChanged)
+                            }
+                        }
+                    } else if (tabs.size == 1) {
+                        PaneTitle(stringResource(tabs.first().label))
+                    } else {
+                        PrimaryTabRow(
+                            selectedTabIndex = selectedIndex,
+                            indicator = tabIndicator,
+                            divider = {},
+                            tabs = tabItems,
+                        )
+                    }
+                }
+                RefreshBox(
+                    refreshing = state.refreshing,
+                    onRefresh = { onRefresh(visibleTabs) },
+                    modifier = Modifier.weight(1f),
+                ) {
+                    profileGate {
+                        HorizontalPager(
+                            state = pagerState,
+                            userScrollEnabled = LocalPointerSource.current.isTouchLike,
+                            modifier = Modifier.fillMaxSize().nestedScroll(headerScroll.connection),
+                        ) { page ->
+                            when (tabs.getOrNull(page)) {
+                                SpaceTab.Archives -> ArchivesTab(
+                                    state.archives,
+                                    onOrderChanged = onArchiveOrderChanged,
+                                    onListenUp = onListenUp,
+                                    onLoadMore = onLoadMoreArchives,
+                                    onVideoClick = onVideoClick,
+                                    columns = listColumns,
+                                    showControls = !wide,
+                                )
 
-                            SpaceTab.Collections -> CollectionsTab(
-                                state.collections,
-                                onLoadMoreCollections,
-                                onCollectionClick,
-                                columns = listColumns,
-                            )
+                                SpaceTab.Dynamics -> dynamicsList(
+                                    if (wide) {
+                                        Modifier
+                                            .padding(
+                                                start = Spacing.Comfortable,
+                                                end = Spacing.Comfortable,
+                                                bottom = Spacing.Comfortable,
+                                            )
+                                            .panelCard()
+                                    } else {
+                                        Modifier
+                                    },
+                                )
 
-                            null -> Unit
+                                SpaceTab.Collections -> CollectionsTab(
+                                    state.collections,
+                                    onLoadMoreCollections,
+                                    onCollectionClick,
+                                    columns = listColumns,
+                                )
+
+                                null -> Unit
+                            }
                         }
                     }
                 }
             }
-        }
 
-        val mainColumn: @Composable ColumnScope.() -> Unit = {
-            header(Modifier.collapsingHeader(headerScroll))
-            if (sectionsKnown && allTabs.isEmpty() && state.profile != null) {
-                EmptyState(stringResource(Res.string.space_empty_all), Modifier.weight(1f))
+            val mainColumn: @Composable ColumnScope.() -> Unit = {
+                header(Modifier.collapsingHeader(headerScroll))
+                if (sectionsKnown && allTabs.isEmpty() && state.profile != null) {
+                    EmptyState(stringResource(Res.string.space_empty_all), Modifier.weight(1f))
+                } else {
+                    tabbedPane(mainTabs)
+                }
+            }
+
+            val containerModifier = if (overlayHero) {
+                val horizontalHandled = PaddingValues(
+                    start = insets.calculateStartPadding(layoutDirection),
+                    end = insets.calculateEndPadding(layoutDirection),
+                )
+                Modifier
+                    .fillMaxSize()
+                    .padding(horizontalHandled)
+                    .consumeWindowInsets(
+                        PaddingValues(
+                            start = horizontalHandled.calculateStartPadding(layoutDirection),
+                            top = topInset,
+                            end = horizontalHandled.calculateEndPadding(layoutDirection),
+                        ),
+                    )
             } else {
-                tabbedPane(mainTabs)
+                Modifier.fillMaxSize().padScaffoldExceptBottom(insets)
+            }
+
+            if (wide) {
+                Column(modifier = containerModifier, content = mainColumn)
+            } else {
+                AdaptiveContent(
+                    modifier = containerModifier,
+                    maxWidth = Breakpoints.ReadableWidth,
+                ) {
+                    Column(modifier = Modifier.fillMaxSize(), content = mainColumn)
+                }
             }
         }
+    }
 
-        val containerModifier = if (overlayHero) {
-            val horizontalHandled = PaddingValues(
-                start = insets.calculateStartPadding(layoutDirection),
-                end = insets.calculateEndPadding(layoutDirection),
-            )
-            Modifier
-                .fillMaxSize()
-                .padding(horizontalHandled)
-                .consumeWindowInsets(
-                    PaddingValues(
-                        start = horizontalHandled.calculateStartPadding(layoutDirection),
-                        top = topInset,
-                        end = horizontalHandled.calculateEndPadding(layoutDirection),
-                    ),
-                )
-        } else {
-            Modifier.fillMaxSize().padScaffoldExceptBottom(insets)
-        }
-
-        if (wide) {
+    if (wide) {
+        // 宽屏下让 SidePanelLayout 位于最外层:主区自带顶栏,动态侧栏展开时主区收窄,
+        // SpaceTopBar 与侧栏标题栏按真实窗口几何自动交接桌面窗口按钮,避免顶栏操作与侧栏关闭/窗口按钮重叠。
+        Surface(
+            modifier = modifier.fillMaxSize(),
+            color = MaterialTheme.colorScheme.background,
+        ) {
             SidePanelLayout(
                 prefs = state.dynamicsSheet,
                 ready = sectionsKnown,
@@ -1095,26 +1115,13 @@ fun SpaceScreen(
                 onWidthChange = onDynamicsSheetWidthChange,
                 defaultWidth = DynamicsPanelDefaultWidth,
                 minWidth = DynamicsPanelMinWidth,
-                modifier = containerModifier,
-                main = { Column(modifier = Modifier.fillMaxSize(), content = mainColumn) },
-                panel = {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .padding(top = if (overlayHero) topInset else 0.dp),
-                    ) {
-                        profileGate { dynamicsList(Modifier.fillMaxSize()) }
-                    }
-                },
+                modifier = Modifier.fillMaxSize().statusBarsPadding(),
+                main = { mainScaffold(Modifier.fillMaxSize()) },
+                panel = { profileGate { dynamicsList(Modifier.fillMaxSize()) } },
             )
-        } else {
-            AdaptiveContent(
-                modifier = containerModifier,
-                maxWidth = Breakpoints.ReadableWidth,
-            ) {
-                Column(modifier = Modifier.fillMaxSize(), content = mainColumn)
-            }
         }
+    } else {
+        mainScaffold(modifier)
     }
 
     state.picker?.let { picker ->
@@ -1266,52 +1273,36 @@ private fun SpaceTopBar(
             }
         },
         actions = {
-            val closeLabel = stringResource(Res.string.space_search_close)
-            val searchLabel = stringResource(Res.string.space_search_hint)
-            val shareLabel = stringResource(Res.string.action_share)
-            val toggleLabel = stringResource(Res.string.space_dynamics_sheet_toggle)
-            AppBarRow(maxItemCount = SpaceTopBarMaxActions) {
-                if (searching) {
-                    clickableItem(
-                        onClick = onCloseSearch,
-                        icon = { Icon(Icons.Filled.Close, contentDescription = closeLabel) },
-                        label = closeLabel,
-                    )
-                } else {
-                    if (canSearch) {
-                        clickableItem(
-                            onClick = onOpenSearch,
-                            icon = { Icon(Icons.Filled.Search, contentDescription = searchLabel) },
-                            label = searchLabel,
-                        )
+            if (searching) {
+                val closeLabel = stringResource(Res.string.space_search_close)
+                BilbyTooltip(text = closeLabel) {
+                    IconButton(onClick = onCloseSearch) {
+                        Icon(Icons.Filled.Close, contentDescription = closeLabel)
                     }
-                    clickableItem(
-                        onClick = onShare,
-                        icon = { Icon(Icons.Filled.Share, contentDescription = shareLabel) },
-                        label = shareLabel,
-                    )
                 }
-                // 侧栏已展开时其自有标题栏已带关闭按钮，仅在关闭态提供顶栏入口。
-                if (dynamicsSheetOpen == false) {
-                    customItem(
-                        appbarContent = {
-                            SidePanelToggle(
-                                open = false,
-                                onOpenChange = onDynamicsSheetOpenChange,
-                                description = toggleLabel,
-                            )
-                        },
-                        menuContent = { menuState ->
-                            DropdownMenuItem(
-                                text = { Text(toggleLabel) },
-                                onClick = {
-                                    menuState.dismiss()
-                                    onDynamicsSheetOpenChange(true)
-                                },
-                            )
-                        },
-                    )
+            } else {
+                if (canSearch) {
+                    val searchLabel = stringResource(Res.string.space_search_hint)
+                    BilbyTooltip(text = searchLabel) {
+                        IconButton(onClick = onOpenSearch) {
+                            Icon(Icons.Filled.Search, contentDescription = searchLabel)
+                        }
+                    }
                 }
+                val shareLabel = stringResource(Res.string.action_share)
+                BilbyTooltip(text = shareLabel) {
+                    IconButton(onClick = onShare) {
+                        Icon(Icons.Filled.Share, contentDescription = shareLabel)
+                    }
+                }
+            }
+            // 侧栏已展开时其自有标题栏已带关闭按钮，仅在关闭态提供顶栏入口。
+            if (dynamicsSheetOpen == false) {
+                SidePanelToggle(
+                    open = false,
+                    onOpenChange = onDynamicsSheetOpenChange,
+                    description = stringResource(Res.string.space_dynamics_sheet_toggle),
+                )
             }
             RefreshAction(refreshing = refreshing, onRefresh = onRefresh)
             captionSlot.buttons?.invoke()
@@ -2403,7 +2394,6 @@ internal fun VideoListTab(
 
 private val SpaceTabIndicatorMinWidth = 24.dp
 private val SpaceTitleRevealOffset = 6.dp
-private const val SpaceTopBarMaxActions = 2
 
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 private object SpaceDesktopMenuMotionScheme : MotionScheme {
