@@ -32,12 +32,17 @@ interface SystemActions {
 
     fun applyLanguage(language: AppLanguage)
 
-    val supportsImageActions: Boolean get() = false
+    val supportsCopyImage: Boolean get() = false
+    val supportsSaveImage: Boolean get() = false
+    val supportsImageActions: Boolean get() = supportsCopyImage || supportsSaveImage
 
     /** 把原图写进系统剪贴板,成功返回 true。 */
     suspend fun copyImage(url: String): Boolean = false
 
-    /** 弹出系统另存为对话框并保存原图;保存成功返回 true,失败返回 false,用户取消返回 null。 */
+    /**
+     * 保存原图。桌面弹出系统另存为对话框,Android 写入系统相册(`Pictures/Bilby`)。
+     * 保存成功返回 true,失败返回 false,用户取消返回 null。
+     */
     suspend fun saveImage(url: String): Boolean? = null
 
     /** 显示轻量原生或窗口级短提示，不打断当前操作或抢夺焦点。 */

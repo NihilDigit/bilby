@@ -46,7 +46,7 @@ class MainActivity : ComponentActivity() {
         container.offlineDownloader
         incomingLink.value = linkFrom(intent)
         setContent {
-            val systemActions = remember { AndroidSystemActions(this) }
+            val systemActions = remember(container) { AndroidSystemActions(this, container.biliClient) }
             CompositionLocalProvider(
                 LocalSystemActions provides systemActions,
                 LocalPlaybackHost provides container.platform.playback,

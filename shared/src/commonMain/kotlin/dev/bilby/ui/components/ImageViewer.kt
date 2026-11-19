@@ -135,7 +135,8 @@ fun ImageViewer(
 
         val scope = rememberCoroutineScope()
         val systemActions = LocalSystemActions.current
-        val supportsImageActions = systemActions.supportsImageActions
+        val supportsCopyImage = systemActions.supportsCopyImage
+        val supportsSaveImage = systemActions.supportsSaveImage
         val pointerSource = LocalPointerSource.current
         val isTouchLike = pointerSource.isTouchLike
         val zoomActions = remember { ImageZoomActions() }
@@ -157,7 +158,7 @@ fun ImageViewer(
         val saveFailedText = stringResource(Res.string.image_save_failed)
 
         val copyCurrentImage: () -> Unit = {
-            if (supportsImageActions) {
+            if (supportsCopyImage) {
                 val targetUrl = urls[pagerState.currentPage]
                 scope.launch {
                     val ok = systemActions.copyImage(targetUrl)
@@ -166,7 +167,7 @@ fun ImageViewer(
             }
         }
         val saveCurrentImage: () -> Unit = {
-            if (supportsImageActions) {
+            if (supportsSaveImage) {
                 val targetUrl = urls[pagerState.currentPage]
                 scope.launch {
                     when (systemActions.saveImage(targetUrl)) {
@@ -197,8 +198,8 @@ fun ImageViewer(
                     val ctrl = event.isCtrlPressed && !event.isAltPressed && !event.isMetaPressed
                     val bare = !event.isCtrlPressed && !event.isAltPressed && !event.isMetaPressed
                     when {
-                        ctrl && !event.isShiftPressed && event.key == Key.C && supportsImageActions -> copyCurrentImage()
-                        ctrl && !event.isShiftPressed && event.key == Key.S && supportsImageActions -> saveCurrentImage()
+                        ctrl && !event.isShiftPressed && event.key == Key.C && supportsCopyImage -> copyCurrentImage()
+                        ctrl && !event.isShiftPressed && event.key == Key.S && supportsSaveImage -> saveCurrentImage()
                         ctrl && !event.isShiftPressed && (event.key == Key.Zero || event.key == Key.NumPad0) -> zoomActions.resetZoom()
                         bare && (event.key == Key.Equals || event.key == Key.NumPadAdd) -> zoomActions.zoomIn()
                         bare && !event.isShiftPressed && (event.key == Key.Minus || event.key == Key.NumPadSubtract) -> zoomActions.zoomOut()
@@ -230,14 +231,14 @@ fun ImageViewer(
                     )
                 }
                 if (!isTouchLike) {
-                    val totalItems = if (supportsImageActions) 5 else 3
+                    val totalItems = 3 + (if (supportsCopyImage) 1 else 0) + (if (supportsSaveImage) 1 else 0)
                     ContextMenuBox(
                         onClick = null,
                         menuLabel = stringResource(Res.string.menu_item_actions),
                         modifier = Modifier.fillMaxSize(),
                         menu = { close ->
                             var cursor = 0
-                            if (supportsImageActions) {
+                            if (supportsCopyImage) {
                                 val copyIndex = cursor++
                                 DropdownMenuItem(
                                     onClick = {
@@ -248,6 +249,8 @@ fun ImageViewer(
                                     leadingIcon = { Icon(Icons.Outlined.ContentCopy, contentDescription = null) },
                                     shape = menuItemShape(copyIndex, totalItems),
                                 )
+                            }
+                            if (supportsSaveImage) {
                                 val saveIndex = cursor++
                                 DropdownMenuItem(
                                     onClick = {
@@ -318,7 +321,9 @@ fun ImageViewer(
                 }
             }
 
-            if (supportsImageActions && !isTouchLike) {
+            val showCopyButton = supportsCopyImage && !isTouchLike
+            val showSaveButton = supportsSaveImage
+            if (showCopyButton || showSaveButton) {
                 Row(
                     horizontalArrangement = Arrangement.spacedBy(Spacing.Hair),
                     modifier = Modifier
@@ -326,22 +331,29 @@ fun ImageViewer(
                         .windowInsetsPadding(WindowInsets.barsAndCutout)
                         .padding(Spacing.Tight),
                 ) {
-                    BilbyTooltip(text = stringResource(Res.string.image_copy), shortcut = "Ctrl+C") {
-                        IconButton(onClick = copyCurrentImage) {
-                            Icon(
-                                Icons.Outlined.ContentCopy,
-                                contentDescription = stringResource(Res.string.image_copy),
-                                tint = FixedColors.OnMedia,
-                            )
+                    if (showCopyButton) {
+                        BilbyTooltip(text = stringResource(Res.string.image_copy), shortcut = "Ctrl+C") {
+                            IconButton(onClick = copyCurrentImage) {
+                                Icon(
+                                    Icons.Outlined.ContentCopy,
+                                    contentDescription = stringResource(Res.string.image_copy),
+                                    tint = FixedColors.OnMedia,
+                                )
+                            }
                         }
                     }
-                    BilbyTooltip(text = stringResource(Res.string.image_save), shortcut = "Ctrl+S") {
-                        IconButton(onClick = saveCurrentImage) {
-                            Icon(
-                                Icons.Outlined.Download,
-                                contentDescription = stringResource(Res.string.image_save),
-                                tint = FixedColors.OnMedia,
-                            )
+                    if (showSaveButton) {
+                        BilbyTooltip(
+                            text = stringResource(Res.string.image_save),
+                            shortcut = if (!isTouchLike) "Ctrl+S" else null,
+                        ) {
+                            IconButton(onClick = saveCurrentImage) {
+                                Icon(
+                                    Icons.Outlined.Download,
+                                    contentDescription = stringResource(Res.string.image_save),
+                                    tint = FixedColors.OnMedia,
+                                )
+                            }
                         }
                     }
                 }
