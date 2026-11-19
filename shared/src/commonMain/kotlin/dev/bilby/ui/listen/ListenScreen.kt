@@ -141,6 +141,7 @@ import androidx.compose.ui.unit.sp
 import dev.bilby.player.PlayerHandle
 import dev.bilby.player.PlayerListener
 import dev.bilby.ui.LocalPlaybackHost
+import dev.bilby.ui.LocalWindowVisible
 import dev.bilby.resources.*
 import dev.bilby.ui.player.EpisodeList
 import dev.bilby.ui.player.EpisodeTarget
@@ -236,6 +237,10 @@ private const val DiscGrooveWidthPx = 1.2f
 
 /** 转一圈的时长。真唱片是 33⅓ 转/分,约 1.8 秒一圈——那个速度在手机上像个转盘动画,放慢到这里。 */
 private const val DiscRotationPeriodMillis = 36_000
+
+/** 唱片前台旋转节流间隔（~30fps）：10°/s 慢速旋转无需在 120–240Hz 屏上每帧重绘，休眠期间不挂 vsync。 */
+private const val DiscFrameDelayMillis = 33L
+private const val DiscMinFrameIntervalNanos = 33_000_000L
 
 /** 歌词模式顶栏里那张封面的宽度。高度由 16:10 定,见风格指南 §1.3b。 */
 private val LyricsHeaderCoverWidth = 88.dp
@@ -574,10 +579,13 @@ fun ListenScreen(
     var speed by remember { mutableStateOf(1f) }
     var sleepSheetOpen by remember { mutableStateOf(false) }
     val playback = LocalPlaybackHost.current
+    val windowVisible = LocalWindowVisible.current
 
     // Media3 的 Player 没有位置回调,只能轮询;和 BilbyPlayer 一致的 500ms 间隔。
     // 写入 ListenProgressState，仅由最末端读数/进度条叶子读取，避免顶层每 500ms 或拖动时 60fps 重组。
-    LaunchedEffect(player) {
+    // 窗口不可见时暂停轮询，恢复可见时立即刷新一次。
+    LaunchedEffect(player, windowVisible) {
+        if (!windowVisible) return@LaunchedEffect
         while (true) {
             if (progress.dragPositionMillis == null) progress.positionMillis = player?.currentPosition ?: 0L
             progress.bufferedPositionMillis = player?.bufferedPosition ?: 0L
@@ -851,9 +859,10 @@ fun ListenScreen(
                         .padding(horizontal = Spacing.Comfortable),
                 ) {
                     // 和播放器用同一个进度条组件:两处的拖拽语义完全一样,分开写迟早各自漂移。
+                    // 窗口不可见时传 false 以自动摘除波浪进度条的 rememberInfiniteTransition。
                     BoundListenSeekBar(
                         progress = progress,
-                        playing = state.isPlaying,
+                        playing = state.isPlaying && windowVisible,
                         speed = speed,
                         onSeekStart = seekStart,
                         onSeekTo = seekTo,
@@ -1039,6 +1048,7 @@ private fun DiscView(
 ) {
     val item = state.queue?.current ?: return
     val reducedMotion = rememberReducedMotion()
+    val windowVisible = LocalWindowVisible.current
     val density = LocalDensity.current
     val haloColor = MaterialTheme.colorScheme.primary.copy(alpha = DiscHaloAlpha)
     val scrubArcColor = MaterialTheme.colorScheme.primary
@@ -1101,9 +1111,9 @@ private fun DiscView(
                         }
                     }
                 }
-                // 真实唱机转动惯性：播放启动平稳加速、暂停阻尼滑停至静止，reducedMotion 下保持静止。
-                LaunchedEffect(state.isPlaying, speed, isScrubbing, reducedMotion) {
-                    if (reducedMotion || isScrubbing) {
+                // 真实唱机转动惯性：播放启动平稳加速、暂停阻尼滑停至静止，reducedMotion 或窗口不可见时暂停并保留当前角度。
+                LaunchedEffect(state.isPlaying, speed, isScrubbing, reducedMotion, windowVisible) {
+                    if (reducedMotion || isScrubbing || !windowVisible) {
                         discOmega = 0f
                         return@LaunchedEffect
                     }
@@ -1121,9 +1131,15 @@ private fun DiscView(
                         val frameNanos = withFrameNanos { it }
                         if (lastNanos == 0L) {
                             lastNanos = frameNanos
+                            delay(DiscFrameDelayMillis)
                             continue
                         }
-                        val dt = ((frameNanos - lastNanos) / 1_000_000_000f).coerceIn(0f, 0.05f)
+                        val elapsedNanos = frameNanos - lastNanos
+                        if (elapsedNanos < DiscMinFrameIntervalNanos) {
+                            delay(DiscFrameDelayMillis)
+                            continue
+                        }
+                        val dt = (elapsedNanos / 1_000_000_000f).coerceIn(0f, 0.1f)
                         lastNanos = frameNanos
                         val rate = if (targetOmega > discOmega) 7.5f else 4.0f
                         val alpha = 1f - exp(-rate * dt)
@@ -1133,6 +1149,7 @@ private fun DiscView(
                             discOmega = 0f
                             break
                         }
+                        delay(DiscFrameDelayMillis)
                     }
                 }
 
@@ -2146,8 +2163,10 @@ private fun LyricsList(
     onSeekTo: (Long) -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val windowVisible = LocalWindowVisible.current
     var polledPosition by remember { mutableLongStateOf(player.currentPosition) }
-    LaunchedEffect(player) {
+    LaunchedEffect(player, windowVisible) {
+        if (!windowVisible) return@LaunchedEffect
         while (true) {
             polledPosition = player.currentPosition
             delay(LyricsPollIntervalMillis)

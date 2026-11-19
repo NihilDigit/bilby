@@ -32,6 +32,7 @@ import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import dev.bilby.ui.LocalWindowVisible
 import dev.bilby.ui.theme.Dimens
 import dev.bilby.ui.theme.Spacing
 import dev.bilby.ui.theme.rememberReducedMotion
@@ -65,7 +66,8 @@ private val LocalSkeletonAlpha = compositionLocalOf<State<Float>?> { null }
  */
 @Composable
 fun SkeletonPulse(content: @Composable () -> Unit) {
-    val alpha = if (rememberReducedMotion()) {
+    val windowVisible = LocalWindowVisible.current
+    val alpha = if (rememberReducedMotion() || !windowVisible) {
         null
     } else {
         val transition = rememberInfiniteTransition(label = "skeleton")

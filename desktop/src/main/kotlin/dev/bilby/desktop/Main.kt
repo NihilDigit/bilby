@@ -14,6 +14,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.collectAsState
@@ -46,6 +47,7 @@ import dev.bilby.ui.DesktopToastEvent
 import dev.bilby.ui.LocalAppFullscreen
 import dev.bilby.ui.LocalPlaybackHost
 import dev.bilby.ui.LocalSystemActions
+import dev.bilby.ui.LocalWindowVisible
 import dev.bilby.ui.components.SkiaAnimatedImageDecoder
 import dev.bilby.ui.player.LocalWindowFullscreen
 import dev.bilby.ui.player.LocalDesktopPip
@@ -64,6 +66,10 @@ import org.jetbrains.skia.Image
 import org.openani.mediamp.mpv.MpvMediampPlayer
 import java.awt.Dimension
 import java.awt.Frame
+import java.awt.event.WindowAdapter
+import java.awt.event.WindowEvent
+import java.awt.event.WindowFocusListener
+import java.awt.event.WindowStateListener
 import java.io.File
 import java.util.Properties
 import javax.swing.SwingUtilities
@@ -128,12 +134,14 @@ fun main(args: Array<String>) {
         }
         // 更新脚本已经在等这个进程退出,由它替换文件后再把应用拉起来。
         LaunchedEffect(updater) { updater.exitRequests.collect { quit() } }
+        var windowVisible by remember { mutableStateOf(true) }
         BilbyWindow(
             onCloseRequest = quit,
             title = "Bilby",
             // 标题栏与任务栏的图标。exe 与快捷方式的图标另由打包配置的 icon.ico 给。
             icon = appIcon,
             state = windowState,
+            windowVisible = windowVisible,
         ) {
             val normalMinimumSize = remember { Dimension(WindowBounds.MinWidthDp, WindowBounds.MinHeightDp) }
             LaunchedEffect(window) {
@@ -147,6 +155,75 @@ fun main(args: Array<String>) {
                     isMaximized = { windowState.placement == WindowPlacement.Maximized },
                     normalMinimumSize = normalMinimumSize,
                 ).also { pip = it }
+            }
+            var windowMinimized by remember(window) {
+                mutableStateOf((window.extendedState and Frame.ICONIFIED) != 0)
+            }
+            var windowFocused by remember(window) { mutableStateOf(true) }
+            DisposableEffect(window) {
+                fun syncMinimized() {
+                    windowMinimized = (window.extendedState and Frame.ICONIFIED) != 0
+                }
+                syncMinimized()
+                val stateListener = WindowStateListener { syncMinimized() }
+                val focusListener = object : WindowFocusListener {
+                    override fun windowGainedFocus(e: WindowEvent?) {
+                        windowFocused = true
+                    }
+                    override fun windowLostFocus(e: WindowEvent?) {
+                        if (!isOwnedByWindow(e?.oppositeWindow, window)) {
+                            windowFocused = false
+                        }
+                    }
+                }
+                val windowListener = object : WindowAdapter() {
+                    override fun windowActivated(e: WindowEvent?) {
+                        windowFocused = true
+                    }
+                    override fun windowDeactivated(e: WindowEvent?) {
+                        if (!isOwnedByWindow(e?.oppositeWindow, window)) {
+                            windowFocused = false
+                        }
+                    }
+                    override fun windowIconified(e: WindowEvent?) {
+                        windowMinimized = true
+                    }
+                    override fun windowDeiconified(e: WindowEvent?) {
+                        windowMinimized = false
+                    }
+                }
+                window.addWindowStateListener(stateListener)
+                window.addWindowFocusListener(focusListener)
+                window.addWindowListener(windowListener)
+                onDispose {
+                    window.removeWindowStateListener(stateListener)
+                    window.removeWindowFocusListener(focusListener)
+                    window.removeWindowListener(windowListener)
+                }
+            }
+            var effectiveWindowVisible by remember(window) { mutableStateOf(true) }
+            LaunchedEffect(windowMinimized, windowFocused, windowsPip.active) {
+                if (windowsPip.active || (!windowMinimized && windowFocused)) {
+                    effectiveWindowVisible = true
+                } else if (windowMinimized) {
+                    effectiveWindowVisible = false
+                } else {
+                    // 失焦但未最小化时短防抖，避免弹层、系统保存框等短暂焦点切换引起抖动。
+                    delay(FocusLossEfficiencyDebounceMillis)
+                    effectiveWindowVisible = false
+                }
+            }
+            LaunchedEffect(effectiveWindowVisible) {
+                windowVisible = effectiveWindowVisible
+                WindowsEfficiencyMode.setEnabled(!effectiveWindowVisible)
+                SkiaAnimatedImageDecoder.setWindowVisible(effectiveWindowVisible)
+            }
+            DisposableEffect(window) {
+                onDispose {
+                    windowVisible = true
+                    WindowsEfficiencyMode.setEnabled(false)
+                    SkiaAnimatedImageDecoder.setWindowVisible(true)
+                }
             }
             var appFullscreen by remember { mutableStateOf(false) }
             var playerFullscreen by remember { mutableStateOf(false) }
@@ -205,6 +282,7 @@ fun main(args: Array<String>) {
                 LocalDesktopPip provides windowsPip,
                 LocalAppFullscreen provides appFullscreenController,
                 LocalWindowFullscreen provides { on -> playerFullscreen = on },
+                LocalWindowVisible provides effectiveWindowVisible,
             ) {
                 BilbyTheme(appearance) {
                     Box(modifier = Modifier.fillMaxSize()) {
@@ -331,4 +409,15 @@ internal fun useBundledMpvRuntime() {
 internal val appIcon: Painter? by lazy {
     val bytes = object {}.javaClass.getResourceAsStream("/app-icon.png")?.use { it.readBytes() } ?: return@lazy null
     BitmapPainter(Image.makeFromEncoded(bytes).toComposeImageBitmap())
+}
+
+private const val FocusLossEfficiencyDebounceMillis = 600L
+
+private fun isOwnedByWindow(candidate: java.awt.Window?, root: java.awt.Window): Boolean {
+    var current = candidate
+    while (current != null) {
+        if (current === root) return true
+        current = current.owner
+    }
+    return false
 }

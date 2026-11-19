@@ -33,6 +33,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.swing.Swing
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import org.openani.mediamp.PlaybackErrorCode
 import org.openani.mediamp.PlaybackEvent
 import org.openani.mediamp.PlaybackException
@@ -1208,8 +1209,15 @@ class DesktopPlaybackHost(
                 if (playing) endHandled = false
                 _state.update { it.copy(isPlaying = playing, stoppedAtEnd = endHandled) }
                 wasPlaying = playing
-                withContext(Dispatchers.IO) { player.refreshBufferedPosition() }
-                delay(TICK_MILLIS)
+                if (playing) {
+                    withContext(Dispatchers.IO) { player.refreshBufferedPosition() }
+                    delay(TICK_MILLIS)
+                } else {
+                    // 暂停或空闲时不再以 500ms 频率拿 mpv 核心锁读缓冲位置，改为监听恢复或慢速兜底。
+                    withTimeoutOrNull(PAUSED_TICK_MILLIS) {
+                        player.mediamp.state.first { it.isPlaying }
+                    }
+                }
             }
         }
     }
@@ -1329,6 +1337,7 @@ class DesktopPlaybackHost(
 
     private companion object {
         const val TICK_MILLIS = 500L
+        const val PAUSED_TICK_MILLIS = 2_000L
 
         /** 上一条先回本 P 开头的界线,Media3 `C.DEFAULT_MAX_SEEK_TO_PREVIOUS_POSITION_MS` 同值。 */
         const val MAX_SEEK_TO_PREVIOUS_MILLIS = 3_000L

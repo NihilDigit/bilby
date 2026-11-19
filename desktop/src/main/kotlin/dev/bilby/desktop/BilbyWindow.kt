@@ -21,7 +21,12 @@ import androidx.compose.ui.window.WindowState
 import dev.bilby.BiliLog
 import dev.bilby.windowFaultMessage
 import kotlinx.coroutines.delay
+import org.jetbrains.skia.DirectContext
+import org.jetbrains.skiko.SkiaLayer
+import java.awt.Container
 import java.lang.ref.WeakReference
+import java.lang.reflect.Field
+import java.lang.reflect.Method
 import javax.swing.JOptionPane
 import javax.swing.SwingUtilities
 
@@ -39,6 +44,7 @@ internal fun BilbyWindow(
     state: WindowState,
     title: String,
     icon: Painter?,
+    windowVisible: Boolean = true,
     onFatalClose: () -> Unit = onCloseRequest,
     content: @Composable FrameWindowScope.() -> Unit,
 ) {
@@ -61,7 +67,11 @@ internal fun BilbyWindow(
                 icon = icon,
                 state = state,
             ) {
-                LaunchedEffect(window) {
+                LaunchedEffect(window, windowVisible) {
+                    if (!windowVisible) {
+                        SkiaGpuResourceCleaner.releaseIdleResources(window)
+                        return@LaunchedEffect
+                    }
                     while (true) {
                         delay(DEVICE_CHECK_INTERVAL_MS)
                         if (GpuDeviceWatch.checkLost(window)) break
@@ -216,3 +226,55 @@ private fun showWindowFault(window: java.awt.Window?, onFatalClose: () -> Unit) 
 
 private fun Throwable.isDisposedLayerRace(): Boolean =
     this is IllegalArgumentException && message == "RootNodeOwner is already disposed"
+
+/**
+ * 窗口退到后台或最小化时收缩 Skia DirectContext 的资源缓存上限至 0 再还原，立即释放未锁定的空闲显存纹理。
+ */
+private object SkiaGpuResourceCleaner {
+    private const val FRAME_DRIVER_CLASS = "org.jetbrains.skiko.renderer.FrameDriver"
+    private const val D3D_RENDERER_CLASS = "org.jetbrains.skiko.renderer.Direct3DRenderer"
+
+    private val getFrameDriver: Method? by lazy {
+        runCatching {
+            SkiaLayer::class.java.getMethod("getFrameDriver\$org_jetbrains_skiko_skiko")
+        }.onFailure { BiliLog.w("反射 SkiaLayer.getFrameDriver 失败", it) }.getOrNull()
+    }
+
+    private val getRenderer: Method? by lazy {
+        runCatching {
+            Class.forName(FRAME_DRIVER_CLASS).getDeclaredMethod("getRenderer").apply { isAccessible = true }
+        }.onFailure { BiliLog.w("反射 FrameDriver.getRenderer 失败", it) }.getOrNull()
+    }
+
+    private val d3dContextField: Field? by lazy {
+        runCatching {
+            Class.forName(D3D_RENDERER_CLASS).getDeclaredField("context").apply { isAccessible = true }
+        }.onFailure { BiliLog.w("反射 Direct3DRenderer.context 失败", it) }.getOrNull()
+    }
+
+    fun releaseIdleResources(window: java.awt.Window) {
+        runCatching {
+            val layer = findSkiaLayer(window) ?: return
+            val driver = getFrameDriver?.invoke(layer) ?: return
+            val renderer = getRenderer?.invoke(driver) ?: return
+            if (renderer.javaClass.name != D3D_RENDERER_CLASS) return
+            val context = d3dContextField?.get(renderer) as? DirectContext ?: return
+            if (context.isClosed) return
+            val previousLimit = context.resourceCacheLimit
+            if (previousLimit > 0L) {
+                context.resourceCacheLimit = 0L
+                context.resourceCacheLimit = previousLimit
+            }
+        }.onFailure {
+            BiliLog.w("释放 Skia 空闲 GPU 缓存失败", it)
+        }
+    }
+
+    private fun findSkiaLayer(container: Container): SkiaLayer? {
+        for (child in container.components) {
+            if (child is SkiaLayer) return child
+            if (child is Container) findSkiaLayer(child)?.let { return it }
+        }
+        return null
+    }
+}

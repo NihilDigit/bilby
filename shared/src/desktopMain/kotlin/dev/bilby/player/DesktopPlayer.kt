@@ -25,7 +25,12 @@ class DesktopPlayer(
         mediamp = MpvMediampPlayer(
             context = Unit,
             parentCoroutineContext = parentCoroutineContext,
-            configureOptions = { captured = it },
+            configureOptions = { handle ->
+                captured = handle
+                // 限制 mpv 解复用器前后缓存上限，防止长时间播放或高码率流导致内存无界增长。
+                handle.option("demuxer-max-bytes", "64MiB")
+                handle.option("demuxer-max-back-bytes", "16MiB")
+            },
         )
         mpv = checkNotNull(captured) { "mediamp did not hand out its MPVHandle during construction" }
         if (silentAudioOutput) {

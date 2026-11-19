@@ -19,6 +19,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import okio.BufferedSource
@@ -87,7 +89,23 @@ class SkiaAnimatedImageDecoder(
         }
     }
 
-    internal companion object {
+    companion object {
+        private val windowVisibleState = MutableStateFlow(true)
+
+        internal val windowVisible: Boolean
+            get() = windowVisibleState.value
+
+        /** 由桌面端主窗口同步可见状态；窗口失焦或最小化时暂停所有多帧动图的后台解码与重绘。 */
+        fun setWindowVisible(visible: Boolean) {
+            windowVisibleState.value = visible
+        }
+
+        internal suspend fun awaitWindowVisible() {
+            if (!windowVisibleState.value) {
+                windowVisibleState.first { it }
+            }
+        }
+
         private val GIF_HEADER_87A = "GIF87a".encodeUtf8()
         private val GIF_HEADER_89A = "GIF89a".encodeUtf8()
         private val WEBP_RIFF_HEADER = "RIFF".encodeUtf8()
@@ -212,10 +230,20 @@ internal class AnimatedSkiaImage(
         if (tickerJob?.isActive == true) return
         tickerJob = animationScope.launch {
             while (isActive) {
+                if (!SkiaAnimatedImageDecoder.windowVisible) {
+                    SkiaAnimatedImageDecoder.awaitWindowVisible()
+                    synchronized(lock) {
+                        lastDrawNanoTime = System.nanoTime()
+                    }
+                    continue
+                }
                 val delayMs = synchronized(lock) {
                     frameDurationsMs[decodedFrameIndex.coerceIn(0, frameCount - 1)]
                 }
                 delay(delayMs)
+                if (!SkiaAnimatedImageDecoder.windowVisible) {
+                    continue
+                }
                 val advanced = synchronized(lock) {
                     val idleNs = System.nanoTime() - lastDrawNanoTime
                     if (idleNs > delayMs * 1_000_000L + IDLE_PAUSE_THRESHOLD_NS) {

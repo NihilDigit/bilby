@@ -46,7 +46,11 @@ import org.openani.mediamp.mpv.nSetConsumerDeviceHintD3D11
 import org.openani.mediamp.mpv.nSetReadbackSurfaceConfigD3D11
 import org.openani.mediamp.mpv.nSetSurfaceConfigD3D11
 import java.awt.Container
+import java.awt.Frame
 import java.awt.Window
+import java.awt.event.WindowAdapter
+import java.awt.event.WindowEvent
+import java.awt.event.WindowStateListener
 import java.lang.foreign.Arena
 import java.lang.foreign.MemorySegment
 import java.lang.foreign.ValueLayout.JAVA_LONG
@@ -55,6 +59,7 @@ import java.lang.reflect.Field
 import java.lang.reflect.Method
 import java.lang.reflect.Proxy
 import java.util.WeakHashMap
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.min
 
 /**
@@ -81,6 +86,44 @@ internal fun BilbyMpvVideoSurface(
     var surfaceSize by remember { mutableStateOf(IntSize.Zero) }
     var rendererGeneration by remember(layer) { mutableLongStateOf(0L) }
     val frameTick = remember { mutableLongStateOf(0L) }
+    val minimized = remember(window) {
+        AtomicBoolean((window as? Frame)?.let { (it.extendedState and Frame.ICONIFIED) != 0 } ?: false)
+    }
+    var cachedEnvGen by remember(layer) { mutableLongStateOf(-1L) }
+    var cachedEnv by remember(layer) { mutableStateOf<SkikoRenderEnvironment?>(null) }
+
+    fun inspectCached(): SkikoRenderEnvironment {
+        val gen = rendererGeneration
+        val existing = cachedEnv
+        if (existing != null && cachedEnvGen == gen && existing.isReady) {
+            return existing
+        }
+        val fresh = SkikoAccess.inspect(layer)
+        if (fresh.isReady) {
+            cachedEnv = fresh
+            cachedEnvGen = gen
+        }
+        return fresh
+    }
+
+    DisposableEffect(window) {
+        val frame = window as? Frame ?: return@DisposableEffect onDispose {}
+        fun syncMinimized() {
+            minimized.set((frame.extendedState and Frame.ICONIFIED) != 0)
+        }
+        syncMinimized()
+        val stateListener = WindowStateListener { syncMinimized() }
+        val windowListener = object : WindowAdapter() {
+            override fun windowIconified(e: WindowEvent?) = minimized.set(true)
+            override fun windowDeiconified(e: WindowEvent?) = minimized.set(false)
+        }
+        frame.addWindowStateListener(stateListener)
+        frame.addWindowListener(windowListener)
+        onDispose {
+            frame.removeWindowStateListener(stateListener)
+            frame.removeWindowListener(windowListener)
+        }
+    }
 
     LaunchedEffect(layer) {
         if (layer == null) return@LaunchedEffect
@@ -96,9 +139,12 @@ internal fun BilbyMpvVideoSurface(
         }
     }
 
-    DisposableEffect(controller) {
+    DisposableEffect(controller, minimized) {
         val listenerAttached = controller.attachRenderUpdateListener {
-            frameTick.longValue += 1L
+            // 窗口最小化（ICONIFIED）时跳过递增 frameTick，避免 Skiko 提交不可见的 D3D12 帧。
+            if (!minimized.get()) {
+                frameTick.longValue += 1L
+            }
         }
         if (!listenerAttached) {
             BiliLog.w("挂载 mpv 帧通知监听失败")
@@ -115,7 +161,7 @@ internal fun BilbyMpvVideoSurface(
 
         // Direct3DRenderer 在首次 drawFrame 前 device/context 仍可能为空,短轮询等待其就绪
         repeat(MAX_SURFACE_CONFIG_ATTEMPTS) {
-            val env = SkikoAccess.inspect(layer)
+            val env = inspectCached()
             if (controller.configureIfReady(width, height, env)) return@LaunchedEffect
             delay(SURFACE_CONFIG_RETRY_DELAY_MS)
         }
@@ -135,7 +181,7 @@ internal fun BilbyMpvVideoSurface(
         val height = size.height.toInt()
         if (width <= 0 || height <= 0) return@Canvas
 
-        val env = SkikoAccess.inspect(layer)
+        val env = inspectCached()
         val image = controller.acquireFrame(width, height, env) ?: return@Canvas
 
         val srcWidth = image.width.toFloat()
@@ -164,7 +210,10 @@ private data class SkikoRenderEnvironment(
     val isDirect3D: Boolean,
     val nativeDevicePtr: Long,
     val directContext: DirectContext?,
-)
+) {
+    val isReady: Boolean
+        get() = hasRenderer && (!isDirect3D || (nativeDevicePtr != 0L && directContext != null && !directContext.isClosed))
+}
 
 private object SkikoAccess {
     private const val FRAME_DRIVER_CLASS = "org.jetbrains.skiko.renderer.FrameDriver"
