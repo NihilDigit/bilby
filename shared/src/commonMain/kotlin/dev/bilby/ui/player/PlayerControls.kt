@@ -80,6 +80,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -131,7 +132,11 @@ internal fun Modifier.playerControlBar(isFullscreen: Boolean): Modifier =
         )
 
 @Composable
-internal fun FullscreenButton(isFullscreen: Boolean, onClick: () -> Unit) {
+internal fun FullscreenButton(
+    isFullscreen: Boolean,
+    onClick: () -> Unit,
+    showBackground: Boolean = true,
+) {
     val description = stringResource(
         if (isFullscreen) Res.string.player_exit_fullscreen else Res.string.player_fullscreen,
     )
@@ -140,6 +145,7 @@ internal fun FullscreenButton(isFullscreen: Boolean, onClick: () -> Unit) {
             onClick = onClick,
             icon = if (isFullscreen) Icons.Filled.FullscreenExit else Icons.Filled.Fullscreen,
             contentDescription = description,
+            showBackground = showBackground,
         )
     }
 }
@@ -155,6 +161,7 @@ internal fun DanmakuButton(
     enabled: Boolean,
     onEnabledChange: (Boolean) -> Unit,
     isFullscreen: Boolean,
+    showBackground: Boolean = true,
 ) {
     val description = stringResource(if (enabled) Res.string.danmaku_hide else Res.string.danmaku_show)
     PlayerTooltip(description, shortcut = "D") {
@@ -162,6 +169,7 @@ internal fun DanmakuButton(
             expanded = enabled,
             onClick = { onEnabledChange(!enabled) },
             label = null,
+            showBackground = showBackground,
             icon = { tint ->
                 Icon(
                     if (enabled) BilbyIcons.Danmaku else BilbyIcons.DanmakuOff,
@@ -547,13 +555,24 @@ internal fun PlayerIconButton(
     enabled: Boolean = true,
     /** 图标尺寸。听视频的上一条/下一条要大一档。 */
     iconSize: Dp = Dimens.IconInline,
+    /** 是否显示半透明圆形底色容器；关闭时保留 48dp 触控热区与涟漪，减少画面遮挡。 */
+    showBackground: Boolean = true,
 ) {
     FilledTonalIconButton(
         onClick = onClick,
         enabled = enabled,
         shapes = IconButtonDefaults.shapes(),
         colors = IconButtonDefaults.filledTonalIconButtonColors(
-            containerColor = if (selected) MaterialTheme.colorScheme.primaryContainer else mediaControlContainer(),
+            containerColor = when {
+                selected -> MaterialTheme.colorScheme.primaryContainer
+                showBackground -> mediaControlContainer()
+                else -> Color.Transparent
+            },
+            disabledContainerColor = if (showBackground) {
+                MaterialTheme.colorScheme.onSurface.copy(alpha = 0.12f)
+            } else {
+                Color.Transparent
+            },
             contentColor = if (selected) {
                 MaterialTheme.colorScheme.onPrimaryContainer
             } else {
@@ -577,6 +596,7 @@ internal fun ControlButton(
     onClick: () -> Unit,
     label: String?,
     modifier: Modifier = Modifier,
+    showBackground: Boolean = true,
     interactionSource: MutableInteractionSource = remember { MutableInteractionSource() },
     icon: @Composable (Color) -> Unit,
 ) {
@@ -587,8 +607,12 @@ internal fun ControlButton(
         animationSpec = MaterialTheme.motionScheme.fastSpatialSpec(),
         label = "control-btn-corner",
     )
-    val baseContainer = if (expanded) MaterialTheme.colorScheme.primaryContainer else mediaControlContainer()
-    val targetContainer = if (hovered && !expanded) {
+    val baseContainer = when {
+        expanded && showBackground -> MaterialTheme.colorScheme.primaryContainer
+        showBackground -> mediaControlContainer()
+        else -> Color.Transparent
+    }
+    val targetContainer = if (hovered && (!expanded || !showBackground)) {
         MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f).compositeOver(baseContainer)
     } else {
         baseContainer
@@ -598,7 +622,11 @@ internal fun ControlButton(
         animationSpec = MaterialTheme.motionScheme.fastEffectsSpec(),
         label = "control-btn-bg",
     )
-    val tint = if (expanded) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface
+    val tint = when {
+        expanded && showBackground -> MaterialTheme.colorScheme.onPrimaryContainer
+        expanded -> MaterialTheme.colorScheme.primary
+        else -> MaterialTheme.colorScheme.onSurface
+    }
     val chipShape = RoundedCornerShape(corner)
     Box(
         contentAlignment = Alignment.Center,
@@ -623,7 +651,7 @@ internal fun ControlButton(
                 .clip(chipShape)
                 .background(container)
                 .then(
-                    if (!expanded) {
+                    if (!expanded && showBackground) {
                         Modifier.border(HudSpecularBorderWidth, HudSpecularBorderColor, chipShape)
                     } else {
                         Modifier
@@ -635,7 +663,13 @@ internal fun ControlButton(
             if (label != null) {
                 Text(
                     label,
-                    style = MaterialTheme.typography.labelMedium.tabular,
+                    style = if (showBackground) {
+                        MaterialTheme.typography.labelMedium.tabular
+                    } else {
+                        MaterialTheme.typography.labelMedium.tabular.copy(
+                            shadow = MediaBorderlessTextShadow,
+                        )
+                    },
                     color = tint,
                     maxLines = 1,
                     // **不设宽度上限,也不截断**:这里的标签是画质档名("1080P60"、"1080P 高码率"),
@@ -645,6 +679,13 @@ internal fun ControlButton(
         }
     }
 }
+
+/** 无底色浮层文字的轻量阴影，确保亮色视频帧与渐变底上清晰可读。 */
+internal val MediaBorderlessTextShadow = Shadow(
+    color = Color.Black.copy(alpha = 0.6f),
+    offset = Offset(0f, 1f),
+    blurRadius = 3f,
+)
 
 /** 控制条 chip 的容器高度,M3E XS 按钮那一档。 */
 internal val ControlChipHeight = 32.dp
@@ -666,6 +707,7 @@ private const val VolumeWheelStep = 0.05f
 internal fun PlayerVolumeControl(
     modifier: Modifier = Modifier,
     surfaceTone: Boolean = false,
+    showBackground: Boolean = true,
 ) {
     val playback = LocalPlaybackHost.current
     if (!playback.hasSoftwareVolume || LocalPointerSource.current.isTouchLike) return
@@ -685,7 +727,12 @@ internal fun PlayerVolumeControl(
     )
 
     val colors = MaterialTheme.colorScheme
-    val containerColor = if (surfaceTone) colors.surfaceContainerHigh else mediaControlContainer()
+    val showContainer = surfaceTone || showBackground || expanded
+    val containerColor = when {
+        surfaceTone -> colors.surfaceContainerHigh
+        showContainer -> mediaControlContainer()
+        else -> Color.Transparent
+    }
     val contentColor = if (surfaceTone) colors.onSurfaceVariant else colors.onSurface
     val activeTrackColor = colors.primary
     val inactiveTrackColor = colors.onSurfaceVariant.copy(alpha = 0.32f)
@@ -726,7 +773,7 @@ internal fun PlayerVolumeControl(
                 .clip(CircleShape)
                 .background(containerColor)
                 .then(
-                    if (!surfaceTone) {
+                    if (!surfaceTone && showContainer) {
                         Modifier.border(HudSpecularBorderWidth, HudSpecularBorderColor, CircleShape)
                     } else {
                         Modifier
@@ -1221,7 +1268,7 @@ private fun CenterSideSlotContainer(
             },
             enabled = enabled,
             shape = CircleShape,
-            color = mediaControlContainer(),
+            color = if (slot.showBackground) mediaControlContainer() else Color.Transparent,
             contentColor = MaterialTheme.colorScheme.onSurface.copy(alpha = contentAlpha),
             modifier = Modifier
                 .size(visualDiameter)
@@ -1247,7 +1294,11 @@ private fun CenterSideSlotContainer(
                         )
                         Text(
                             text = "${secondsBadge}s",
-                            style = MaterialTheme.typography.labelSmall.tabular,
+                            style = if (slot.showBackground) {
+                                MaterialTheme.typography.labelSmall.tabular
+                            } else {
+                                MaterialTheme.typography.labelSmall.tabular.copy(shadow = MediaBorderlessTextShadow)
+                            },
                             maxLines = 1,
                         )
                     }

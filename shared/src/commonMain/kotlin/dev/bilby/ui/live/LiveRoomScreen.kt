@@ -148,8 +148,8 @@ import dev.bilby.ui.components.rememberSidePaneState
 import androidx.compose.foundation.layout.width
 import androidx.compose.ui.unit.Dp
 import dev.bilby.data.PlayerControlId
-import dev.bilby.data.PlayerFormFactor
 import dev.bilby.data.PlayerLayoutPrefs
+import dev.bilby.data.PlayerPanelItem
 import dev.bilby.data.SideSheetPrefs
 import dev.bilby.ui.player.LocalPlayerLayoutPrefs
 import dev.bilby.ui.components.SplitPaneResizeHandle
@@ -382,9 +382,10 @@ fun LiveRoomScreen(
                             }
                         }
                     },
-                    topBarControlRenderer = { id ->
-                        when (id) {
-                            PlayerControlId.Settings -> PlayerSettingsButton {
+                    topBarControlRenderer = { control ->
+                        val showBg = control.showBackground
+                        when (control.id) {
+                            PlayerControlId.Settings -> PlayerSettingsButton(showBackground = showBg) {
                                 settingsOnly = null
                                 settingsOpen = true
                             }
@@ -392,9 +393,14 @@ fun LiveRoomScreen(
                                 enabled = danmakuPrefs.enabled,
                                 onEnabledChange = { danmakuEditor.setEnabled(it) },
                                 isFullscreen = fullscreen,
+                                showBackground = showBg,
                             )
-                            PlayerControlId.Volume -> PlayerVolumeControl()
-                            PlayerControlId.Fullscreen -> FullscreenButton(fullscreen) { fullscreen = !fullscreen }
+                            PlayerControlId.Volume -> PlayerVolumeControl(showBackground = showBg)
+                            PlayerControlId.Fullscreen -> FullscreenButton(
+                                isFullscreen = fullscreen,
+                                onClick = { fullscreen = !fullscreen },
+                                showBackground = showBg,
+                            )
                             else -> Unit
                         }
                     },
@@ -850,9 +856,13 @@ private fun LiveControlBar(
 ) {
     // 触屏走正中播放键；键鼠模式下将形变+强调色播放键置于最左端，不遮挡直播画面。
     val isTouchLike = LocalPointerSource.current.isTouchLike
-    val activeLayout = LocalPlayerLayoutPrefs.current.layoutFor(
-        PlayerFormFactor.of(isTouch = isTouchLike, isFullscreen = isFullscreen),
-    )
+    val layoutPrefs = LocalPlayerLayoutPrefs.current
+    val activeLayout = layoutPrefs.layoutFor(isLargeOrFullscreen = largePlayer && !pip)
+    val centerActive = layoutPrefs.isCenterControlsActive(isTouchLike)
+    fun barBg(id: PlayerControlId): Boolean = activeLayout.bottomBar
+        .filterIsInstance<PlayerPanelItem.Control>()
+        .firstOrNull { it.id == id }
+        ?.showBackground ?: true
     val density = LocalDensity.current
     var barWidth by remember { mutableStateOf(0.dp) }
     Box(
@@ -871,7 +881,9 @@ private fun LiveControlBar(
             verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier.fillMaxWidth(),
         ) {
-            if (!pip && activeLayout.hasInBottomBar(PlayerControlId.PlayPause)) {
+            if (!pip && activeLayout.hasInBottomBar(PlayerControlId.PlayPause) &&
+                !activeLayout.isHiddenByCenter(PlayerControlId.PlayPause, centerActive)
+            ) {
                 ControlBarPlayButton(
                     isPlaying = playWhenReady,
                     onClick = onTogglePlayPause,
@@ -893,7 +905,7 @@ private fun LiveControlBar(
                     )
                 }
             }
-            if (!pip) PlayerVolumeControl()
+            if (!pip) PlayerVolumeControl(showBackground = barBg(PlayerControlId.Volume))
             // 拿不到就留白,不写"0 人看过" —— 那是个具体而错误的数字。宽度照占,不然弹幕按钮
             // 会在这一句到货的那一刻横着跳一下。
             if (!composing || roomy || pip) Text(
@@ -933,6 +945,7 @@ private fun LiveControlBar(
                         expanded = false,
                         onClick = { onOpenSettings(PlayerSettingsSection.Quality) },
                         label = qualityLabel,
+                        showBackground = barBg(PlayerControlId.Quality),
                         icon = { tint ->
                             Icon(Icons.Filled.HighQuality, description, tint = tint, modifier = Modifier.size(18.dp))
                         },
@@ -946,18 +959,28 @@ private fun LiveControlBar(
                         onClick = { composing = true },
                         icon = Icons.Filled.Edit,
                         contentDescription = description,
+                        showBackground = barBg(PlayerControlId.DanmakuInput),
                     )
                 }
             }
             if (roomy || !composing) LiveAudioOnlyButton(onlyAudio, onOnlyAudioChange, isFullscreen)
             if ((wide || isFullscreen) && activeLayout.hasInBottomBar(PlayerControlId.DanmakuToggle)) {
-                DanmakuButton(danmakuEnabled, onDanmakuEnabledChange, isFullscreen)
+                DanmakuButton(
+                    enabled = danmakuEnabled,
+                    onEnabledChange = onDanmakuEnabledChange,
+                    isFullscreen = isFullscreen,
+                    showBackground = barBg(PlayerControlId.DanmakuToggle),
+                )
             }
             if (activeLayout.hasInBottomBar(PlayerControlId.Settings)) {
-                PlayerSettingsButton { onOpenSettings(null) }
+                PlayerSettingsButton(showBackground = barBg(PlayerControlId.Settings)) { onOpenSettings(null) }
             }
             if (activeLayout.hasInBottomBar(PlayerControlId.Fullscreen)) {
-                FullscreenButton(isFullscreen, onFullscreenToggle)
+                FullscreenButton(
+                    isFullscreen = isFullscreen,
+                    onClick = onFullscreenToggle,
+                    showBackground = barBg(PlayerControlId.Fullscreen),
+                )
             }
         }
     }

@@ -102,7 +102,6 @@ import dev.bilby.danmaku.DanmakuVote
 import dev.bilby.data.DanmakuPrefs
 import dev.bilby.data.DanmakuPrefsEditor
 import dev.bilby.data.PlayerControlId
-import dev.bilby.data.PlayerFormFactor
 import dev.bilby.data.PlayerLayoutPrefs
 import dev.bilby.data.PlayerPanelItem
 import dev.bilby.ui.player.LocalPlayerLayoutPrefs
@@ -275,9 +274,10 @@ fun BilbyPlayer(
         gestures = gestures,
         layoutPrefs = layoutPrefs,
         topBarActions = topBarActions,
-        topBarControlRenderer = { id ->
-            when (id) {
-                PlayerControlId.Settings -> PlayerSettingsButton {
+        topBarControlRenderer = { control ->
+            val showBg = control.showBackground
+            when (control.id) {
+                PlayerControlId.Settings -> PlayerSettingsButton(showBackground = showBg) {
                     settingsOnly = null
                     settingsOpen = true
                 }
@@ -285,8 +285,9 @@ fun BilbyPlayer(
                     enabled = danmakuPrefs.enabled,
                     onEnabledChange = { danmakuEditor?.setEnabled(it) },
                     isFullscreen = isFullscreen,
+                    showBackground = showBg,
                 )
-                PlayerControlId.Volume -> PlayerVolumeControl()
+                PlayerControlId.Volume -> PlayerVolumeControl(showBackground = showBg)
                 PlayerControlId.Speed -> {
                     val desc = stringResource(Res.string.player_speed)
                     PlayerTooltip(desc, anchorAbove = false) {
@@ -297,6 +298,7 @@ fun BilbyPlayer(
                                 settingsOpen = true
                             },
                             label = formatSpeed(speedController.speed),
+                            showBackground = showBg,
                             icon = { tint -> Icon(Icons.Filled.Speed, desc, tint = tint, modifier = Modifier.size(ChipIconSize)) },
                         )
                     }
@@ -312,6 +314,7 @@ fun BilbyPlayer(
                                     settingsOpen = true
                                 },
                                 label = label,
+                                showBackground = showBg,
                                 icon = { tint -> Icon(Icons.Filled.HighQuality, desc, tint = tint, modifier = Modifier.size(ChipIconSize)) },
                             )
                         }
@@ -326,6 +329,7 @@ fun BilbyPlayer(
                                 settingsOpen = true
                             },
                             label = audioQualityLabel(audioId),
+                            showBackground = showBg,
                             icon = { tint -> Icon(Icons.Filled.GraphicEq, desc, tint = tint, modifier = Modifier.size(ChipIconSize)) },
                         )
                     }
@@ -340,6 +344,7 @@ fun BilbyPlayer(
                                 settingsOpen = true
                             },
                             label = subtitleTracks.firstOrNull { it.lan == currentSubtitleLan }?.displayName,
+                            showBackground = showBg,
                             icon = { tint -> Icon(Icons.Filled.Subtitles, desc, tint = tint, modifier = Modifier.size(ChipIconSize)) },
                         )
                     }
@@ -354,11 +359,16 @@ fun BilbyPlayer(
                                 settingsOpen = true
                             },
                             label = null,
+                            showBackground = showBg,
                             icon = { tint -> Icon(Icons.Filled.Bedtime, desc, tint = tint, modifier = Modifier.size(ChipIconSize)) },
                         )
                     }
                 }
-                PlayerControlId.Fullscreen -> FullscreenButton(isFullscreen) { onFullscreenChange(!isFullscreen) }
+                PlayerControlId.Fullscreen -> FullscreenButton(
+                    isFullscreen = isFullscreen,
+                    onClick = { onFullscreenChange(!isFullscreen) },
+                    showBackground = showBg,
+                )
                 else -> Unit
             }
         },
@@ -633,9 +643,8 @@ private fun PlayerControlBar(
     val density = LocalDensity.current
     var barWidth by remember { mutableStateOf(0.dp) }
     val isTouchLike = LocalPointerSource.current.isTouchLike
-    val activeLayout = layoutPrefs.layoutFor(
-        PlayerFormFactor.of(isTouch = isTouchLike, isFullscreen = isFullscreen),
-    )
+    val activeLayout = layoutPrefs.layoutFor(isLargeOrFullscreen = largePlayer && !pip)
+    val centerActive = layoutPrefs.isCenterControlsActive(isTouchLike)
 
     val seekBar: @Composable (Modifier) -> Unit = { modifier ->
         BoundSeekBar(
@@ -731,107 +740,118 @@ private fun PlayerControlBar(
                                     Spacer(Modifier.weight(1f))
                                 }
                             }
-                            is PlayerPanelItem.Control -> when (item.id) {
-                                PlayerControlId.PlayPause -> ControlBarPlayButton(
-                                    isPlaying = playWhenReady,
-                                    onClick = onTogglePlayPause,
-                                )
-                                PlayerControlId.Previous -> if (canPrevious || canNext) {
-                                    val prevLabel = stringResource(Res.string.player_previous)
-                                    PlayerTooltip(prevLabel) {
-                                        PlayerIconButton(
-                                            onClick = onPrevious,
-                                            enabled = canPrevious,
-                                            icon = Icons.Filled.SkipPrevious,
-                                            contentDescription = prevLabel,
-                                        )
-                                    }
-                                }
-                                PlayerControlId.Next -> if (canPrevious || canNext) {
-                                    val nextLabel = stringResource(Res.string.player_next)
-                                    PlayerTooltip(nextLabel) {
-                                        PlayerIconButton(
-                                            onClick = onNext,
-                                            enabled = canNext,
-                                            icon = Icons.Filled.SkipNext,
-                                            contentDescription = nextLabel,
-                                        )
-                                    }
-                                }
-                                PlayerControlId.SeekBackward -> {
-                                    val sec = layoutPrefs.seekButtonSeconds
-                                    val label = stringResource(Res.string.player_seek_backward_seconds, sec)
-                                    PlayerTooltip(label) {
-                                        PlayerIconButton(
-                                            onClick = { onSeekByMillis(-sec * 1_000L) },
-                                            icon = Icons.Filled.FastRewind,
-                                            contentDescription = label,
-                                        )
-                                    }
-                                }
-                                PlayerControlId.SeekForward -> {
-                                    val sec = layoutPrefs.seekButtonSeconds
-                                    val label = stringResource(Res.string.player_seek_forward_seconds, sec)
-                                    PlayerTooltip(label) {
-                                        PlayerIconButton(
-                                            onClick = { onSeekByMillis(sec * 1_000L) },
-                                            icon = Icons.Filled.FastForward,
-                                            contentDescription = label,
-                                        )
-                                    }
-                                }
-                                PlayerControlId.TimeLabel -> {
-                                    BoundTimeLabel(
-                                        progress = progress,
-                                        isDuration = false,
-                                        modifier = Modifier.padding(start = if (isTouchLike) Spacing.Tight else Spacing.Hair),
+                            is PlayerPanelItem.Control -> {
+                                if (activeLayout.isHiddenByCenter(item.id, centerActive)) continue
+                                val showBg = item.showBackground
+                                when (item.id) {
+                                    PlayerControlId.PlayPause -> ControlBarPlayButton(
+                                        isPlaying = playWhenReady,
+                                        onClick = onTogglePlayPause,
                                     )
-                                    seekBar(Modifier.weight(1f))
-                                    renderedSeekBar = true
-                                    BoundTimeLabel(
-                                        progress = progress,
-                                        isDuration = true,
-                                        secondary = true,
-                                        modifier = Modifier.padding(end = Spacing.Hair),
-                                    )
-                                }
-                                PlayerControlId.DanmakuInput -> if (danmakuField != null) {
-                                    val label = stringResource(Res.string.danmaku_send)
-                                    PlayerTooltip(label, shortcut = "Enter") {
-                                        PlayerIconButton(
-                                            onClick = { composing = true },
-                                            icon = Icons.Filled.Edit,
-                                            contentDescription = label,
+                                    PlayerControlId.Previous -> if (canPrevious || canNext) {
+                                        val prevLabel = stringResource(Res.string.player_previous)
+                                        PlayerTooltip(prevLabel) {
+                                            PlayerIconButton(
+                                                onClick = onPrevious,
+                                                enabled = canPrevious,
+                                                icon = Icons.Filled.SkipPrevious,
+                                                contentDescription = prevLabel,
+                                                showBackground = showBg,
+                                            )
+                                        }
+                                    }
+                                    PlayerControlId.Next -> if (canPrevious || canNext) {
+                                        val nextLabel = stringResource(Res.string.player_next)
+                                        PlayerTooltip(nextLabel) {
+                                            PlayerIconButton(
+                                                onClick = onNext,
+                                                enabled = canNext,
+                                                icon = Icons.Filled.SkipNext,
+                                                contentDescription = nextLabel,
+                                                showBackground = showBg,
+                                            )
+                                        }
+                                    }
+                                    PlayerControlId.SeekBackward -> {
+                                        val sec = layoutPrefs.seekButtonSeconds
+                                        val label = stringResource(Res.string.player_seek_backward_seconds, sec)
+                                        PlayerTooltip(label) {
+                                            PlayerIconButton(
+                                                onClick = { onSeekByMillis(-sec * 1_000L) },
+                                                icon = Icons.Filled.FastRewind,
+                                                contentDescription = label,
+                                                showBackground = showBg,
+                                            )
+                                        }
+                                    }
+                                    PlayerControlId.SeekForward -> {
+                                        val sec = layoutPrefs.seekButtonSeconds
+                                        val label = stringResource(Res.string.player_seek_forward_seconds, sec)
+                                        PlayerTooltip(label) {
+                                            PlayerIconButton(
+                                                onClick = { onSeekByMillis(sec * 1_000L) },
+                                                icon = Icons.Filled.FastForward,
+                                                contentDescription = label,
+                                                showBackground = showBg,
+                                            )
+                                        }
+                                    }
+                                    PlayerControlId.TimeLabel -> {
+                                        BoundTimeLabel(
+                                            progress = progress,
+                                            isDuration = false,
+                                            modifier = Modifier.padding(start = if (isTouchLike) Spacing.Tight else Spacing.Hair),
+                                        )
+                                        seekBar(Modifier.weight(1f))
+                                        renderedSeekBar = true
+                                        BoundTimeLabel(
+                                            progress = progress,
+                                            isDuration = true,
+                                            secondary = true,
+                                            modifier = Modifier.padding(end = Spacing.Hair),
                                         )
                                     }
-                                }
-                                PlayerControlId.Volume -> PlayerVolumeControl()
-                                PlayerControlId.DanmakuToggle -> if (isFullscreen) {
-                                    DanmakuButton(danmakuEnabled, onDanmakuEnabledChange, isFullscreen)
-                                }
-                                PlayerControlId.Speed -> {
-                                    val desc = stringResource(Res.string.player_speed)
-                                    PlayerTooltip(desc) {
-                                        ControlButton(
-                                            expanded = false,
-                                            onClick = { onOpenSettings(PlayerSettingsSection.Speed) },
-                                            label = formatSpeed(speed),
-                                            icon = { tint -> Icon(Icons.Filled.Speed, desc, tint = tint, modifier = Modifier.size(ChipIconSize)) },
+                                    PlayerControlId.DanmakuInput -> if (danmakuField != null) {
+                                        val label = stringResource(Res.string.danmaku_send)
+                                        PlayerTooltip(label, shortcut = "Enter") {
+                                            PlayerIconButton(
+                                                onClick = { composing = true },
+                                                icon = Icons.Filled.Edit,
+                                                contentDescription = label,
+                                                showBackground = showBg,
+                                            )
+                                        }
+                                    }
+                                    PlayerControlId.Volume -> PlayerVolumeControl(showBackground = showBg)
+                                    PlayerControlId.DanmakuToggle -> if (isFullscreen) {
+                                        DanmakuButton(danmakuEnabled, onDanmakuEnabledChange, isFullscreen, showBackground = showBg)
+                                    }
+                                    PlayerControlId.Speed -> {
+                                        val desc = stringResource(Res.string.player_speed)
+                                        PlayerTooltip(desc) {
+                                            ControlButton(
+                                                expanded = false,
+                                                onClick = { onOpenSettings(PlayerSettingsSection.Speed) },
+                                                label = formatSpeed(speed),
+                                                showBackground = showBg,
+                                                icon = { tint -> Icon(Icons.Filled.Speed, desc, tint = tint, modifier = Modifier.size(ChipIconSize)) },
+                                            )
+                                        }
+                                    }
+                                    PlayerControlId.SleepTimer -> if (hasSleepTimer && sleepTimer.mode != SleepTimerMode.Off) {
+                                        BoundActiveSleepTimerChip(
+                                            sleepTimer = sleepTimer,
+                                            progress = progress,
+                                            speed = speed,
+                                            showLabel = barWidth >= Breakpoints.StackedControlBar,
+                                            showBackground = showBg,
+                                            onClick = { onOpenSettings(PlayerSettingsSection.SleepTimer) },
                                         )
                                     }
+                                    PlayerControlId.Settings -> PlayerSettingsButton(showBackground = showBg) { onOpenSettings(null) }
+                                    PlayerControlId.Fullscreen -> FullscreenButton(isFullscreen, onFullscreenToggle, showBackground = showBg)
+                                    else -> Unit
                                 }
-                                PlayerControlId.SleepTimer -> if (hasSleepTimer && sleepTimer.mode != SleepTimerMode.Off) {
-                                    BoundActiveSleepTimerChip(
-                                        sleepTimer = sleepTimer,
-                                        progress = progress,
-                                        speed = speed,
-                                        showLabel = barWidth >= Breakpoints.StackedControlBar,
-                                        onClick = { onOpenSettings(PlayerSettingsSection.SleepTimer) },
-                                    )
-                                }
-                                PlayerControlId.Settings -> PlayerSettingsButton { onOpenSettings(null) }
-                                PlayerControlId.Fullscreen -> FullscreenButton(isFullscreen, onFullscreenToggle)
-                                else -> Unit
                             }
                         }
                     }
@@ -857,187 +877,203 @@ private fun PlayerControlBar(
                                     Spacer(Modifier.weight(1f))
                                 }
                             }
-                            is PlayerPanelItem.Control -> when (item.id) {
-                                PlayerControlId.PlayPause -> if (!composing || roomy) {
-                                    ControlBarPlayButton(isPlaying = playWhenReady, onClick = onTogglePlayPause)
-                                }
-                                PlayerControlId.Previous -> if ((!composing || roomy) && (canPrevious || canNext)) {
-                                    val prevLabel = stringResource(Res.string.player_previous)
-                                    PlayerTooltip(prevLabel) {
-                                        PlayerIconButton(
-                                            onClick = onPrevious,
-                                            enabled = canPrevious,
-                                            icon = Icons.Filled.SkipPrevious,
-                                            contentDescription = prevLabel,
-                                        )
+                            is PlayerPanelItem.Control -> {
+                                if (activeLayout.isHiddenByCenter(item.id, centerActive)) continue
+                                val showBg = item.showBackground
+                                when (item.id) {
+                                    PlayerControlId.PlayPause -> if (!composing || roomy) {
+                                        ControlBarPlayButton(isPlaying = playWhenReady, onClick = onTogglePlayPause)
                                     }
-                                }
-                                PlayerControlId.Next -> if ((!composing || roomy) && (canPrevious || canNext)) {
-                                    val nextLabel = stringResource(Res.string.player_next)
-                                    PlayerTooltip(nextLabel) {
-                                        PlayerIconButton(
-                                            onClick = onNext,
-                                            enabled = canNext,
-                                            icon = Icons.Filled.SkipNext,
-                                            contentDescription = nextLabel,
-                                        )
-                                    }
-                                }
-                                PlayerControlId.SeekBackward -> if (!composing || roomy) {
-                                    val sec = layoutPrefs.seekButtonSeconds
-                                    val label = stringResource(Res.string.player_seek_backward_seconds, sec)
-                                    PlayerTooltip(label) {
-                                        PlayerIconButton(
-                                            onClick = { onSeekByMillis(-sec * 1_000L) },
-                                            icon = Icons.Filled.FastRewind,
-                                            contentDescription = label,
-                                        )
-                                    }
-                                }
-                                PlayerControlId.SeekForward -> if (!composing || roomy) {
-                                    val sec = layoutPrefs.seekButtonSeconds
-                                    val label = stringResource(Res.string.player_seek_forward_seconds, sec)
-                                    PlayerTooltip(label) {
-                                        PlayerIconButton(
-                                            onClick = { onSeekByMillis(sec * 1_000L) },
-                                            icon = Icons.Filled.FastForward,
-                                            contentDescription = label,
-                                        )
-                                    }
-                                }
-                                PlayerControlId.TimeLabel -> if (!composing || roomy) {
-                                    Row(
-                                        verticalAlignment = Alignment.Bottom,
-                                        modifier = Modifier.padding(
-                                            start = if (isTouchLike) Spacing.Tight else Spacing.Hair,
-                                            end = Spacing.Tight,
-                                        ),
-                                    ) {
-                                        BoundTimeLabel(progress = progress, isDuration = false, large = true)
-                                        BoundTimeLabel(progress = progress, isDuration = true, large = true, secondary = true, prefix = " / ")
-                                    }
-                                }
-                                PlayerControlId.Volume -> if (!composing || roomy) {
-                                    PlayerVolumeControl()
-                                }
-                                PlayerControlId.DanmakuInput -> if (danmakuField != null) {
-                                    if (showField) {
-                                        ControlBarDanmakuField(
-                                            draft = danmakuField.draft,
-                                            onDraftChange = danmakuField.onDraftChange,
-                                            maxLength = danmakuField.maxLength,
-                                            sending = danmakuField.sending,
-                                            error = danmakuField.error,
-                                            onSend = danmakuField.onSend,
-                                            onFocusChange = { focused ->
-                                                composing = focused
-                                                onDanmakuFieldFocusChange(focused)
-                                                danmakuField.onComposingChange(focused)
-                                            },
-                                            autoFocus = !roomy,
-                                            focusRequestNonce = danmakuFocusNonce,
-                                            modifier = Modifier
-                                                .then(
-                                                    if (composing || !hasBottomSpacer) {
-                                                        Modifier.weight(1f)
-                                                    } else {
-                                                        Modifier.widthIn(min = 160.dp, max = 320.dp)
-                                                    },
-                                                )
-                                                .padding(horizontal = Spacing.Cozy),
-                                        )
-                                    } else {
-                                        val label = stringResource(Res.string.danmaku_send)
-                                        PlayerTooltip(label, shortcut = "Enter") {
+                                    PlayerControlId.Previous -> if ((!composing || roomy) && (canPrevious || canNext)) {
+                                        val prevLabel = stringResource(Res.string.player_previous)
+                                        PlayerTooltip(prevLabel) {
                                             PlayerIconButton(
-                                                onClick = { composing = true },
-                                                icon = Icons.Filled.Edit,
-                                                contentDescription = label,
+                                                onClick = onPrevious,
+                                                enabled = canPrevious,
+                                                icon = Icons.Filled.SkipPrevious,
+                                                contentDescription = prevLabel,
+                                                showBackground = showBg,
                                             )
                                         }
                                     }
-                                }
-                                PlayerControlId.Speed -> if (wide && !composing) {
-                                    val speedDescription = stringResource(Res.string.player_speed)
-                                    PlayerTooltip(speedDescription) {
-                                        ControlButton(
-                                            expanded = false,
-                                            onClick = { onOpenSettings(PlayerSettingsSection.Speed) },
-                                            label = formatSpeed(speed),
-                                            icon = { tint -> Icon(Icons.Filled.Speed, speedDescription, tint = tint, modifier = Modifier.size(ChipIconSize)) },
-                                        )
+                                    PlayerControlId.Next -> if ((!composing || roomy) && (canPrevious || canNext)) {
+                                        val nextLabel = stringResource(Res.string.player_next)
+                                        PlayerTooltip(nextLabel) {
+                                            PlayerIconButton(
+                                                onClick = onNext,
+                                                enabled = canNext,
+                                                icon = Icons.Filled.SkipNext,
+                                                contentDescription = nextLabel,
+                                                showBackground = showBg,
+                                            )
+                                        }
                                     }
-                                }
-                                PlayerControlId.Quality -> if (wide && !composing && qualityLabel != null) {
-                                    val description = stringResource(Res.string.player_quality)
-                                    PlayerTooltip(description) {
-                                        ControlButton(
-                                            expanded = false,
-                                            onClick = { onOpenSettings(PlayerSettingsSection.Quality) },
-                                            label = qualityLabel,
-                                            icon = { tint -> Icon(Icons.Filled.HighQuality, description, tint = tint, modifier = Modifier.size(ChipIconSize)) },
-                                        )
+                                    PlayerControlId.SeekBackward -> if (!composing || roomy) {
+                                        val sec = layoutPrefs.seekButtonSeconds
+                                        val label = stringResource(Res.string.player_seek_backward_seconds, sec)
+                                        PlayerTooltip(label) {
+                                            PlayerIconButton(
+                                                onClick = { onSeekByMillis(-sec * 1_000L) },
+                                                icon = Icons.Filled.FastRewind,
+                                                contentDescription = label,
+                                                showBackground = showBg,
+                                            )
+                                        }
                                     }
-                                }
-                                PlayerControlId.Audio -> if (wide && !composing && audioLabel != null) {
-                                    val description = stringResource(Res.string.player_audio_quality)
-                                    PlayerTooltip(description) {
-                                        ControlButton(
-                                            expanded = false,
-                                            onClick = { onOpenSettings(PlayerSettingsSection.Audio) },
-                                            label = audioLabel,
-                                            icon = { tint -> Icon(Icons.Filled.GraphicEq, description, tint = tint, modifier = Modifier.size(ChipIconSize)) },
-                                        )
+                                    PlayerControlId.SeekForward -> if (!composing || roomy) {
+                                        val sec = layoutPrefs.seekButtonSeconds
+                                        val label = stringResource(Res.string.player_seek_forward_seconds, sec)
+                                        PlayerTooltip(label) {
+                                            PlayerIconButton(
+                                                onClick = { onSeekByMillis(sec * 1_000L) },
+                                                icon = Icons.Filled.FastForward,
+                                                contentDescription = label,
+                                                showBackground = showBg,
+                                            )
+                                        }
                                     }
-                                }
-                                PlayerControlId.Subtitle -> if (wide && !composing && subtitleTracks.isNotEmpty()) {
-                                    val description = stringResource(Res.string.player_subtitle)
-                                    PlayerTooltip(description) {
-                                        ControlButton(
-                                            expanded = subtitleLabel != null,
-                                            onClick = { onOpenSettings(PlayerSettingsSection.Subtitle) },
-                                            label = subtitleLabel,
-                                            icon = { tint -> Icon(Icons.Filled.Subtitles, description, tint = tint, modifier = Modifier.size(ChipIconSize)) },
-                                        )
+                                    PlayerControlId.TimeLabel -> if (!composing || roomy) {
+                                        Row(
+                                            verticalAlignment = Alignment.Bottom,
+                                            modifier = Modifier.padding(
+                                                start = if (isTouchLike) Spacing.Tight else Spacing.Hair,
+                                                end = Spacing.Tight,
+                                            ),
+                                        ) {
+                                            BoundTimeLabel(progress = progress, isDuration = false, large = true)
+                                            BoundTimeLabel(progress = progress, isDuration = true, large = true, secondary = true, prefix = " / ")
+                                        }
                                     }
-                                }
-                                PlayerControlId.SleepTimer -> if (hasSleepTimer && !composing) {
-                                    val active = sleepTimer.mode != SleepTimerMode.Off
-                                    if (active) {
-                                        BoundActiveSleepTimerChip(
-                                            sleepTimer = sleepTimer,
-                                            progress = progress,
-                                            speed = speed,
-                                            showLabel = wide && barWidth >= Breakpoints.Medium,
-                                            onClick = { onOpenSettings(PlayerSettingsSection.SleepTimer) },
-                                        )
-                                    } else if (wide) {
-                                        val description = stringResource(Res.string.sleep_timer_off)
+                                    PlayerControlId.Volume -> if (!composing || roomy) {
+                                        PlayerVolumeControl(showBackground = showBg)
+                                    }
+                                    PlayerControlId.DanmakuInput -> if (danmakuField != null) {
+                                        if (showField) {
+                                            ControlBarDanmakuField(
+                                                draft = danmakuField.draft,
+                                                onDraftChange = danmakuField.onDraftChange,
+                                                maxLength = danmakuField.maxLength,
+                                                sending = danmakuField.sending,
+                                                error = danmakuField.error,
+                                                onSend = danmakuField.onSend,
+                                                onFocusChange = { focused ->
+                                                    composing = focused
+                                                    onDanmakuFieldFocusChange(focused)
+                                                    danmakuField.onComposingChange(focused)
+                                                },
+                                                autoFocus = !roomy,
+                                                focusRequestNonce = danmakuFocusNonce,
+                                                modifier = Modifier
+                                                    .then(
+                                                        if (composing || !hasBottomSpacer) {
+                                                            Modifier.weight(1f)
+                                                        } else {
+                                                            Modifier.widthIn(min = 160.dp, max = 320.dp)
+                                                        },
+                                                    )
+                                                    .padding(horizontal = Spacing.Cozy),
+                                            )
+                                        } else {
+                                            val label = stringResource(Res.string.danmaku_send)
+                                            PlayerTooltip(label, shortcut = "Enter") {
+                                                PlayerIconButton(
+                                                    onClick = { composing = true },
+                                                    icon = Icons.Filled.Edit,
+                                                    contentDescription = label,
+                                                    showBackground = showBg,
+                                                )
+                                            }
+                                        }
+                                    }
+                                    PlayerControlId.Speed -> if (wide && !composing) {
+                                        val speedDescription = stringResource(Res.string.player_speed)
+                                        PlayerTooltip(speedDescription) {
+                                            ControlButton(
+                                                expanded = false,
+                                                onClick = { onOpenSettings(PlayerSettingsSection.Speed) },
+                                                label = formatSpeed(speed),
+                                                showBackground = showBg,
+                                                icon = { tint -> Icon(Icons.Filled.Speed, speedDescription, tint = tint, modifier = Modifier.size(ChipIconSize)) },
+                                            )
+                                        }
+                                    }
+                                    PlayerControlId.Quality -> if (wide && !composing && qualityLabel != null) {
+                                        val description = stringResource(Res.string.player_quality)
                                         PlayerTooltip(description) {
                                             ControlButton(
                                                 expanded = false,
-                                                onClick = { onOpenSettings(PlayerSettingsSection.SleepTimer) },
-                                                label = null,
-                                                icon = { tint -> Icon(Icons.Filled.Bedtime, description, tint = tint, modifier = Modifier.size(ChipIconSize)) },
+                                                onClick = { onOpenSettings(PlayerSettingsSection.Quality) },
+                                                label = qualityLabel,
+                                                showBackground = showBg,
+                                                icon = { tint -> Icon(Icons.Filled.HighQuality, description, tint = tint, modifier = Modifier.size(ChipIconSize)) },
                                             )
                                         }
                                     }
-                                }
-                                PlayerControlId.DanmakuToggle -> DanmakuButton(danmakuEnabled, onDanmakuEnabledChange, isFullscreen)
-                                PlayerControlId.Settings -> PlayerSettingsButton { onOpenSettings(null) }
-                                PlayerControlId.Lock -> if (isFullscreen) {
-                                    val lockDesc = stringResource(if (locked) Res.string.player_unlock else Res.string.player_lock)
-                                    PlayerTooltip(lockDesc) {
-                                        PlayerIconButton(
-                                            onClick = onToggleLock,
-                                            icon = if (locked) Icons.Filled.Lock else Icons.Filled.LockOpen,
-                                            contentDescription = lockDesc,
-                                            selected = locked,
-                                        )
+                                    PlayerControlId.Audio -> if (wide && !composing && audioLabel != null) {
+                                        val description = stringResource(Res.string.player_audio_quality)
+                                        PlayerTooltip(description) {
+                                            ControlButton(
+                                                expanded = false,
+                                                onClick = { onOpenSettings(PlayerSettingsSection.Audio) },
+                                                label = audioLabel,
+                                                showBackground = showBg,
+                                                icon = { tint -> Icon(Icons.Filled.GraphicEq, description, tint = tint, modifier = Modifier.size(ChipIconSize)) },
+                                            )
+                                        }
                                     }
+                                    PlayerControlId.Subtitle -> if (wide && !composing && subtitleTracks.isNotEmpty()) {
+                                        val description = stringResource(Res.string.player_subtitle)
+                                        PlayerTooltip(description) {
+                                            ControlButton(
+                                                expanded = subtitleLabel != null,
+                                                onClick = { onOpenSettings(PlayerSettingsSection.Subtitle) },
+                                                label = subtitleLabel,
+                                                showBackground = showBg,
+                                                icon = { tint -> Icon(Icons.Filled.Subtitles, description, tint = tint, modifier = Modifier.size(ChipIconSize)) },
+                                            )
+                                        }
+                                    }
+                                    PlayerControlId.SleepTimer -> if (hasSleepTimer && !composing) {
+                                        val active = sleepTimer.mode != SleepTimerMode.Off
+                                        if (active) {
+                                            BoundActiveSleepTimerChip(
+                                                sleepTimer = sleepTimer,
+                                                progress = progress,
+                                                speed = speed,
+                                                showLabel = wide && barWidth >= Breakpoints.Medium,
+                                                showBackground = showBg,
+                                                onClick = { onOpenSettings(PlayerSettingsSection.SleepTimer) },
+                                            )
+                                        } else if (wide) {
+                                            val description = stringResource(Res.string.sleep_timer_off)
+                                            PlayerTooltip(description) {
+                                                ControlButton(
+                                                    expanded = false,
+                                                    onClick = { onOpenSettings(PlayerSettingsSection.SleepTimer) },
+                                                    label = null,
+                                                    showBackground = showBg,
+                                                    icon = { tint -> Icon(Icons.Filled.Bedtime, description, tint = tint, modifier = Modifier.size(ChipIconSize)) },
+                                                )
+                                            }
+                                        }
+                                    }
+                                    PlayerControlId.DanmakuToggle -> DanmakuButton(danmakuEnabled, onDanmakuEnabledChange, isFullscreen, showBackground = showBg)
+                                    PlayerControlId.Settings -> PlayerSettingsButton(showBackground = showBg) { onOpenSettings(null) }
+                                    PlayerControlId.Lock -> if (isFullscreen) {
+                                        val lockDesc = stringResource(if (locked) Res.string.player_unlock else Res.string.player_lock)
+                                        PlayerTooltip(lockDesc) {
+                                            PlayerIconButton(
+                                                onClick = onToggleLock,
+                                                icon = if (locked) Icons.Filled.Lock else Icons.Filled.LockOpen,
+                                                contentDescription = lockDesc,
+                                                selected = locked,
+                                                showBackground = showBg,
+                                            )
+                                        }
+                                    }
+                                    PlayerControlId.Fullscreen -> FullscreenButton(isFullscreen, onFullscreenToggle, showBackground = showBg)
+                                    else -> Unit
                                 }
-                                PlayerControlId.Fullscreen -> FullscreenButton(isFullscreen, onFullscreenToggle)
-                                else -> Unit
                             }
                         }
                     }
@@ -1102,6 +1138,7 @@ private fun BoundActiveSleepTimerChip(
     progress: PlayerProgressState,
     speed: Float,
     showLabel: Boolean,
+    showBackground: Boolean = true,
     onClick: () -> Unit,
 ) {
     val itemRemainingMillis = if (sleepTimer.mode == SleepTimerMode.EndOfItem) {
@@ -1117,6 +1154,7 @@ private fun BoundActiveSleepTimerChip(
             expanded = true,
             onClick = onClick,
             label = label,
+            showBackground = showBackground,
             icon = { tint ->
                 if (label == null) {
                     Icon(Icons.Filled.Bedtime, description, tint = tint, modifier = Modifier.size(ChipIconSize))

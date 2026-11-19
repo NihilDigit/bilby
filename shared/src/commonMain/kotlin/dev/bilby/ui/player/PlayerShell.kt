@@ -114,12 +114,12 @@ import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.PointerType
+import dev.bilby.data.CenterClusterConfig
 import dev.bilby.data.CenterSlotAction
 import dev.bilby.data.DEFAULT_DOUBLE_TAP_SEEK_SECONDS
 import dev.bilby.data.MAX_SEEK_SECONDS
 import dev.bilby.data.MIN_SEEK_SECONDS
 import dev.bilby.data.PlayerControlId
-import dev.bilby.data.PlayerFormFactor
 import dev.bilby.data.PlayerLayoutPrefs
 import dev.bilby.data.PlayerPanelItem
 import dev.bilby.elapsedRealtimeMillis
@@ -396,7 +396,7 @@ fun PlayerShell(
     /** 播放器面板与中央簇自定义配置。 */
     layoutPrefs: PlayerLayoutPrefs = LocalPlayerLayoutPrefs.current,
     /** 顶栏自定义面板项的业务控件渲染器；null 时走兼容的 [topBarActions]。 */
-    topBarControlRenderer: (@Composable RowScope.(PlayerControlId) -> Unit)? = null,
+    topBarControlRenderer: (@Composable RowScope.(PlayerPanelItem.Control) -> Unit)? = null,
 ) {
     val pipWindow = rememberPipWindow().takeIf { pip }
     // 在小窗里离开了这一页(键盘返回、队列播完退页)时,窗口不能留在右下角那一小块里。
@@ -1228,9 +1228,8 @@ fun PlayerShell(
         // 按钮一起被切着露出,读起来像一块幕布在拉;整栏滑进来又动得太多,一轻触就是半屏在动。
         // 滑一半、透明度补上另一半,方向还在,幅度小了。
         // 小窗里页面的全屏状态可能还是 true(全屏里进的小窗),顶栏、锁、内嵌右上角都另看 pip。
-        val activeLayout = layoutPrefs.layoutFor(
-            PlayerFormFactor.of(isTouch = pointerSource.isTouchLike, isFullscreen = isFullscreen),
-        )
+        val activeLayout = layoutPrefs.layoutFor(isLargeOrFullscreen = largePlayer && !pip)
+        val centerControlsActive = layoutPrefs.isCenterControlsActive(pointerSource.isTouchLike)
 
         AnimatedVisibility(
             visible = isFullscreen && !pip && controlsVisible && !locked,
@@ -1253,101 +1252,111 @@ fun PlayerShell(
                 for (item in activeLayout.topBar) {
                     when (item) {
                         PlayerPanelItem.Spacer -> Spacer(Modifier.weight(1f))
-                        is PlayerPanelItem.Control -> when (item.id) {
-                            PlayerControlId.Back -> {
-                                val exitFullscreenLabel = stringResource(Res.string.player_exit_fullscreen)
-                                PlayerTooltip(exitFullscreenLabel, shortcut = "Esc", anchorAbove = false) {
-                                    PlayerIconButton(
-                                        onClick = { onFullscreenChange(false) },
-                                        icon = Icons.AutoMirrored.Filled.ArrowBack,
-                                        contentDescription = exitFullscreenLabel,
-                                    )
+                        is PlayerPanelItem.Control -> {
+                            if (activeLayout.isHiddenByCenter(item.id, centerControlsActive)) continue
+                            when (item.id) {
+                                PlayerControlId.Back -> {
+                                    val exitFullscreenLabel = stringResource(Res.string.player_exit_fullscreen)
+                                    PlayerTooltip(exitFullscreenLabel, shortcut = "Esc", anchorAbove = false) {
+                                        PlayerIconButton(
+                                            onClick = { onFullscreenChange(false) },
+                                            icon = Icons.AutoMirrored.Filled.ArrowBack,
+                                            contentDescription = exitFullscreenLabel,
+                                            showBackground = item.showBackground,
+                                        )
+                                    }
                                 }
-                            }
-                            PlayerControlId.Title -> Text(
-                                text = title,
-                                style = MaterialTheme.typography.titleSmall,
-                                color = FixedColors.OnMedia,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                                modifier = if (hasTopSpacer) Modifier.weight(1f, fill = false) else Modifier.weight(1f),
-                            )
-                            PlayerControlId.SystemStatus -> PlayerStatusCluster(
-                                status = systemStatus,
-                                modifier = Modifier.padding(horizontal = Spacing.Tight),
-                            )
-                            PlayerControlId.PlayPause -> ControlBarPlayButton(
-                                isPlaying = playWhenReady,
-                                onClick = togglePlayPause,
-                            )
-                            PlayerControlId.Previous -> if (scope.canPrevious || scope.canNext) {
-                                val prevLabel = stringResource(Res.string.player_previous)
-                                PlayerTooltip(prevLabel, anchorAbove = false) {
-                                    PlayerIconButton(
-                                        onClick = actions.seekToPrevious,
-                                        enabled = scope.canPrevious,
-                                        icon = Icons.Filled.SkipPrevious,
-                                        contentDescription = prevLabel,
-                                    )
+                                PlayerControlId.Title -> Text(
+                                    text = title,
+                                    style = MaterialTheme.typography.titleSmall,
+                                    color = FixedColors.OnMedia,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = if (hasTopSpacer) Modifier.weight(1f, fill = false) else Modifier.weight(1f),
+                                )
+                                PlayerControlId.SystemStatus -> PlayerStatusCluster(
+                                    status = systemStatus,
+                                    showBackground = item.showBackground,
+                                    modifier = Modifier.padding(horizontal = Spacing.Tight),
+                                )
+                                PlayerControlId.PlayPause -> ControlBarPlayButton(
+                                    isPlaying = playWhenReady,
+                                    onClick = togglePlayPause,
+                                )
+                                PlayerControlId.Previous -> if (scope.canPrevious || scope.canNext) {
+                                    val prevLabel = stringResource(Res.string.player_previous)
+                                    PlayerTooltip(prevLabel, anchorAbove = false) {
+                                        PlayerIconButton(
+                                            onClick = actions.seekToPrevious,
+                                            enabled = scope.canPrevious,
+                                            icon = Icons.Filled.SkipPrevious,
+                                            contentDescription = prevLabel,
+                                            showBackground = item.showBackground,
+                                        )
+                                    }
                                 }
-                            }
-                            PlayerControlId.Next -> if (scope.canPrevious || scope.canNext) {
-                                val nextLabel = stringResource(Res.string.player_next)
-                                PlayerTooltip(nextLabel, anchorAbove = false) {
-                                    PlayerIconButton(
-                                        onClick = actions.seekToNext,
-                                        enabled = scope.canNext,
-                                        icon = Icons.Filled.SkipNext,
-                                        contentDescription = nextLabel,
-                                    )
+                                PlayerControlId.Next -> if (scope.canPrevious || scope.canNext) {
+                                    val nextLabel = stringResource(Res.string.player_next)
+                                    PlayerTooltip(nextLabel, anchorAbove = false) {
+                                        PlayerIconButton(
+                                            onClick = actions.seekToNext,
+                                            enabled = scope.canNext,
+                                            icon = Icons.Filled.SkipNext,
+                                            contentDescription = nextLabel,
+                                            showBackground = item.showBackground,
+                                        )
+                                    }
                                 }
-                            }
-                            PlayerControlId.SeekBackward -> if (gestures.seek) {
-                                val sec = layoutPrefs.seekButtonSeconds
-                                val label = stringResource(Res.string.player_seek_backward_seconds, sec)
-                                PlayerTooltip(label, anchorAbove = false) {
-                                    PlayerIconButton(
-                                        onClick = { actions.seekByMillis(-sec * 1_000L) },
-                                        icon = Icons.Filled.FastRewind,
-                                        contentDescription = label,
-                                    )
+                                PlayerControlId.SeekBackward -> if (gestures.seek) {
+                                    val sec = layoutPrefs.seekButtonSeconds
+                                    val label = stringResource(Res.string.player_seek_backward_seconds, sec)
+                                    PlayerTooltip(label, anchorAbove = false) {
+                                        PlayerIconButton(
+                                            onClick = { actions.seekByMillis(-sec * 1_000L) },
+                                            icon = Icons.Filled.FastRewind,
+                                            contentDescription = label,
+                                            showBackground = item.showBackground,
+                                        )
+                                    }
                                 }
-                            }
-                            PlayerControlId.SeekForward -> if (gestures.seek) {
-                                val sec = layoutPrefs.seekButtonSeconds
-                                val label = stringResource(Res.string.player_seek_forward_seconds, sec)
-                                PlayerTooltip(label, anchorAbove = false) {
-                                    PlayerIconButton(
-                                        onClick = { actions.seekByMillis(sec * 1_000L) },
-                                        icon = Icons.Filled.FastForward,
-                                        contentDescription = label,
-                                    )
+                                PlayerControlId.SeekForward -> if (gestures.seek) {
+                                    val sec = layoutPrefs.seekButtonSeconds
+                                    val label = stringResource(Res.string.player_seek_forward_seconds, sec)
+                                    PlayerTooltip(label, anchorAbove = false) {
+                                        PlayerIconButton(
+                                            onClick = { actions.seekByMillis(sec * 1_000L) },
+                                            icon = Icons.Filled.FastForward,
+                                            contentDescription = label,
+                                            showBackground = item.showBackground,
+                                        )
+                                    }
                                 }
-                            }
-                            PlayerControlId.Lock -> {
-                                val lockDescription = stringResource(if (locked) Res.string.player_unlock else Res.string.player_lock)
-                                PlayerTooltip(lockDescription, anchorAbove = false) {
-                                    PlayerIconButton(
-                                        onClick = {
-                                            haptics.performHapticFeedback(
-                                                if (locked) HapticFeedbackType.ToggleOff else HapticFeedbackType.ToggleOn,
-                                            )
-                                            onLockedChange(!locked)
-                                        },
-                                        icon = if (locked) Icons.Filled.Lock else Icons.Filled.LockOpen,
-                                        contentDescription = lockDescription,
-                                        selected = locked,
-                                    )
+                                PlayerControlId.Lock -> {
+                                    val lockDescription = stringResource(if (locked) Res.string.player_unlock else Res.string.player_lock)
+                                    PlayerTooltip(lockDescription, anchorAbove = false) {
+                                        PlayerIconButton(
+                                            onClick = {
+                                                haptics.performHapticFeedback(
+                                                    if (locked) HapticFeedbackType.ToggleOff else HapticFeedbackType.ToggleOn,
+                                                )
+                                                onLockedChange(!locked)
+                                            },
+                                            icon = if (locked) Icons.Filled.Lock else Icons.Filled.LockOpen,
+                                            contentDescription = lockDescription,
+                                            selected = locked,
+                                            showBackground = item.showBackground,
+                                        )
+                                    }
                                 }
-                            }
-                            PlayerControlId.Settings -> {
-                                if (!renderedLegacyActions) {
-                                    topBarActions()
-                                    renderedLegacyActions = true
+                                PlayerControlId.Settings -> {
+                                    if (!renderedLegacyActions) {
+                                        topBarActions()
+                                        renderedLegacyActions = true
+                                    }
+                                    topBarControlRenderer?.invoke(this, item)
                                 }
-                                topBarControlRenderer?.invoke(this, item.id)
+                                else -> topBarControlRenderer?.invoke(this, item)
                             }
-                            else -> topBarControlRenderer?.invoke(this, item.id)
                         }
                     }
                 }
@@ -1464,7 +1473,11 @@ fun PlayerShell(
         // 暂停那个方块就压在进退读数上。手势进行中没有人要去点播放键,松手后读数淡出、它再回来。
         // 触屏模式保留正中播放键；键鼠模式下播放键已移至底部控制条最左端，不再遮挡视频正中，
         // 仅在加载缓冲时于正中保留轻量化指示器。
-        val centerConfig = activeLayout.center
+        val centerConfig = if (centerControlsActive) {
+            activeLayout.center
+        } else {
+            CenterClusterConfig(showCenterPlay = false)
+        }
         val hasVisibleCenterSide = listOf(
             centerConfig.outerLeft,
             centerConfig.innerLeft,
@@ -1582,26 +1595,45 @@ private val ChargingAccentColor = Color(0xFF8CE99A)
 internal fun PlayerStatusCluster(
     status: PlayerSystemStatus,
     modifier: Modifier = Modifier,
+    showBackground: Boolean = true,
 ) {
     val hasNetwork = status.network != NetworkKind.Unknown
     val battery = status.battery
     val hasTime = status.timeText.isNotEmpty()
     if (!hasNetwork && battery == null && !hasTime) return
 
+    val timeStyle = if (showBackground) {
+        MaterialTheme.typography.labelMedium.tabular
+    } else {
+        MaterialTheme.typography.labelMedium.tabular.copy(shadow = MediaBorderlessTextShadow)
+    }
+    val detailStyle = if (showBackground) {
+        MaterialTheme.typography.labelSmall.tabular
+    } else {
+        MaterialTheme.typography.labelSmall.tabular.copy(shadow = MediaBorderlessTextShadow)
+    }
+
     Row(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
         modifier = modifier
             .height(StatusClusterHeight)
-            .clip(CircleShape)
-            .background(mediaControlContainer())
-            .border(HudSpecularBorderWidth, HudSpecularBorderColor, CircleShape)
-            .padding(horizontal = StatusClusterHorizontalPadding),
+            .then(
+                if (showBackground) {
+                    Modifier
+                        .clip(CircleShape)
+                        .background(mediaControlContainer())
+                        .border(HudSpecularBorderWidth, HudSpecularBorderColor, CircleShape)
+                        .padding(horizontal = StatusClusterHorizontalPadding)
+                } else {
+                    Modifier.padding(horizontal = Spacing.Hair)
+                },
+            ),
     ) {
         if (hasTime) {
             Text(
                 text = status.timeText,
-                style = MaterialTheme.typography.labelMedium.tabular,
+                style = timeStyle,
                 color = FixedColors.OnMedia,
                 maxLines = 1,
                 softWrap = false,
@@ -1645,7 +1677,7 @@ internal fun PlayerStatusCluster(
                 )
                 Text(
                     text = netLabel,
-                    style = MaterialTheme.typography.labelSmall.tabular,
+                    style = detailStyle,
                     color = netColor,
                     maxLines = 1,
                     softWrap = false,
@@ -1677,7 +1709,7 @@ internal fun PlayerStatusCluster(
                 )
                 Text(
                     text = "${battery.percent}%",
-                    style = MaterialTheme.typography.labelSmall.tabular,
+                    style = detailStyle,
                     color = textAndOutlineTint,
                     maxLines = 1,
                     softWrap = false,

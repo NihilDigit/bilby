@@ -167,11 +167,12 @@ import androidx.compose.ui.input.key.type
 import dev.bilby.ui.components.LocalEditableFocusTracker
 import dev.bilby.ui.player.PlayerVolumeControl
 import dev.bilby.ui.video.PlayerSettingsContent
+import dev.bilby.data.CenterSlotAction
+import dev.bilby.data.CenterSlotConfig
+import dev.bilby.data.CenterSlotScale
 import dev.bilby.data.ListenCoverStyle
+import dev.bilby.data.ListenLayoutConfig
 import dev.bilby.data.ListenQuickChip
-import dev.bilby.data.ListenSideAction
-import dev.bilby.data.MAX_SEEK_SECONDS
-import dev.bilby.data.MIN_SEEK_SECONDS
 import dev.bilby.data.QueueSource
 import dev.bilby.ui.player.LocalPlayerLayoutPrefs
 import dev.bilby.ui.components.InlineProgress
@@ -596,7 +597,6 @@ fun ListenScreen(
     val windowVisible = LocalWindowVisible.current
     val layoutPrefs = LocalPlayerLayoutPrefs.current
     val listenLayout = layoutPrefs.listen
-    val seekButtonSeconds = layoutPrefs.seekButtonSeconds.coerceIn(MIN_SEEK_SECONDS, MAX_SEEK_SECONDS)
     val audioOptions = state.playInfo?.streams?.audioOptions.orEmpty()
     val currentAudio = state.playInfo?.streams?.audioId ?: 0
 
@@ -937,14 +937,11 @@ fun ListenScreen(
                     hasNext = state.queue.canNext,
                     sleepTimer = sleepTimer,
                     progress = progress,
-                    sideAction = listenLayout.sideAction,
-                    seekButtonSeconds = seekButtonSeconds,
-                    visibleChips = listenLayout.visibleChips,
+                    listenLayout = listenLayout,
                     onPlayPause = { if (player.playWhenReady) player.pause() else player.playOrReplay(playback) },
                     onPrevious = onPrevious,
                     onNext = onNext,
-                    onSeekBackward = { seekBySeconds(-seekButtonSeconds) },
-                    onSeekForward = { seekBySeconds(seekButtonSeconds) },
+                    onSeekBySeconds = seekBySeconds,
                     onSpeedChange = { player.setPlaybackSpeed(it) },
                     onOpenSleepTimer = { sleepSheetOpen = true },
                     audioOptions = audioOptions,
@@ -1590,8 +1587,8 @@ private fun VinylDiscArt(
 }
 
 /**
- * 底部悬浮传输工具栏([HorizontalFloatingToolbar])承载对称动作组([ButtonGroup]):
- * `[倍速] [左侧键] [▶] [右侧键] [定时]`，各按钮按压时触发物理 `animateWidth` 膨胀让位。
+ * 底部悬浮传输工具栏([HorizontalFloatingToolbar])承载 5 槽位对称动作组([ButtonGroup]):
+ * `[倍速] [外左] [内左] [▶] [内右] [外右] [定时]`，各按钮按压时触发物理 `animateWidth` 膨胀让位。
  */
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalMaterial3ExpressiveApi::class)
 @Composable
@@ -1603,14 +1600,11 @@ private fun PlaybackControls(
     hasNext: Boolean,
     sleepTimer: SleepTimerState,
     progress: ListenProgressState,
-    sideAction: ListenSideAction,
-    seekButtonSeconds: Int,
-    visibleChips: List<ListenQuickChip>,
+    listenLayout: ListenLayoutConfig,
     onPlayPause: () -> Unit,
     onPrevious: () -> Unit,
     onNext: () -> Unit,
-    onSeekBackward: () -> Unit,
-    onSeekForward: () -> Unit,
+    onSeekBySeconds: (Int) -> Unit,
     onSpeedChange: (Float) -> Unit,
     onOpenSleepTimer: () -> Unit,
     modifier: Modifier = Modifier,
@@ -1620,12 +1614,9 @@ private fun PlaybackControls(
 ) {
     var speedSheetOpen by remember { mutableStateOf(false) }
     val speedLabel = stringResource(Res.string.player_speed)
-    val prevLabel = stringResource(Res.string.player_previous)
     val playLabel = stringResource(if (isPlaying) Res.string.player_pause else Res.string.player_play)
-    val nextLabel = stringResource(Res.string.player_next)
-    val rewindLabel = stringResource(Res.string.player_seek_backward_seconds, seekButtonSeconds)
-    val forwardLabel = stringResource(Res.string.player_seek_forward_seconds, seekButtonSeconds)
 
+    val visibleChips = listenLayout.visibleChips
     val showSpeed = ListenQuickChip.Speed in visibleChips
     val showSleep = ListenQuickChip.SleepTimer in visibleChips
     val showQuality = ListenQuickChip.Quality in visibleChips
@@ -1639,15 +1630,21 @@ private fun PlaybackControls(
         checkedContainerColor = MaterialTheme.colorScheme.secondaryContainer,
         checkedContentColor = MaterialTheme.colorScheme.onSecondaryContainer,
     )
-    val pillIconColors = IconButtonDefaults.filledTonalIconButtonColors(
-        containerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
-        contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
-    )
 
     val speedInteraction = remember { MutableInteractionSource() }
-    val prevInteraction = remember { MutableInteractionSource() }
-    val nextInteraction = remember { MutableInteractionSource() }
+    val outerLeftInteraction = remember { MutableInteractionSource() }
+    val innerLeftInteraction = remember { MutableInteractionSource() }
+    val innerRightInteraction = remember { MutableInteractionSource() }
+    val outerRightInteraction = remember { MutableInteractionSource() }
     val sleepInteraction = remember { MutableInteractionSource() }
+
+    val activeSideCount = listOf(
+        listenLayout.outerLeft,
+        listenLayout.innerLeft,
+        listenLayout.innerRight,
+        listenLayout.outerRight,
+    ).count { it.action != CenterSlotAction.None }
+    val groupSpacing = if (activeSideCount >= 3) Spacing.Hair else Spacing.Tight
 
     Box(
         modifier = modifier
@@ -1666,7 +1663,7 @@ private fun PlaybackControls(
         ) {
             ButtonGroup(
                 overflowIndicator = {},
-                horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
+                horizontalArrangement = Arrangement.spacedBy(groupSpacing),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 if (showSpeed) {
@@ -1705,59 +1702,39 @@ private fun PlaybackControls(
                         menuContent = {},
                     )
                 }
-                when (sideAction) {
-                    ListenSideAction.Episode -> {
-                        customItem(
-                            buttonGroupContent = {
-                                BilbyTooltip(text = prevLabel, shortcut = "[", anchorAbove = true) {
-                                    FilledTonalIconButton(
-                                        onClick = onPrevious,
-                                        enabled = hasPrevious,
-                                        interactionSource = prevInteraction,
-                                        shapes = IconButtonDefaults.shapes(),
-                                        colors = pillIconColors,
-                                        modifier = Modifier
-                                            .size(ListenControlHeight)
-                                            .animateWidth(prevInteraction)
-                                            .then(if (hasPrevious) Modifier.pointerHoverIcon(PointerIcon.Hand) else Modifier),
-                                    ) {
-                                        Icon(
-                                            imageVector = Icons.Filled.SkipPrevious,
-                                            contentDescription = prevLabel,
-                                            modifier = Modifier.size(SkipIconSize),
-                                        )
-                                    }
-                                }
-                            },
-                            menuContent = {},
-                        )
-                    }
-                    ListenSideAction.SeekDelta -> {
-                        customItem(
-                            buttonGroupContent = {
-                                BilbyTooltip(text = rewindLabel, anchorAbove = true) {
-                                    FilledTonalIconButton(
-                                        onClick = onSeekBackward,
-                                        interactionSource = prevInteraction,
-                                        shapes = IconButtonDefaults.shapes(),
-                                        colors = pillIconColors,
-                                        modifier = Modifier
-                                            .size(ListenControlHeight)
-                                            .animateWidth(prevInteraction)
-                                            .pointerHoverIcon(PointerIcon.Hand),
-                                    ) {
-                                        Icon(
-                                            imageVector = Icons.Filled.FastRewind,
-                                            contentDescription = rewindLabel,
-                                            modifier = Modifier.size(SkipIconSize),
-                                        )
-                                    }
-                                }
-                            },
-                            menuContent = {},
-                        )
-                    }
-                    ListenSideAction.None -> Unit
+                if (listenLayout.outerLeft.action != CenterSlotAction.None) {
+                    customItem(
+                        buttonGroupContent = {
+                            ListenSideSlotButton(
+                                slot = listenLayout.outerLeft,
+                                hasPrevious = hasPrevious,
+                                hasNext = hasNext,
+                                onPrevious = onPrevious,
+                                onNext = onNext,
+                                onSeekBySeconds = onSeekBySeconds,
+                                interactionSource = outerLeftInteraction,
+                                modifier = Modifier.animateWidth(outerLeftInteraction),
+                            )
+                        },
+                        menuContent = {},
+                    )
+                }
+                if (listenLayout.innerLeft.action != CenterSlotAction.None) {
+                    customItem(
+                        buttonGroupContent = {
+                            ListenSideSlotButton(
+                                slot = listenLayout.innerLeft,
+                                hasPrevious = hasPrevious,
+                                hasNext = hasNext,
+                                onPrevious = onPrevious,
+                                onNext = onNext,
+                                onSeekBySeconds = onSeekBySeconds,
+                                interactionSource = innerLeftInteraction,
+                                modifier = Modifier.animateWidth(innerLeftInteraction),
+                            )
+                        },
+                        menuContent = {},
+                    )
                 }
                 customItem(
                     buttonGroupContent = {
@@ -1773,59 +1750,39 @@ private fun PlaybackControls(
                     },
                     menuContent = {},
                 )
-                when (sideAction) {
-                    ListenSideAction.Episode -> {
-                        customItem(
-                            buttonGroupContent = {
-                                BilbyTooltip(text = nextLabel, shortcut = "]", anchorAbove = true) {
-                                    FilledTonalIconButton(
-                                        onClick = onNext,
-                                        enabled = hasNext,
-                                        interactionSource = nextInteraction,
-                                        shapes = IconButtonDefaults.shapes(),
-                                        colors = pillIconColors,
-                                        modifier = Modifier
-                                            .size(ListenControlHeight)
-                                            .animateWidth(nextInteraction)
-                                            .then(if (hasNext) Modifier.pointerHoverIcon(PointerIcon.Hand) else Modifier),
-                                    ) {
-                                        Icon(
-                                            imageVector = Icons.Filled.SkipNext,
-                                            contentDescription = nextLabel,
-                                            modifier = Modifier.size(SkipIconSize),
-                                        )
-                                    }
-                                }
-                            },
-                            menuContent = {},
-                        )
-                    }
-                    ListenSideAction.SeekDelta -> {
-                        customItem(
-                            buttonGroupContent = {
-                                BilbyTooltip(text = forwardLabel, anchorAbove = true) {
-                                    FilledTonalIconButton(
-                                        onClick = onSeekForward,
-                                        interactionSource = nextInteraction,
-                                        shapes = IconButtonDefaults.shapes(),
-                                        colors = pillIconColors,
-                                        modifier = Modifier
-                                            .size(ListenControlHeight)
-                                            .animateWidth(nextInteraction)
-                                            .pointerHoverIcon(PointerIcon.Hand),
-                                    ) {
-                                        Icon(
-                                            imageVector = Icons.Filled.FastForward,
-                                            contentDescription = forwardLabel,
-                                            modifier = Modifier.size(SkipIconSize),
-                                        )
-                                    }
-                                }
-                            },
-                            menuContent = {},
-                        )
-                    }
-                    ListenSideAction.None -> Unit
+                if (listenLayout.innerRight.action != CenterSlotAction.None) {
+                    customItem(
+                        buttonGroupContent = {
+                            ListenSideSlotButton(
+                                slot = listenLayout.innerRight,
+                                hasPrevious = hasPrevious,
+                                hasNext = hasNext,
+                                onPrevious = onPrevious,
+                                onNext = onNext,
+                                onSeekBySeconds = onSeekBySeconds,
+                                interactionSource = innerRightInteraction,
+                                modifier = Modifier.animateWidth(innerRightInteraction),
+                            )
+                        },
+                        menuContent = {},
+                    )
+                }
+                if (listenLayout.outerRight.action != CenterSlotAction.None) {
+                    customItem(
+                        buttonGroupContent = {
+                            ListenSideSlotButton(
+                                slot = listenLayout.outerRight,
+                                hasPrevious = hasPrevious,
+                                hasNext = hasNext,
+                                onPrevious = onPrevious,
+                                onNext = onNext,
+                                onSeekBySeconds = onSeekBySeconds,
+                                interactionSource = outerRightInteraction,
+                                modifier = Modifier.animateWidth(outerRightInteraction),
+                            )
+                        },
+                        menuContent = {},
+                    )
                 }
                 if (showSleep) {
                     customItem(
@@ -1874,6 +1831,118 @@ private fun PlaybackControls(
                 onAudioChange = onAudioChange,
                 only = if (showAudioInSheet) null else PlayerSettingsSection.Speed,
             )
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
+@Composable
+private fun ListenSideSlotButton(
+    slot: CenterSlotConfig,
+    hasPrevious: Boolean,
+    hasNext: Boolean,
+    onPrevious: () -> Unit,
+    onNext: () -> Unit,
+    onSeekBySeconds: (Int) -> Unit,
+    interactionSource: MutableInteractionSource,
+    modifier: Modifier = Modifier,
+) {
+    val action = slot.action
+    if (action == CenterSlotAction.None) return
+
+    val buttonSize = when (slot.scale) {
+        CenterSlotScale.Large -> ListenControlHeight
+        CenterSlotScale.Medium -> 44.dp
+        CenterSlotScale.Small -> 38.dp
+        CenterSlotScale.ExtraSmall -> 34.dp
+    }
+    val enabled = when (action) {
+        CenterSlotAction.Previous -> hasPrevious
+        CenterSlotAction.Next -> hasNext
+        is CenterSlotAction.SeekBackward, is CenterSlotAction.SeekForward -> true
+        CenterSlotAction.None -> false
+    }
+    val icon = when (action) {
+        CenterSlotAction.Previous -> Icons.Filled.SkipPrevious
+        CenterSlotAction.Next -> Icons.Filled.SkipNext
+        is CenterSlotAction.SeekBackward -> Icons.Filled.FastRewind
+        is CenterSlotAction.SeekForward -> Icons.Filled.FastForward
+        CenterSlotAction.None -> Icons.Filled.SkipNext
+    }
+    val label = when (action) {
+        CenterSlotAction.Previous -> stringResource(Res.string.player_previous)
+        CenterSlotAction.Next -> stringResource(Res.string.player_next)
+        is CenterSlotAction.SeekBackward -> stringResource(Res.string.player_seek_backward_seconds, action.seconds)
+        is CenterSlotAction.SeekForward -> stringResource(Res.string.player_seek_forward_seconds, action.seconds)
+        CenterSlotAction.None -> ""
+    }
+    val shortcut = when (action) {
+        CenterSlotAction.Previous -> "["
+        CenterSlotAction.Next -> "]"
+        else -> null
+    }
+    val secondsBadge = action.seekSecondsOrNull()
+    val iconSize = if (secondsBadge != null) {
+        (buttonSize * 0.42f).coerceIn(14.dp, 22.dp)
+    } else {
+        (buttonSize * 0.56f).coerceIn(18.dp, SkipIconSize)
+    }
+    val colors = IconButtonDefaults.filledTonalIconButtonColors(
+        containerColor = if (slot.showBackground) {
+            MaterialTheme.colorScheme.surfaceContainerHighest
+        } else {
+            Color.Transparent
+        },
+        disabledContainerColor = if (slot.showBackground) {
+            MaterialTheme.colorScheme.onSurface.copy(alpha = 0.12f)
+        } else {
+            Color.Transparent
+        },
+        contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+
+    BilbyTooltip(text = label, shortcut = shortcut, anchorAbove = true) {
+        FilledTonalIconButton(
+            onClick = {
+                when (action) {
+                    CenterSlotAction.Previous -> onPrevious()
+                    CenterSlotAction.Next -> onNext()
+                    is CenterSlotAction.SeekBackward -> onSeekBySeconds(-action.seconds)
+                    is CenterSlotAction.SeekForward -> onSeekBySeconds(action.seconds)
+                    CenterSlotAction.None -> Unit
+                }
+            },
+            enabled = enabled,
+            interactionSource = interactionSource,
+            shapes = IconButtonDefaults.shapes(),
+            colors = colors,
+            modifier = modifier
+                .size(buttonSize)
+                .then(if (enabled) Modifier.pointerHoverIcon(PointerIcon.Hand) else Modifier),
+        ) {
+            if (secondsBadge != null) {
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center,
+                ) {
+                    Icon(
+                        imageVector = icon,
+                        contentDescription = label,
+                        modifier = Modifier.size(iconSize),
+                    )
+                    Text(
+                        text = "${secondsBadge}s",
+                        style = MaterialTheme.typography.labelSmall.tabular.copy(fontSize = 9.sp, lineHeight = 10.sp),
+                        maxLines = 1,
+                    )
+                }
+            } else {
+                Icon(
+                    imageVector = icon,
+                    contentDescription = label,
+                    modifier = Modifier.size(iconSize),
+                )
+            }
         }
     }
 }

@@ -79,6 +79,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.ToggleButton
@@ -107,7 +108,9 @@ import androidx.compose.ui.input.pointer.PointerIcon
 import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import dev.bilby.data.CenterSlotAction
 import dev.bilby.data.CenterSlotConfig
 import dev.bilby.data.CenterSlotPosition
@@ -115,13 +118,12 @@ import dev.bilby.data.CenterSlotScale
 import dev.bilby.data.ListenCoverStyle
 import dev.bilby.data.ListenLayoutConfig
 import dev.bilby.data.ListenQuickChip
-import dev.bilby.data.ListenSideAction
 import dev.bilby.data.MAX_SEEK_SECONDS
 import dev.bilby.data.MIN_SEEK_SECONDS
 import dev.bilby.data.PlayerBarSlot
 import dev.bilby.data.PlayerControlId
-import dev.bilby.data.PlayerFormFactor
 import dev.bilby.data.PlayerFormFactorLayout
+import dev.bilby.data.PlayerLayoutMode
 import dev.bilby.data.PlayerLayoutPrefs
 import dev.bilby.data.PlayerLayoutPreset
 import dev.bilby.data.PlayerPanelItem
@@ -133,7 +135,6 @@ import dev.bilby.ui.AdaptiveContent
 import dev.bilby.ui.BilbyWindowSize
 import dev.bilby.ui.components.BilbyIcons
 import dev.bilby.ui.components.BilbyTopBar
-import dev.bilby.ui.components.LocalPointerSource
 import dev.bilby.ui.components.PaneSheet
 import dev.bilby.ui.components.trackEditableFocus
 import dev.bilby.ui.isAtLeast
@@ -142,10 +143,12 @@ import dev.bilby.ui.padScaffoldExceptBottom
 import dev.bilby.ui.player.BatteryStatus
 import dev.bilby.ui.player.CenterControlCluster
 import dev.bilby.ui.player.ControlScrimBottom
+import dev.bilby.ui.player.MediaBorderlessTextShadow
 import dev.bilby.ui.player.NetworkKind
 import dev.bilby.ui.player.PlayerStatusCluster
 import dev.bilby.ui.player.PlayerSystemStatus
 import dev.bilby.ui.player.formatSpeed
+import dev.bilby.ui.player.mediaControlContainer
 import dev.bilby.ui.rememberBilbyWindowSize
 import dev.bilby.ui.theme.Breakpoints
 import dev.bilby.ui.theme.Dimens
@@ -162,7 +165,7 @@ private enum class EditorSurfaceMode {
 
 private enum class ListenEditorSection {
     Cover,
-    SideAction,
+    SideSlot,
     QuickChips,
 }
 
@@ -185,31 +188,43 @@ fun PlayerCustomizationPage(
     onSwipeBrightnessVolumeChange: (Boolean) -> Unit,
     onBack: (() -> Unit)?,
 ) {
-    val pointerSource = LocalPointerSource.current
-    var editingTouch by rememberSaveable { mutableStateOf(pointerSource.isTouchLike) }
     var surfaceMode by rememberSaveable { mutableStateOf(EditorSurfaceMode.Embedded) }
     val isListenMode = surfaceMode == EditorSurfaceMode.Listen
     val editingFullscreen = surfaceMode == EditorSurfaceMode.Fullscreen
-    val formFactor = PlayerFormFactor.of(isTouch = editingTouch, isFullscreen = editingFullscreen)
+    val layoutMode = if (editingFullscreen) PlayerLayoutMode.Fullscreen else PlayerLayoutMode.Embedded
     val layoutPrefs = state.playerLayout
-    val activeLayout = layoutPrefs.layoutFor(formFactor)
+    val activeLayout = layoutPrefs.layoutFor(layoutMode)
 
     var selection by remember {
         mutableStateOf<PreviewSelection>(PreviewSelection.CenterSlot(CenterSlotPosition.InnerLeft))
     }
-    var listenSection by rememberSaveable { mutableStateOf(ListenEditorSection.Cover) }
+    var listenSection by rememberSaveable { mutableStateOf(ListenEditorSection.SideSlot) }
+    var selectedListenSlot by rememberSaveable { mutableStateOf(CenterSlotPosition.InnerLeft) }
     var addControlTargetBar by remember { mutableStateOf<PlayerBarSlot?>(null) }
 
-    // 切换形态或列表长度变化时修正越界选中索引。
-    LaunchedEffect(formFactor, activeLayout.topBar.size, activeLayout.bottomBar.size) {
+    // 切换形态、隐藏触控中央控件或列表长度变化时修正越界选中索引。
+    LaunchedEffect(
+        layoutMode,
+        layoutPrefs.showCenterControlsOnTouch,
+        activeLayout.topBar.size,
+        activeLayout.bottomBar.size,
+    ) {
         val current = selection
-        if (current is PreviewSelection.PanelItem) {
+        if (!layoutPrefs.showCenterControlsOnTouch && current is PreviewSelection.CenterSlot) {
+            selection = if (activeLayout.bottomBar.isNotEmpty()) {
+                PreviewSelection.PanelItem(PlayerBarSlot.Bottom, 0)
+            } else {
+                PreviewSelection.PanelItem(PlayerBarSlot.Top, 0)
+            }
+        } else if (current is PreviewSelection.PanelItem) {
             val size = activeLayout.itemsFor(current.bar).size
             if (current.index !in 0 until size) {
                 selection = if (size > 0) {
                     PreviewSelection.PanelItem(current.bar, (size - 1).coerceAtLeast(0))
-                } else {
+                } else if (layoutPrefs.showCenterControlsOnTouch) {
                     PreviewSelection.CenterSlot(CenterSlotPosition.Center)
+                } else {
+                    PreviewSelection.PanelItem(PlayerBarSlot.Bottom, 0)
                 }
             }
         }
@@ -244,18 +259,21 @@ fun PlayerCustomizationPage(
                 modifier = mod,
                 verticalArrangement = Arrangement.spacedBy(Spacing.Cozy),
             ) {
-                FormFactorModeBar(
-                    isTouch = editingTouch,
-                    onTouchChange = { editingTouch = it },
+                SurfaceModeToggleGroup(
                     surfaceMode = surfaceMode,
                     onSurfaceModeChange = { surfaceMode = it },
+                    modifier = Modifier.fillMaxWidth(),
                 )
                 if (isListenMode) {
                     ListenPreviewCanvas(
                         config = layoutPrefs.listen,
-                        seekButtonSeconds = layoutPrefs.seekButtonSeconds,
                         selectedSection = listenSection,
+                        selectedSlot = selectedListenSlot,
                         onSelectSection = { listenSection = it },
+                        onSelectSlot = { pos ->
+                            selectedListenSlot = pos
+                            listenSection = ListenEditorSection.SideSlot
+                        },
                     )
                     Text(
                         text = stringResource(Res.string.player_custom_listen_preview_hint),
@@ -266,6 +284,7 @@ fun PlayerCustomizationPage(
                     PlayerPreviewCanvas(
                         layout = activeLayout,
                         isFullscreen = editingFullscreen,
+                        showCenterControls = layoutPrefs.showCenterControlsOnTouch,
                         seekButtonSeconds = layoutPrefs.seekButtonSeconds,
                         selection = selection,
                         onSelect = { selection = it },
@@ -293,12 +312,32 @@ fun PlayerCustomizationPage(
                         config = layoutPrefs.listen,
                         seekButtonSeconds = layoutPrefs.seekButtonSeconds,
                         selectedSection = listenSection,
+                        selectedSlot = selectedListenSlot,
                         onSelectSection = { listenSection = it },
+                        onSelectSlot = { pos ->
+                            selectedListenSlot = pos
+                            listenSection = ListenEditorSection.SideSlot
+                        },
                         onUpdateLayout = onUpdateLayout,
                     )
                 } else {
+                    SettingsGroup {
+                        row { pos ->
+                            ToggleSettingRow(
+                                position = pos,
+                                icon = Icons.Filled.PlayArrow,
+                                title = stringResource(Res.string.player_custom_show_center_on_touch),
+                                subtitle = stringResource(Res.string.player_custom_show_center_on_touch_subtitle),
+                                checked = layoutPrefs.showCenterControlsOnTouch,
+                                onCheckedChange = { enabled ->
+                                    onUpdateLayout { prefs -> prefs.copy(showCenterControlsOnTouch = enabled) }
+                                },
+                            )
+                        }
+                    }
+
                     SelectionInspectorCard(
-                        formFactor = formFactor,
+                        layoutMode = layoutMode,
                         layout = activeLayout,
                         layoutPrefs = layoutPrefs,
                         selection = selection,
@@ -312,8 +351,8 @@ fun PlayerCustomizationPage(
                         onAddSpacer = { bar ->
                             val nextIdx = activeLayout.itemsFor(bar).size
                             onUpdateLayout { prefs ->
-                                prefs.updateLayout(formFactor) {
-                                    it.addToBar(bar, PlayerPanelItem.Spacer, formFactor.isFullscreen)
+                                prefs.updateLayout(layoutMode) {
+                                    it.addToBar(bar, PlayerPanelItem.Spacer, layoutMode.isFullscreen)
                                 }
                             }
                             selection = PreviewSelection.PanelItem(bar, nextIdx)
@@ -371,23 +410,27 @@ fun PlayerCustomizationPage(
                             .fillMaxWidth()
                             .padding(horizontal = Spacing.Comfortable, vertical = Spacing.Tight),
                     ) {
-                        FormFactorModeBar(
-                            isTouch = editingTouch,
-                            onTouchChange = { editingTouch = it },
+                        SurfaceModeToggleGroup(
                             surfaceMode = surfaceMode,
                             onSurfaceModeChange = { surfaceMode = it },
+                            modifier = Modifier.fillMaxWidth(),
                         )
                         if (isListenMode) {
                             ListenPreviewCanvas(
                                 config = layoutPrefs.listen,
-                                seekButtonSeconds = layoutPrefs.seekButtonSeconds,
                                 selectedSection = listenSection,
+                                selectedSlot = selectedListenSlot,
                                 onSelectSection = { listenSection = it },
+                                onSelectSlot = { pos ->
+                                    selectedListenSlot = pos
+                                    listenSection = ListenEditorSection.SideSlot
+                                },
                             )
                         } else {
                             PlayerPreviewCanvas(
                                 layout = activeLayout,
                                 isFullscreen = editingFullscreen,
+                                showCenterControls = layoutPrefs.showCenterControlsOnTouch,
                                 seekButtonSeconds = layoutPrefs.seekButtonSeconds,
                                 selection = selection,
                                 onSelect = { selection = it },
@@ -428,46 +471,14 @@ fun PlayerCustomizationPage(
                 layout = activeLayout,
                 onPick = { controlId ->
                     onUpdateLayout { prefs ->
-                        prefs.updateLayout(formFactor) {
-                            it.addToBar(targetBar, PlayerPanelItem.Control(controlId), formFactor.isFullscreen)
+                        prefs.updateLayout(layoutMode) {
+                            it.addToBar(targetBar, PlayerPanelItem.Control(controlId), layoutMode.isFullscreen)
                         }
                     }
                     addControlTargetBar = null
                 },
             )
         }
-    }
-}
-
-@OptIn(ExperimentalMaterial3ExpressiveApi::class)
-@Composable
-private fun FormFactorModeBar(
-    isTouch: Boolean,
-    onTouchChange: (Boolean) -> Unit,
-    surfaceMode: EditorSurfaceMode,
-    onSurfaceModeChange: (EditorSurfaceMode) -> Unit,
-) {
-    val isListen = surfaceMode == EditorSurfaceMode.Listen
-    Row(
-        horizontalArrangement = Arrangement.spacedBy(Spacing.Cozy),
-        verticalAlignment = Alignment.CenterVertically,
-        modifier = Modifier.fillMaxWidth(),
-    ) {
-        if (!isListen) {
-            BinaryTogglePair(
-                leftLabel = stringResource(Res.string.player_custom_input_touch),
-                rightLabel = stringResource(Res.string.player_custom_input_pointer),
-                leftSelected = isTouch,
-                onSelectLeft = { onTouchChange(true) },
-                onSelectRight = { onTouchChange(false) },
-                modifier = Modifier.weight(0.9f),
-            )
-        }
-        SurfaceModeToggleGroup(
-            surfaceMode = surfaceMode,
-            onSurfaceModeChange = onSurfaceModeChange,
-            modifier = Modifier.weight(if (isListen) 1f else 1.45f),
-        )
     }
 }
 
@@ -522,9 +533,10 @@ private fun SurfaceModeToggleGroup(
 @Composable
 private fun ListenPreviewCanvas(
     config: ListenLayoutConfig,
-    seekButtonSeconds: Int,
     selectedSection: ListenEditorSection,
+    selectedSlot: CenterSlotPosition,
     onSelectSection: (ListenEditorSection) -> Unit,
+    onSelectSlot: (CenterSlotPosition) -> Unit,
 ) {
     val highlight = MaterialTheme.colorScheme.primary
     val primaryContainer = MaterialTheme.colorScheme.primaryContainer
@@ -620,7 +632,7 @@ private fun ListenPreviewCanvas(
                 if (config.coverStyle == ListenCoverStyle.VinylDisc) {
                     Box(
                         contentAlignment = Alignment.Center,
-                        modifier = Modifier.size(66.dp),
+                        modifier = Modifier.size(62.dp),
                     ) {
                         Canvas(modifier = Modifier.fillMaxSize()) {
                             val r = size.minDimension / 2f
@@ -648,7 +660,7 @@ private fun ListenPreviewCanvas(
                     Box(
                         contentAlignment = Alignment.Center,
                         modifier = Modifier
-                            .width(96.dp)
+                            .width(92.dp)
                             .aspectRatio(16f / 10f)
                             .clip(MaterialTheme.shapes.small)
                             .background(Brush.linearGradient(listOf(primaryContainer, tertiaryContainer))),
@@ -677,7 +689,7 @@ private fun ListenPreviewCanvas(
             )
         }
 
-        // 底部悬浮控制胶囊预览
+        // 底部悬浮控制胶囊预览：[倍速?] [外左] [内左] [▶] [内右] [外右] [定时?]
         Surface(
             shape = CircleShape,
             color = surfaceContainerHigh,
@@ -697,7 +709,7 @@ private fun ListenPreviewCanvas(
                             .then(chipHighlightBorder)
                             .clickable { onSelectSection(ListenEditorSection.QuickChips) }
                             .pointerHoverIcon(PointerIcon.Hand)
-                            .padding(horizontal = 8.dp, vertical = 5.dp),
+                            .padding(horizontal = 7.dp, vertical = 5.dp),
                     ) {
                         Text(
                             text = "1.0x",
@@ -708,56 +720,54 @@ private fun ListenPreviewCanvas(
                     }
                 }
 
-                val controlsSelected = selectedSection == ListenEditorSection.SideAction
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(Spacing.Hair),
+                ListenPreviewSideSlot(
+                    slot = config.outerLeft,
+                    selected = selectedSection == ListenEditorSection.SideSlot && selectedSlot == CenterSlotPosition.OuterLeft,
+                    containerColor = surfaceContainerHighest,
+                    contentColor = onSurfaceVariant,
+                    highlightColor = highlight,
+                    onClick = { onSelectSlot(CenterSlotPosition.OuterLeft) },
+                )
+                ListenPreviewSideSlot(
+                    slot = config.innerLeft,
+                    selected = selectedSection == ListenEditorSection.SideSlot && selectedSlot == CenterSlotPosition.InnerLeft,
+                    containerColor = surfaceContainerHighest,
+                    contentColor = onSurfaceVariant,
+                    highlightColor = highlight,
+                    onClick = { onSelectSlot(CenterSlotPosition.InnerLeft) },
+                )
+
+                Box(
+                    contentAlignment = Alignment.Center,
                     modifier = Modifier
+                        .size(width = 34.dp, height = 28.dp)
                         .clip(CircleShape)
-                        .then(if (controlsSelected) Modifier.border(2.dp, highlight, CircleShape) else Modifier)
-                        .clickable { onSelectSection(ListenEditorSection.SideAction) }
-                        .pointerHoverIcon(PointerIcon.Hand)
-                        .padding(horizontal = 3.dp, vertical = 2.dp),
+                        .background(highlight),
                 ) {
-                    when (config.sideAction) {
-                        ListenSideAction.Episode -> {
-                            ListenPreviewMiniCircleButton(surfaceContainerHighest) {
-                                Icon(Icons.Filled.SkipPrevious, null, tint = onSurfaceVariant, modifier = Modifier.size(16.dp))
-                            }
-                        }
-                        ListenSideAction.SeekDelta -> {
-                            ListenPreviewMiniSeekPill(surfaceContainerHighest, Icons.Filled.FastRewind, "${seekButtonSeconds}s", onSurfaceVariant)
-                        }
-                        ListenSideAction.None -> Unit
-                    }
-
-                    Box(
-                        contentAlignment = Alignment.Center,
-                        modifier = Modifier
-                            .size(width = 34.dp, height = 28.dp)
-                            .clip(CircleShape)
-                            .background(highlight),
-                    ) {
-                        Icon(
-                            imageVector = Icons.Filled.PlayArrow,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.onPrimary,
-                            modifier = Modifier.size(18.dp),
-                        )
-                    }
-
-                    when (config.sideAction) {
-                        ListenSideAction.Episode -> {
-                            ListenPreviewMiniCircleButton(surfaceContainerHighest) {
-                                Icon(Icons.Filled.SkipNext, null, tint = onSurfaceVariant, modifier = Modifier.size(16.dp))
-                            }
-                        }
-                        ListenSideAction.SeekDelta -> {
-                            ListenPreviewMiniSeekPill(surfaceContainerHighest, Icons.Filled.FastForward, "${seekButtonSeconds}s", onSurfaceVariant)
-                        }
-                        ListenSideAction.None -> Unit
-                    }
+                    Icon(
+                        imageVector = Icons.Filled.PlayArrow,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onPrimary,
+                        modifier = Modifier.size(18.dp),
+                    )
                 }
+
+                ListenPreviewSideSlot(
+                    slot = config.innerRight,
+                    selected = selectedSection == ListenEditorSection.SideSlot && selectedSlot == CenterSlotPosition.InnerRight,
+                    containerColor = surfaceContainerHighest,
+                    contentColor = onSurfaceVariant,
+                    highlightColor = highlight,
+                    onClick = { onSelectSlot(CenterSlotPosition.InnerRight) },
+                )
+                ListenPreviewSideSlot(
+                    slot = config.outerRight,
+                    selected = selectedSection == ListenEditorSection.SideSlot && selectedSlot == CenterSlotPosition.OuterRight,
+                    containerColor = surfaceContainerHighest,
+                    contentColor = onSurfaceVariant,
+                    highlightColor = highlight,
+                    onClick = { onSelectSlot(CenterSlotPosition.OuterRight) },
+                )
 
                 if (showSleep) {
                     Box(
@@ -768,7 +778,7 @@ private fun ListenPreviewCanvas(
                             .then(chipHighlightBorder)
                             .clickable { onSelectSection(ListenEditorSection.QuickChips) }
                             .pointerHoverIcon(PointerIcon.Hand)
-                            .padding(horizontal = 8.dp, vertical = 5.dp),
+                            .padding(horizontal = 7.dp, vertical = 5.dp),
                     ) {
                         Icon(
                             imageVector = Icons.Filled.Bedtime,
@@ -784,38 +794,87 @@ private fun ListenPreviewCanvas(
 }
 
 @Composable
-private fun ListenPreviewMiniCircleButton(
+private fun ListenPreviewSideSlot(
+    slot: CenterSlotConfig,
+    selected: Boolean,
     containerColor: Color,
-    content: @Composable () -> Unit,
+    contentColor: Color,
+    highlightColor: Color,
+    onClick: () -> Unit,
 ) {
+    val diameter: Dp = when (slot.scale) {
+        CenterSlotScale.Large -> 30.dp
+        CenterSlotScale.Medium -> 26.dp
+        CenterSlotScale.Small -> 22.dp
+        CenterSlotScale.ExtraSmall -> 19.dp
+    }
+    if (slot.action == CenterSlotAction.None) {
+        val strokeColor = if (selected) highlightColor else contentColor.copy(alpha = 0.45f)
+        val strokeWidth = if (selected) 2.dp else 1.2.dp
+        Box(
+            contentAlignment = Alignment.Center,
+            modifier = Modifier
+                .size(diameter)
+                .clip(CircleShape)
+                .clickable(onClick = onClick)
+                .pointerHoverIcon(PointerIcon.Hand),
+        ) {
+            Canvas(modifier = Modifier.fillMaxSize()) {
+                val strokePx = strokeWidth.toPx()
+                drawCircle(
+                    color = strokeColor,
+                    radius = (size.minDimension - strokePx) / 2f,
+                    style = Stroke(
+                        width = strokePx,
+                        pathEffect = PathEffect.dashPathEffect(floatArrayOf(6f, 5f), 0f),
+                    ),
+                )
+            }
+            Icon(
+                imageVector = Icons.Filled.Add,
+                contentDescription = stringResource(Res.string.player_custom_add_slot),
+                tint = strokeColor,
+                modifier = Modifier.size((diameter * 0.48f).coerceIn(10.dp, 14.dp)),
+            )
+        }
+        return
+    }
+
+    val icon = when (slot.action) {
+        CenterSlotAction.Previous -> Icons.Filled.SkipPrevious
+        CenterSlotAction.Next -> Icons.Filled.SkipNext
+        is CenterSlotAction.SeekBackward -> Icons.Filled.FastRewind
+        is CenterSlotAction.SeekForward -> Icons.Filled.FastForward
+        CenterSlotAction.None -> Icons.Filled.Add
+    }
+    val secondsBadge = slot.action.seekSecondsOrNull()
+    val iconSize = (diameter * (if (secondsBadge != null) 0.42f else 0.56f)).coerceIn(10.dp, 16.dp)
     Box(
         contentAlignment = Alignment.Center,
         modifier = Modifier
-            .size(28.dp)
+            .size(diameter)
             .clip(CircleShape)
-            .background(containerColor),
+            .background(if (slot.showBackground) containerColor else Color.Transparent)
+            .then(if (selected) Modifier.border(2.dp, highlightColor, CircleShape) else Modifier)
+            .clickable(onClick = onClick)
+            .pointerHoverIcon(PointerIcon.Hand),
     ) {
-        content()
-    }
-}
-
-@Composable
-private fun ListenPreviewMiniSeekPill(
-    containerColor: Color,
-    icon: ImageVector,
-    label: String,
-    tint: Color,
-) {
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(1.dp),
-        modifier = Modifier
-            .clip(CircleShape)
-            .background(containerColor)
-            .padding(horizontal = 6.dp, vertical = 5.dp),
-    ) {
-        Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size(13.dp))
-        Text(label, style = MaterialTheme.typography.labelSmall.tabular, color = tint, maxLines = 1)
+        if (secondsBadge != null) {
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center,
+            ) {
+                Icon(icon, contentDescription = null, tint = contentColor, modifier = Modifier.size(iconSize))
+                Text(
+                    text = "${secondsBadge}s",
+                    style = MaterialTheme.typography.labelSmall.tabular.copy(fontSize = 7.sp, lineHeight = 8.sp),
+                    color = contentColor,
+                    maxLines = 1,
+                )
+            }
+        } else {
+            Icon(icon, contentDescription = null, tint = contentColor, modifier = Modifier.size(iconSize))
+        }
     }
 }
 
@@ -825,10 +884,167 @@ private fun ListenCustomizationCards(
     config: ListenLayoutConfig,
     seekButtonSeconds: Int,
     selectedSection: ListenEditorSection,
+    selectedSlot: CenterSlotPosition,
     onSelectSection: (ListenEditorSection) -> Unit,
+    onSelectSlot: (CenterSlotPosition) -> Unit,
     onUpdateLayout: ((PlayerLayoutPrefs) -> PlayerLayoutPrefs) -> Unit,
 ) {
-    // 1. 封面样式卡片
+    // 1. 播放键两侧槽位卡片（支持外左 / 内左 / 内右 / 外右 4 槽位）
+    val slot = config.slot(selectedSlot)
+    val currentSeconds = slot.action.seekSecondsOrNull() ?: seekButtonSeconds
+    ListenEditorCard(
+        title = stringResource(Res.string.player_custom_listen_side_title),
+        selected = selectedSection == ListenEditorSection.SideSlot,
+        onClick = { onSelectSection(ListenEditorSection.SideSlot) },
+    ) {
+        // 槽位切换
+        FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
+            verticalArrangement = Arrangement.spacedBy(Spacing.Hair),
+        ) {
+            val slotTabs = listOf(
+                CenterSlotPosition.OuterLeft to stringResource(Res.string.player_custom_slot_outer_left_short),
+                CenterSlotPosition.InnerLeft to stringResource(Res.string.player_custom_slot_inner_left_short),
+                CenterSlotPosition.InnerRight to stringResource(Res.string.player_custom_slot_inner_right_short),
+                CenterSlotPosition.OuterRight to stringResource(Res.string.player_custom_slot_outer_right_short),
+            )
+            for ((pos, label) in slotTabs) {
+                FilterChip(
+                    selected = selectedSlot == pos,
+                    onClick = { onSelectSlot(pos) },
+                    label = { Text(label) },
+                )
+            }
+        }
+
+        // 动作选择
+        FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
+            verticalArrangement = Arrangement.spacedBy(Spacing.Hair),
+        ) {
+            val actions = listOf(
+                CenterSlotAction.None to stringResource(Res.string.player_custom_action_none),
+                CenterSlotAction.Previous to stringResource(Res.string.player_custom_action_previous),
+                CenterSlotAction.Next to stringResource(Res.string.player_custom_action_next),
+                CenterSlotAction.SeekBackward(currentSeconds) to stringResource(Res.string.player_custom_action_seek_backward),
+                CenterSlotAction.SeekForward(currentSeconds) to stringResource(Res.string.player_custom_action_seek_forward),
+            )
+            for ((actionOption, label) in actions) {
+                val isCurrent = when {
+                    actionOption is CenterSlotAction.SeekBackward && slot.action is CenterSlotAction.SeekBackward -> true
+                    actionOption is CenterSlotAction.SeekForward && slot.action is CenterSlotAction.SeekForward -> true
+                    else -> slot.action == actionOption
+                }
+                FilterChip(
+                    selected = isCurrent,
+                    onClick = {
+                        onSelectSection(ListenEditorSection.SideSlot)
+                        onUpdateLayout { prefs ->
+                            prefs.updateListen { it.withSlot(selectedSlot, slot.copy(action = actionOption)) }
+                        }
+                    },
+                    label = { Text(label) },
+                )
+            }
+        }
+
+        val isSeekAction = slot.action is CenterSlotAction.SeekBackward ||
+            slot.action is CenterSlotAction.SeekForward
+        if (isSeekAction) {
+            SeekSecondsEditor(
+                title = stringResource(Res.string.player_custom_seek_seconds),
+                seconds = currentSeconds,
+                onSecondsChange = { newSec ->
+                    val clamped = newSec.coerceIn(MIN_SEEK_SECONDS, MAX_SEEK_SECONDS)
+                    val updatedAction = when (slot.action) {
+                        is CenterSlotAction.SeekBackward -> CenterSlotAction.SeekBackward(clamped)
+                        is CenterSlotAction.SeekForward -> CenterSlotAction.SeekForward(clamped)
+                        else -> slot.action
+                    }
+                    onUpdateLayout { prefs ->
+                        prefs.copy(seekButtonSeconds = clamped)
+                            .updateListen { it.withSlot(selectedSlot, slot.copy(action = updatedAction)) }
+                    }
+                },
+            )
+        }
+
+        // 相对尺寸档位
+        Column(verticalArrangement = Arrangement.spacedBy(Spacing.Hair)) {
+            Text(
+                text = stringResource(Res.string.player_custom_scale_title),
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
+                verticalArrangement = Arrangement.spacedBy(Spacing.Hair),
+            ) {
+                val scales = listOf(
+                    CenterSlotScale.Large to stringResource(Res.string.player_custom_scale_large),
+                    CenterSlotScale.Medium to stringResource(Res.string.player_custom_scale_medium),
+                    CenterSlotScale.Small to stringResource(Res.string.player_custom_scale_small),
+                    CenterSlotScale.ExtraSmall to stringResource(Res.string.player_custom_scale_extra_small),
+                )
+                for ((scaleOption, label) in scales) {
+                    FilterChip(
+                        selected = slot.scale == scaleOption,
+                        onClick = {
+                            onSelectSection(ListenEditorSection.SideSlot)
+                            onUpdateLayout { prefs ->
+                                prefs.updateListen { it.withSlot(selectedSlot, slot.copy(scale = scaleOption)) }
+                            }
+                        },
+                        label = { Text(label) },
+                    )
+                }
+            }
+        }
+
+        if (slot.action != CenterSlotAction.None) {
+            ShowBackgroundSwitchRow(
+                checked = slot.showBackground,
+                onCheckedChange = { showBg ->
+                    onSelectSection(ListenEditorSection.SideSlot)
+                    onUpdateLayout { prefs ->
+                        prefs.updateListen { it.withSlot(selectedSlot, slot.copy(showBackground = showBg)) }
+                    }
+                },
+            )
+        }
+
+        // 对称应用 + 清空
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            FilledTonalButton(
+                onClick = {
+                    onSelectSection(ListenEditorSection.SideSlot)
+                    onUpdateLayout { prefs -> prefs.updateListen { it.withSymmetricSlot(selectedSlot) } }
+                },
+                modifier = Modifier.weight(1f),
+            ) {
+                Icon(Icons.Filled.SwapHoriz, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(Spacing.Hair))
+                Text(stringResource(Res.string.player_custom_apply_symmetric), maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+            if (slot.action != CenterSlotAction.None) {
+                OutlinedButton(
+                    onClick = {
+                        onSelectSection(ListenEditorSection.SideSlot)
+                        onUpdateLayout { prefs ->
+                            prefs.updateListen { it.withSlot(selectedSlot, slot.copy(action = CenterSlotAction.None)) }
+                        }
+                    },
+                ) {
+                    Text(stringResource(Res.string.player_custom_clear_slot))
+                }
+            }
+        }
+    }
+
+    // 2. 封面样式卡片
     ListenEditorCard(
         title = stringResource(Res.string.player_custom_listen_cover_title),
         selected = selectedSection == ListenEditorSection.Cover,
@@ -858,43 +1074,6 @@ private fun ListenCustomizationCards(
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
-    }
-
-    // 2. 播放键两侧按钮卡片
-    ListenEditorCard(
-        title = stringResource(Res.string.player_custom_listen_side_title),
-        selected = selectedSection == ListenEditorSection.SideAction,
-        onClick = { onSelectSection(ListenEditorSection.SideAction) },
-    ) {
-        FlowRow(
-            horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
-            verticalArrangement = Arrangement.spacedBy(Spacing.Hair),
-        ) {
-            val sideOptions = listOf(
-                ListenSideAction.Episode to stringResource(Res.string.player_custom_listen_side_episode),
-                ListenSideAction.SeekDelta to stringResource(Res.string.player_custom_listen_side_seek, seekButtonSeconds),
-                ListenSideAction.None to stringResource(Res.string.player_custom_listen_side_none),
-            )
-            for ((action, label) in sideOptions) {
-                FilterChip(
-                    selected = config.sideAction == action,
-                    onClick = {
-                        onSelectSection(ListenEditorSection.SideAction)
-                        onUpdateLayout { prefs -> prefs.updateListen { it.copy(sideAction = action) } }
-                    },
-                    label = { Text(label) },
-                )
-            }
-        }
-        if (config.sideAction == ListenSideAction.SeekDelta) {
-            SeekSecondsEditor(
-                title = stringResource(Res.string.player_custom_seek_seconds),
-                seconds = seekButtonSeconds,
-                onSecondsChange = { sec ->
-                    onUpdateLayout { prefs -> prefs.copy(seekButtonSeconds = sec) }
-                },
-            )
-        }
     }
 
     // 3. 快捷项显示卡片
@@ -936,6 +1115,39 @@ private fun ListenCustomizationCards(
 }
 
 @Composable
+private fun ShowBackgroundSwitchRow(
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(Spacing.Cozy),
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(MaterialTheme.shapes.medium)
+            .clickable { onCheckedChange(!checked) }
+            .padding(vertical = Spacing.Hair),
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = stringResource(Res.string.player_custom_show_background),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+            Text(
+                text = stringResource(Res.string.player_custom_show_background_subtitle),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        Switch(
+            checked = checked,
+            onCheckedChange = onCheckedChange,
+        )
+    }
+}
+
+@Composable
 private fun ListenEditorCard(
     title: String,
     selected: Boolean,
@@ -968,60 +1180,6 @@ private fun ListenEditorCard(
             )
             content()
         }
-    }
-}
-
-@OptIn(ExperimentalMaterial3ExpressiveApi::class)
-@Composable
-private fun BinaryTogglePair(
-    leftLabel: String,
-    rightLabel: String,
-    leftSelected: Boolean,
-    onSelectLeft: () -> Unit,
-    onSelectRight: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    val colors = ToggleButtonDefaults.colors(
-        containerColor = MaterialTheme.colorScheme.surfaceContainer,
-        contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
-        checkedContainerColor = MaterialTheme.colorScheme.secondaryContainer,
-        checkedContentColor = MaterialTheme.colorScheme.onSecondaryContainer,
-    )
-    ButtonGroup(
-        overflowIndicator = {},
-        horizontalArrangement = Arrangement.spacedBy(ButtonGroupDefaults.ConnectedSpaceBetween),
-        modifier = modifier,
-    ) {
-        customItem(
-            buttonGroupContent = {
-                ToggleButton(
-                    checked = leftSelected,
-                    onCheckedChange = { if (it) onSelectLeft() },
-                    shapes = ButtonGroupDefaults.connectedLeadingButtonShapes(),
-                    colors = colors,
-                    contentPadding = PaddingValues(horizontal = Spacing.Cozy, vertical = Spacing.Tight),
-                    modifier = Modifier.weight(1f).heightIn(min = 40.dp),
-                ) {
-                    Text(leftLabel, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                }
-            },
-            menuContent = {},
-        )
-        customItem(
-            buttonGroupContent = {
-                ToggleButton(
-                    checked = !leftSelected,
-                    onCheckedChange = { if (it) onSelectRight() },
-                    shapes = ButtonGroupDefaults.connectedTrailingButtonShapes(),
-                    colors = colors,
-                    contentPadding = PaddingValues(horizontal = Spacing.Cozy, vertical = Spacing.Tight),
-                    modifier = Modifier.weight(1f).heightIn(min = 40.dp),
-                ) {
-                    Text(rightLabel, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                }
-            },
-            menuContent = {},
-        )
     }
 }
 
@@ -1060,6 +1218,7 @@ private fun PresetChipsRow(
 private fun PlayerPreviewCanvas(
     layout: PlayerFormFactorLayout,
     isFullscreen: Boolean,
+    showCenterControls: Boolean,
     seekButtonSeconds: Int,
     selection: PreviewSelection,
     onSelect: (PreviewSelection) -> Unit,
@@ -1108,26 +1267,28 @@ private fun PlayerPreviewCanvas(
                 }
             }
 
-            // 中央控件簇预览（含虚线圆框占位）
-            CenterControlCluster(
-                config = layout.center,
-                isPlaying = false,
-                loading = false,
-                large = isFullscreen,
-                showSideButtons = true,
-                canPrevious = true,
-                canNext = true,
-                allowSeek = true,
-                onTogglePlayPause = {},
-                onPrevious = {},
-                onNext = {},
-                onSeekDeltaMillis = {},
-                previewMode = true,
-                selectedSlot = (selection as? PreviewSelection.CenterSlot)?.position,
-                onSelectSlot = { onSelect(PreviewSelection.CenterSlot(it)) },
-                scaleMultiplier = 0.72f,
-                modifier = Modifier.align(Alignment.Center),
-            )
+            // 中央控件簇预览（触控中央控件开启时显示，含虚线圆框占位）
+            if (showCenterControls) {
+                CenterControlCluster(
+                    config = layout.center,
+                    isPlaying = false,
+                    loading = false,
+                    large = isFullscreen,
+                    showSideButtons = true,
+                    canPrevious = true,
+                    canNext = true,
+                    allowSeek = true,
+                    onTogglePlayPause = {},
+                    onPrevious = {},
+                    onNext = {},
+                    onSeekDeltaMillis = {},
+                    previewMode = true,
+                    selectedSlot = (selection as? PreviewSelection.CenterSlot)?.position,
+                    onSelectSlot = { onSelect(PreviewSelection.CenterSlot(it)) },
+                    scaleMultiplier = 0.72f,
+                    modifier = Modifier.align(Alignment.Center),
+                )
+            }
 
             // 底栏预览
             Column(
@@ -1248,54 +1409,112 @@ private fun PreviewPanelItemChip(
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.widthIn(max = 110.dp),
             )
-            PlayerControlId.SystemStatus -> PlayerStatusCluster(status = sampleStatus)
+            PlayerControlId.SystemStatus -> PlayerStatusCluster(
+                status = sampleStatus,
+                showBackground = control.showBackground,
+            )
             PlayerControlId.TimeLabel -> Text(
                 text = "01:23 / 12:34",
                 style = MaterialTheme.typography.labelSmall.tabular,
                 color = FixedColors.OnMedia,
                 maxLines = 1,
             )
-            PlayerControlId.Speed -> PreviewTextPill("1.0x")
-            PlayerControlId.Quality -> PreviewTextPill("1080P")
-            PlayerControlId.Audio -> PreviewTextPill("Hi-Res")
-            PlayerControlId.SeekBackward -> PreviewIconWithBadge(Icons.Filled.FastRewind, "${seekButtonSeconds}s")
-            PlayerControlId.SeekForward -> PreviewIconWithBadge(Icons.Filled.FastForward, "${seekButtonSeconds}s")
-            else -> Icon(
-                imageVector = controlIcon(control.id, isFullscreen),
-                contentDescription = controlLabel(control.id),
-                tint = FixedColors.OnMedia,
-                modifier = Modifier.size(18.dp),
+            PlayerControlId.Speed -> PreviewTextPill("1.0x", showBackground = control.showBackground)
+            PlayerControlId.Quality -> PreviewTextPill("1080P", showBackground = control.showBackground)
+            PlayerControlId.Audio -> PreviewTextPill("Hi-Res", showBackground = control.showBackground)
+            PlayerControlId.SeekBackward -> PreviewIconWithBadge(
+                Icons.Filled.FastRewind,
+                "${seekButtonSeconds}s",
+                showBackground = control.showBackground,
             )
+            PlayerControlId.SeekForward -> PreviewIconWithBadge(
+                Icons.Filled.FastForward,
+                "${seekButtonSeconds}s",
+                showBackground = control.showBackground,
+            )
+            PlayerControlId.PlayPause -> Box(
+                contentAlignment = Alignment.Center,
+                modifier = Modifier
+                    .size(24.dp)
+                    .clip(CircleShape)
+                    .background(MaterialTheme.colorScheme.primary),
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.PlayArrow,
+                    contentDescription = controlLabel(control.id),
+                    tint = MaterialTheme.colorScheme.onPrimary,
+                    modifier = Modifier.size(16.dp),
+                )
+            }
+            else -> Box(
+                contentAlignment = Alignment.Center,
+                modifier = Modifier
+                    .size(24.dp)
+                    .clip(CircleShape)
+                    .background(if (control.showBackground) mediaControlContainer() else Color.Transparent),
+            ) {
+                Icon(
+                    imageVector = controlIcon(control.id, isFullscreen),
+                    contentDescription = controlLabel(control.id),
+                    tint = FixedColors.OnMedia,
+                    modifier = Modifier.size(16.dp),
+                )
+            }
         }
     }
 }
 
 @Composable
-private fun PreviewTextPill(text: String) {
+private fun PreviewTextPill(text: String, showBackground: Boolean = true) {
     Text(
         text = text,
-        style = MaterialTheme.typography.labelSmall.tabular,
+        style = if (showBackground) {
+            MaterialTheme.typography.labelSmall.tabular
+        } else {
+            MaterialTheme.typography.labelSmall.tabular.copy(shadow = MediaBorderlessTextShadow)
+        },
         color = FixedColors.OnMedia,
         maxLines = 1,
         modifier = Modifier
             .clip(CircleShape)
-            .background(FixedColors.ScrimOnMedia)
-            .padding(horizontal = 6.dp, vertical = 2.dp),
+            .background(if (showBackground) mediaControlContainer() else Color.Transparent)
+            .padding(horizontal = if (showBackground) 6.dp else 3.dp, vertical = 2.dp),
     )
 }
 
 @Composable
-private fun PreviewIconWithBadge(icon: ImageVector, badge: String) {
-    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(2.dp)) {
-        Icon(icon, contentDescription = null, tint = FixedColors.OnMedia, modifier = Modifier.size(15.dp))
-        Text(badge, style = MaterialTheme.typography.labelSmall.tabular, color = FixedColors.OnMedia, maxLines = 1)
+private fun PreviewIconWithBadge(icon: ImageVector, badge: String, showBackground: Boolean = true) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(2.dp),
+        modifier = Modifier
+            .clip(CircleShape)
+            .background(if (showBackground) mediaControlContainer() else Color.Transparent)
+            .padding(horizontal = if (showBackground) 5.dp else 2.dp, vertical = 2.dp),
+    ) {
+        Icon(icon, contentDescription = null, tint = FixedColors.OnMedia, modifier = Modifier.size(14.dp))
+        Text(
+            badge,
+            style = if (showBackground) {
+                MaterialTheme.typography.labelSmall.tabular
+            } else {
+                MaterialTheme.typography.labelSmall.tabular.copy(shadow = MediaBorderlessTextShadow)
+            },
+            color = FixedColors.OnMedia,
+            maxLines = 1,
+        )
     }
+}
+
+private fun supportsBackgroundToggle(id: PlayerControlId): Boolean = when (id) {
+    PlayerControlId.Title, PlayerControlId.TimeLabel, PlayerControlId.PlayPause -> false
+    else -> true
 }
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun SelectionInspectorCard(
-    formFactor: PlayerFormFactor,
+    layoutMode: PlayerLayoutMode,
     layout: PlayerFormFactorLayout,
     layoutPrefs: PlayerLayoutPrefs,
     selection: PreviewSelection,
@@ -1342,8 +1561,8 @@ private fun SelectionInspectorCard(
                                     checked = layout.center.showCenterPlay,
                                     onCheckedChange = { show ->
                                         onUpdateLayout { prefs ->
-                                            prefs.updateLayout(formFactor) {
-                                                it.withCenterPlay(show, formFactor.isFullscreen)
+                                            prefs.updateLayout(layoutMode) {
+                                                it.withCenterPlay(show, layoutMode.isFullscreen)
                                             }
                                         }
                                     },
@@ -1376,11 +1595,11 @@ private fun SelectionInspectorCard(
                                     selected = isCurrent,
                                     onClick = {
                                         onUpdateLayout { prefs ->
-                                            prefs.updateLayout(formFactor) {
+                                            prefs.updateLayout(layoutMode) {
                                                 it.withCenterSlot(
                                                     selection.position,
                                                     slot.copy(action = actionOption),
-                                                    formFactor.isFullscreen,
+                                                    layoutMode.isFullscreen,
                                                 )
                                             }
                                         }
@@ -1406,11 +1625,11 @@ private fun SelectionInspectorCard(
                                     }
                                     onUpdateLayout { prefs ->
                                         prefs.copy(seekButtonSeconds = clamped)
-                                            .updateLayout(formFactor) {
+                                            .updateLayout(layoutMode) {
                                                 it.withCenterSlot(
                                                     selection.position,
                                                     slot.copy(action = updatedAction),
-                                                    formFactor.isFullscreen,
+                                                    layoutMode.isFullscreen,
                                                 )
                                             }
                                     }
@@ -1440,11 +1659,11 @@ private fun SelectionInspectorCard(
                                         selected = slot.scale == scaleOption,
                                         onClick = {
                                             onUpdateLayout { prefs ->
-                                                prefs.updateLayout(formFactor) {
+                                                prefs.updateLayout(layoutMode) {
                                                     it.withCenterSlot(
                                                         selection.position,
                                                         slot.copy(scale = scaleOption),
-                                                        formFactor.isFullscreen,
+                                                        layoutMode.isFullscreen,
                                                     )
                                                 }
                                             }
@@ -1455,6 +1674,23 @@ private fun SelectionInspectorCard(
                             }
                         }
 
+                        if (slot.action != CenterSlotAction.None) {
+                            ShowBackgroundSwitchRow(
+                                checked = slot.showBackground,
+                                onCheckedChange = { showBg ->
+                                    onUpdateLayout { prefs ->
+                                        prefs.updateLayout(layoutMode) {
+                                            it.withCenterSlot(
+                                                selection.position,
+                                                slot.copy(showBackground = showBg),
+                                                layoutMode.isFullscreen,
+                                            )
+                                        }
+                                    }
+                                },
+                            )
+                        }
+
                         // 对称应用 + 清空
                         Row(
                             horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
@@ -1463,8 +1699,8 @@ private fun SelectionInspectorCard(
                             FilledTonalButton(
                                 onClick = {
                                     onUpdateLayout { prefs ->
-                                        prefs.updateLayout(formFactor) {
-                                            it.withSymmetricCenterSlot(selection.position, formFactor.isFullscreen)
+                                        prefs.updateLayout(layoutMode) {
+                                            it.withSymmetricCenterSlot(selection.position, layoutMode.isFullscreen)
                                         }
                                     }
                                 },
@@ -1478,11 +1714,11 @@ private fun SelectionInspectorCard(
                                 OutlinedButton(
                                     onClick = {
                                         onUpdateLayout { prefs ->
-                                            prefs.updateLayout(formFactor) {
+                                            prefs.updateLayout(layoutMode) {
                                                 it.withCenterSlot(
                                                     selection.position,
                                                     slot.copy(action = CenterSlotAction.None),
-                                                    formFactor.isFullscreen,
+                                                    layoutMode.isFullscreen,
                                                 )
                                             }
                                         }
@@ -1500,11 +1736,29 @@ private fun SelectionInspectorCard(
                     val item = items.getOrNull(selection.index)
                     if (item != null) {
                         val canMoveLeft = selection.index > 0 &&
-                            !(formFactor.isFullscreen && selection.bar == PlayerBarSlot.Top && selection.index <= 1)
+                            !(layoutMode.isFullscreen && selection.bar == PlayerBarSlot.Top && selection.index <= 1)
                         val canMoveRight = selection.index < items.lastIndex &&
-                            !(formFactor.isFullscreen && selection.bar == PlayerBarSlot.Top && selection.index == 0)
+                            !(layoutMode.isFullscreen && selection.bar == PlayerBarSlot.Top && selection.index == 0)
                         val canMoveOtherBar = item !is PlayerPanelItem.Control || item.id != PlayerControlId.Back
-                        val canRemove = layout.canRemoveBarItem(selection.bar, selection.index, formFactor.isFullscreen)
+                        val canRemove = layout.canRemoveBarItem(selection.bar, selection.index, layoutMode.isFullscreen)
+
+                        if (item is PlayerPanelItem.Control && supportsBackgroundToggle(item.id)) {
+                            ShowBackgroundSwitchRow(
+                                checked = item.showBackground,
+                                onCheckedChange = { showBg ->
+                                    onUpdateLayout { prefs ->
+                                        prefs.updateLayout(layoutMode) {
+                                            it.withBarItemBackground(
+                                                bar = selection.bar,
+                                                index = selection.index,
+                                                showBackground = showBg,
+                                                isFullscreen = layoutMode.isFullscreen,
+                                            )
+                                        }
+                                    }
+                                },
+                            )
+                        }
 
                         FlowRow(
                             horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
@@ -1515,8 +1769,8 @@ private fun SelectionInspectorCard(
                                 onClick = {
                                     val target = selection.index - 1
                                     onUpdateLayout { prefs ->
-                                        prefs.updateLayout(formFactor) {
-                                            it.moveBarItem(selection.bar, selection.index, target, formFactor.isFullscreen)
+                                        prefs.updateLayout(layoutMode) {
+                                            it.moveBarItem(selection.bar, selection.index, target, layoutMode.isFullscreen)
                                         }
                                     }
                                     onSelect(PreviewSelection.PanelItem(selection.bar, target))
@@ -1531,8 +1785,8 @@ private fun SelectionInspectorCard(
                                 onClick = {
                                     val target = selection.index + 1
                                     onUpdateLayout { prefs ->
-                                        prefs.updateLayout(formFactor) {
-                                            it.moveBarItem(selection.bar, selection.index, target, formFactor.isFullscreen)
+                                        prefs.updateLayout(layoutMode) {
+                                            it.moveBarItem(selection.bar, selection.index, target, layoutMode.isFullscreen)
                                         }
                                     }
                                     onSelect(PreviewSelection.PanelItem(selection.bar, target))
@@ -1547,8 +1801,8 @@ private fun SelectionInspectorCard(
                                     onClick = {
                                         val otherBar = selection.bar.other()
                                         onUpdateLayout { prefs ->
-                                            prefs.updateLayout(formFactor) {
-                                                it.moveBarItemToOtherBar(selection.bar, selection.index, formFactor.isFullscreen)
+                                            prefs.updateLayout(layoutMode) {
+                                                it.moveBarItemToOtherBar(selection.bar, selection.index, layoutMode.isFullscreen)
                                             }
                                         }
                                         onSelect(PreviewSelection.PanelItem(otherBar, layout.itemsFor(otherBar).size))
@@ -1571,8 +1825,8 @@ private fun SelectionInspectorCard(
                                 enabled = canRemove,
                                 onClick = {
                                     onUpdateLayout { prefs ->
-                                        prefs.updateLayout(formFactor) {
-                                            it.removeBarItem(selection.bar, selection.index, formFactor.isFullscreen)
+                                        prefs.updateLayout(layoutMode) {
+                                            it.removeBarItem(selection.bar, selection.index, layoutMode.isFullscreen)
                                         }
                                     }
                                 },

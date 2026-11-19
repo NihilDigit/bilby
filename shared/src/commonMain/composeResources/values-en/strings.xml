@@ -1098,6 +1098,14 @@
     <string name="player_custom_listen_side_seek">Rewind  Forward ±%1$ds</string>
     <string name="player_custom_listen_side_none">None</string>
     <string name="player_custom_listen_chips_title">Quick chips</string>
+    <string name="player_custom_show_background">Show background</string>
+    <string name="player_custom_show_background_subtitle">Hide container fill and border to keep the video unobscured</string>
+    <string name="player_custom_show_center_on_touch">Show center controls on touch</string>
+    <string name="player_custom_show_center_on_touch_subtitle">Use centered controls for touch input while keeping bottom bar controls for mouse and keyboard</string>
+    <string name="player_custom_slot_outer_left_short">Outer L</string>
+    <string name="player_custom_slot_inner_left_short">Inner L</string>
+    <string name="player_custom_slot_inner_right_short">Inner R</string>
+    <string name="player_custom_slot_outer_right_short">Outer R</string>
 
     <!-- Startup page & navigation customization -->
     <string name="settings_section_navigation_customization">Startup page &amp; navigation</string>

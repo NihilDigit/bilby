@@ -268,10 +268,20 @@ internal fun BoxScope.PlayerSettingsHost(
 
 /** 窄排法里打开整块设置面板的 ⚙。点播与直播都是这一枚,位置在全屏键左边。 */
 @Composable
-internal fun PlayerSettingsButton(selected: Boolean = false, onClick: () -> Unit) {
+internal fun PlayerSettingsButton(
+    selected: Boolean = false,
+    showBackground: Boolean = true,
+    onClick: () -> Unit,
+) {
     val label = stringResource(Res.string.player_settings)
     PlayerTooltip(label) {
-        PlayerIconButton(onClick = onClick, icon = Icons.Filled.Tune, contentDescription = label, selected = selected)
+        PlayerIconButton(
+            onClick = onClick,
+            icon = Icons.Filled.Tune,
+            contentDescription = label,
+            selected = selected,
+            showBackground = showBackground,
+        )
     }
 }
 

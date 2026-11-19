@@ -12,20 +12,14 @@ const val DEFAULT_SEEK_SECONDS = 15
 const val DEFAULT_DOUBLE_TAP_SEEK_SECONDS = 10
 val SEEK_SECONDS_PRESETS = listOf(5, 10, 15, 30)
 
-enum class PlayerFormFactor(val isTouch: Boolean, val isFullscreen: Boolean) {
-    TouchEmbedded(isTouch = true, isFullscreen = false),
-    TouchFullscreen(isTouch = true, isFullscreen = true),
-    PointerEmbedded(isTouch = false, isFullscreen = false),
-    PointerFullscreen(isTouch = false, isFullscreen = true),
+enum class PlayerLayoutMode(val isFullscreen: Boolean) {
+    Embedded(isFullscreen = false),
+    Fullscreen(isFullscreen = true),
     ;
 
     companion object {
-        fun of(isTouch: Boolean, isFullscreen: Boolean): PlayerFormFactor = when {
-            isTouch && isFullscreen -> TouchFullscreen
-            isTouch -> TouchEmbedded
-            isFullscreen -> PointerFullscreen
-            else -> PointerEmbedded
-        }
+        fun of(isLargeOrFullscreen: Boolean): PlayerLayoutMode =
+            if (isLargeOrFullscreen) Fullscreen else Embedded
     }
 }
 
@@ -87,7 +81,10 @@ sealed interface PlayerPanelItem {
     @Immutable
     @Serializable
     @SerialName("control")
-    data class Control(val id: PlayerControlId) : PlayerPanelItem
+    data class Control(
+        val id: PlayerControlId,
+        val showBackground: Boolean = true,
+    ) : PlayerPanelItem
 
     @Immutable
     @Serializable
@@ -165,6 +162,7 @@ enum class CenterSlotScale(val ratio: Float) {
 data class CenterSlotConfig(
     val action: CenterSlotAction = CenterSlotAction.None,
     val scale: CenterSlotScale = CenterSlotScale.Medium,
+    val showBackground: Boolean = true,
 ) {
     fun sanitized(): CenterSlotConfig = copy(action = action.sanitized())
 }
@@ -234,16 +232,20 @@ data class PlayerFormFactorLayout(
     fun hasControl(id: PlayerControlId): Boolean =
         center.hasControl(id) || hasInTopBar(id) || hasInBottomBar(id)
 
-    fun removeControl(id: PlayerControlId): PlayerFormFactorLayout = copy(
-        center = center.removeControl(id),
+    /**
+     * 当触控中央控件簇激活时，已在中央簇展示的播放/切集/步进键在顶栏与底栏中自动去重隐藏；
+     * 键鼠模式或关闭触控中央控件时，栏位中的对应控件正常显示。
+     */
+    fun isHiddenByCenter(id: PlayerControlId, centerActive: Boolean): Boolean =
+        centerActive && center.hasControl(id)
+
+    fun removeFromBars(id: PlayerControlId): PlayerFormFactorLayout = copy(
         topBar = topBar.filterNot { it is PlayerPanelItem.Control && it.id == id },
         bottomBar = bottomBar.filterNot { it is PlayerPanelItem.Control && it.id == id },
     )
 
-    fun withCenterPlay(show: Boolean, isFullscreen: Boolean): PlayerFormFactorLayout {
-        val cleared = if (show) removeControl(PlayerControlId.PlayPause) else this
-        return cleared.copy(center = cleared.center.copy(showCenterPlay = show)).sanitize(isFullscreen)
-    }
+    fun withCenterPlay(show: Boolean, isFullscreen: Boolean): PlayerFormFactorLayout =
+        copy(center = center.copy(showCenterPlay = show)).sanitize(isFullscreen)
 
     fun withCenterSlot(
         position: CenterSlotPosition,
@@ -253,8 +255,8 @@ data class PlayerFormFactorLayout(
         if (position == CenterSlotPosition.Center) return this
         val sanitizedSlot = config.sanitized()
         val controlId = sanitizedSlot.action.toControlIdOrNull()
-        val cleared = if (controlId != null) removeControl(controlId) else this
-        return cleared.copy(center = cleared.center.withSlot(position, sanitizedSlot)).sanitize(isFullscreen)
+        val clearedCenter = if (controlId != null) center.removeControl(controlId) else center
+        return copy(center = clearedCenter.withSlot(position, sanitizedSlot)).sanitize(isFullscreen)
     }
 
     fun withSymmetricCenterSlot(
@@ -267,8 +269,25 @@ data class PlayerFormFactorLayout(
         val targetConfig = CenterSlotConfig(
             action = source.action.symmetricOpposite(),
             scale = source.scale,
+            showBackground = source.showBackground,
         )
         return withCenterSlot(opposite, targetConfig, isFullscreen)
+    }
+
+    fun withBarItemBackground(
+        bar: PlayerBarSlot,
+        index: Int,
+        showBackground: Boolean,
+        isFullscreen: Boolean,
+    ): PlayerFormFactorLayout {
+        val list = itemsFor(bar)
+        val item = list.getOrNull(index) as? PlayerPanelItem.Control ?: return this
+        val mutable = list.toMutableList()
+        mutable[index] = item.copy(showBackground = showBackground)
+        return when (bar) {
+            PlayerBarSlot.Top -> copy(topBar = mutable)
+            PlayerBarSlot.Bottom -> copy(bottomBar = mutable)
+        }.sanitize(isFullscreen)
     }
 
     fun addToBar(
@@ -276,7 +295,7 @@ data class PlayerFormFactorLayout(
         item: PlayerPanelItem,
         isFullscreen: Boolean,
     ): PlayerFormFactorLayout {
-        val base = if (item is PlayerPanelItem.Control) removeControl(item.id) else this
+        val base = if (item is PlayerPanelItem.Control) removeFromBars(item.id) else this
         val updated = when (bar) {
             PlayerBarSlot.Top -> base.copy(topBar = base.topBar + item)
             PlayerBarSlot.Bottom -> base.copy(bottomBar = base.bottomBar + item)
@@ -296,8 +315,8 @@ data class PlayerFormFactorLayout(
         if (isFullscreen && bar == PlayerBarSlot.Top) {
             val moving = list[fromIndex]
             val target = list[toIndex]
-            if (moving == PlayerPanelItem.Control(PlayerControlId.Back) ||
-                target == PlayerPanelItem.Control(PlayerControlId.Back)
+            if ((moving is PlayerPanelItem.Control && moving.id == PlayerControlId.Back) ||
+                (target is PlayerPanelItem.Control && target.id == PlayerControlId.Back)
             ) {
                 return this
             }
@@ -336,7 +355,7 @@ data class PlayerFormFactorLayout(
         return when (id) {
             PlayerControlId.Back -> !isFullscreen
             PlayerControlId.Fullscreen -> false
-            PlayerControlId.PlayPause -> center.showCenterPlay
+            PlayerControlId.PlayPause -> false
             else -> true
         }
     }
@@ -358,18 +377,15 @@ data class PlayerFormFactorLayout(
     /**
      * 强校验与修复护栏：
      * 1. 秒数限制在 [MIN_SEEK_SECONDS]..[MAX_SEEK_SECONDS]；
-     * 2. 单一规范入口：同一 [PlayerControlId] 在中央簇、顶栏、底栏间仅出现一次；
-     * 3. 基本可用性：全屏顶栏保留返回键，至少存在一处播放/暂停，且保留全屏切换键。
+     * 2. 中央簇 4 个侧槽位内去重，顶栏与底栏之间去重；
+     * 3. 基本可用性：全屏顶栏保留返回键，栏位中保留播放/暂停（保障键鼠及关闭中央控件时可用）与全屏切换键。
      */
     fun sanitize(isFullscreen: Boolean): PlayerFormFactorLayout {
-        val seen = mutableSetOf<PlayerControlId>()
-        if (center.showCenterPlay) {
-            seen += PlayerControlId.PlayPause
-        }
+        val seenCenter = mutableSetOf<PlayerControlId>()
         fun sanitizeSlot(slot: CenterSlotConfig): CenterSlotConfig {
             val clamped = slot.sanitized()
             val id = clamped.action.toControlIdOrNull() ?: return clamped
-            return if (seen.add(id)) clamped else clamped.copy(action = CenterSlotAction.None)
+            return if (seenCenter.add(id)) clamped else clamped.copy(action = CenterSlotAction.None)
         }
         val cleanCenter = CenterClusterConfig(
             showCenterPlay = center.showCenterPlay,
@@ -379,10 +395,14 @@ data class PlayerFormFactorLayout(
             outerRight = sanitizeSlot(center.outerRight),
         )
 
+        val seenBars = mutableSetOf<PlayerControlId>()
         val cleanTop = mutableListOf<PlayerPanelItem>()
         if (isFullscreen) {
-            seen += PlayerControlId.Back
-            cleanTop += PlayerPanelItem.Control(PlayerControlId.Back)
+            val existingBack = topBar.firstOrNull {
+                it is PlayerPanelItem.Control && it.id == PlayerControlId.Back
+            } as? PlayerPanelItem.Control
+            seenBars += PlayerControlId.Back
+            cleanTop += existingBack ?: PlayerPanelItem.Control(PlayerControlId.Back)
         }
         for (item in topBar) {
             when (item) {
@@ -391,7 +411,7 @@ data class PlayerFormFactorLayout(
                     if (!isFullscreen && (item.id == PlayerControlId.Back || item.id == PlayerControlId.Title)) {
                         continue
                     }
-                    if (seen.add(item.id)) {
+                    if (seenBars.add(item.id)) {
                         cleanTop += item
                     }
                 }
@@ -404,20 +424,20 @@ data class PlayerFormFactorLayout(
                 PlayerPanelItem.Spacer -> cleanBottom += item
                 is PlayerPanelItem.Control -> {
                     if (item.id == PlayerControlId.Back) continue
-                    if (seen.add(item.id)) {
+                    if (seenBars.add(item.id)) {
                         cleanBottom += item
                     }
                 }
             }
         }
 
-        if (PlayerControlId.PlayPause !in seen) {
+        if (PlayerControlId.PlayPause !in seenBars) {
             cleanBottom.add(0, PlayerPanelItem.Control(PlayerControlId.PlayPause))
-            seen += PlayerControlId.PlayPause
+            seenBars += PlayerControlId.PlayPause
         }
-        if (PlayerControlId.Fullscreen !in seen) {
+        if (PlayerControlId.Fullscreen !in seenBars) {
             cleanBottom += PlayerPanelItem.Control(PlayerControlId.Fullscreen)
-            seen += PlayerControlId.Fullscreen
+            seenBars += PlayerControlId.Fullscreen
         }
 
         return PlayerFormFactorLayout(
@@ -453,9 +473,61 @@ enum class ListenQuickChip {
 @Serializable
 data class ListenLayoutConfig(
     val coverStyle: ListenCoverStyle = ListenCoverStyle.VinylDisc,
-    val sideAction: ListenSideAction = ListenSideAction.Episode,
+    val outerLeft: CenterSlotConfig = CenterSlotConfig(CenterSlotAction.None, CenterSlotScale.Small),
+    val innerLeft: CenterSlotConfig = CenterSlotConfig(CenterSlotAction.Previous, CenterSlotScale.Medium),
+    val innerRight: CenterSlotConfig = CenterSlotConfig(CenterSlotAction.Next, CenterSlotScale.Medium),
+    val outerRight: CenterSlotConfig = CenterSlotConfig(CenterSlotAction.None, CenterSlotScale.Small),
     val visibleChips: List<ListenQuickChip> = ListenQuickChip.entries,
+    // 兼容旧版 JSON 的单侧动作字段；仅在读取旧配置时迁移为 4 槽位并清零。
+    val sideAction: ListenSideAction? = null,
 ) {
+    fun slot(position: CenterSlotPosition): CenterSlotConfig = when (position) {
+        CenterSlotPosition.OuterLeft -> outerLeft
+        CenterSlotPosition.InnerLeft -> innerLeft
+        CenterSlotPosition.Center -> CenterSlotConfig(CenterSlotAction.None, CenterSlotScale.Large)
+        CenterSlotPosition.InnerRight -> innerRight
+        CenterSlotPosition.OuterRight -> outerRight
+    }
+
+    fun withSlot(position: CenterSlotPosition, config: CenterSlotConfig): ListenLayoutConfig {
+        if (position == CenterSlotPosition.Center) return this
+        val sanitizedSlot = config.sanitized()
+        val id = sanitizedSlot.action.toControlIdOrNull()
+        fun clearIfSame(existing: CenterSlotConfig): CenterSlotConfig =
+            if (id != null && existing.action.toControlIdOrNull() == id) {
+                existing.copy(action = CenterSlotAction.None)
+            } else {
+                existing
+            }
+        val cleared = copy(
+            outerLeft = clearIfSame(outerLeft),
+            innerLeft = clearIfSame(innerLeft),
+            innerRight = clearIfSame(innerRight),
+            outerRight = clearIfSame(outerRight),
+            sideAction = null,
+        )
+        val updated = when (position) {
+            CenterSlotPosition.OuterLeft -> cleared.copy(outerLeft = sanitizedSlot)
+            CenterSlotPosition.InnerLeft -> cleared.copy(innerLeft = sanitizedSlot)
+            CenterSlotPosition.Center -> cleared
+            CenterSlotPosition.InnerRight -> cleared.copy(innerRight = sanitizedSlot)
+            CenterSlotPosition.OuterRight -> cleared.copy(outerRight = sanitizedSlot)
+        }
+        return updated.sanitize()
+    }
+
+    fun withSymmetricSlot(position: CenterSlotPosition): ListenLayoutConfig {
+        if (position == CenterSlotPosition.Center) return this
+        val source = slot(position)
+        val opposite = position.symmetricOpposite()
+        val targetConfig = CenterSlotConfig(
+            action = source.action.symmetricOpposite(),
+            scale = source.scale,
+            showBackground = source.showBackground,
+        )
+        return withSlot(opposite, targetConfig)
+    }
+
     fun hasChip(chip: ListenQuickChip): Boolean = chip in visibleChips
 
     fun toggleChip(chip: ListenQuickChip, visible: Boolean): ListenLayoutConfig {
@@ -464,17 +536,66 @@ data class ListenLayoutConfig(
         } else {
             visibleChips.filterNot { it == chip }
         }
-        return copy(visibleChips = updated).sanitize()
+        return copy(visibleChips = updated, sideAction = null).sanitize()
     }
 
-    fun sanitize(): ListenLayoutConfig = copy(
-        visibleChips = visibleChips.distinct(),
-    )
+    fun sanitize(fallbackSeekSeconds: Int = DEFAULT_SEEK_SECONDS): ListenLayoutConfig {
+        val migrated = when (sideAction) {
+            ListenSideAction.Episode -> copy(
+                outerLeft = CenterSlotConfig(CenterSlotAction.None, CenterSlotScale.Small),
+                innerLeft = CenterSlotConfig(CenterSlotAction.Previous, CenterSlotScale.Medium),
+                innerRight = CenterSlotConfig(CenterSlotAction.Next, CenterSlotScale.Medium),
+                outerRight = CenterSlotConfig(CenterSlotAction.None, CenterSlotScale.Small),
+                sideAction = null,
+            )
+            ListenSideAction.SeekDelta -> {
+                val sec = fallbackSeekSeconds.coerceIn(MIN_SEEK_SECONDS, MAX_SEEK_SECONDS)
+                copy(
+                    outerLeft = CenterSlotConfig(CenterSlotAction.None, CenterSlotScale.Small),
+                    innerLeft = CenterSlotConfig(CenterSlotAction.SeekBackward(sec), CenterSlotScale.Medium),
+                    innerRight = CenterSlotConfig(CenterSlotAction.SeekForward(sec), CenterSlotScale.Medium),
+                    outerRight = CenterSlotConfig(CenterSlotAction.None, CenterSlotScale.Small),
+                    sideAction = null,
+                )
+            }
+            ListenSideAction.None -> copy(
+                outerLeft = CenterSlotConfig(CenterSlotAction.None, CenterSlotScale.Small),
+                innerLeft = CenterSlotConfig(CenterSlotAction.None, CenterSlotScale.Medium),
+                innerRight = CenterSlotConfig(CenterSlotAction.None, CenterSlotScale.Medium),
+                outerRight = CenterSlotConfig(CenterSlotAction.None, CenterSlotScale.Small),
+                sideAction = null,
+            )
+            null -> this
+        }
+
+        val seen = mutableSetOf<PlayerControlId>()
+        fun sanitizeSlot(slot: CenterSlotConfig): CenterSlotConfig {
+            val clamped = slot.sanitized()
+            val id = clamped.action.toControlIdOrNull() ?: return clamped
+            return if (seen.add(id)) clamped else clamped.copy(action = CenterSlotAction.None)
+        }
+        val cleanInnerLeft = sanitizeSlot(migrated.innerLeft)
+        val cleanInnerRight = sanitizeSlot(migrated.innerRight)
+        val cleanOuterLeft = sanitizeSlot(migrated.outerLeft)
+        val cleanOuterRight = sanitizeSlot(migrated.outerRight)
+
+        return migrated.copy(
+            outerLeft = cleanOuterLeft,
+            innerLeft = cleanInnerLeft,
+            innerRight = cleanInnerRight,
+            outerRight = cleanOuterRight,
+            visibleChips = migrated.visibleChips.distinct(),
+            sideAction = null,
+        )
+    }
 
     companion object {
         val Default = ListenLayoutConfig(
             coverStyle = ListenCoverStyle.VinylDisc,
-            sideAction = ListenSideAction.Episode,
+            outerLeft = CenterSlotConfig(CenterSlotAction.None, CenterSlotScale.Small),
+            innerLeft = CenterSlotConfig(CenterSlotAction.Previous, CenterSlotScale.Medium),
+            innerRight = CenterSlotConfig(CenterSlotAction.Next, CenterSlotScale.Medium),
+            outerRight = CenterSlotConfig(CenterSlotAction.None, CenterSlotScale.Small),
             visibleChips = ListenQuickChip.entries,
         )
     }
@@ -490,10 +611,9 @@ enum class PlayerLayoutPreset {
 @Serializable
 data class PlayerLayoutPrefs(
     val version: Int = PLAYER_LAYOUT_PREFS_VERSION,
-    val touchEmbedded: PlayerFormFactorLayout = DefaultTouchEmbedded,
-    val touchFullscreen: PlayerFormFactorLayout = DefaultTouchFullscreen,
-    val pointerEmbedded: PlayerFormFactorLayout = DefaultPointerEmbedded,
-    val pointerFullscreen: PlayerFormFactorLayout = DefaultPointerFullscreen,
+    val embedded: PlayerFormFactorLayout = DefaultEmbedded,
+    val fullscreen: PlayerFormFactorLayout = DefaultFullscreen,
+    val showCenterControlsOnTouch: Boolean = true,
     val seekButtonSeconds: Int = DEFAULT_SEEK_SECONDS,
     val doubleTapSeekSeconds: Int = DEFAULT_DOUBLE_TAP_SEEK_SECONDS,
     val syncDoubleTapWithSeekButton: Boolean = true,
@@ -503,22 +623,23 @@ data class PlayerLayoutPrefs(
         get() = (if (syncDoubleTapWithSeekButton) seekButtonSeconds else doubleTapSeekSeconds)
             .coerceIn(MIN_SEEK_SECONDS, MAX_SEEK_SECONDS)
 
-    fun layoutFor(formFactor: PlayerFormFactor): PlayerFormFactorLayout = when (formFactor) {
-        PlayerFormFactor.TouchEmbedded -> touchEmbedded
-        PlayerFormFactor.TouchFullscreen -> touchFullscreen
-        PlayerFormFactor.PointerEmbedded -> pointerEmbedded
-        PlayerFormFactor.PointerFullscreen -> pointerFullscreen
+    fun isCenterControlsActive(isTouch: Boolean): Boolean = isTouch && showCenterControlsOnTouch
+
+    fun layoutFor(mode: PlayerLayoutMode): PlayerFormFactorLayout = when (mode) {
+        PlayerLayoutMode.Embedded -> embedded
+        PlayerLayoutMode.Fullscreen -> fullscreen
     }
 
+    fun layoutFor(isLargeOrFullscreen: Boolean): PlayerFormFactorLayout =
+        layoutFor(PlayerLayoutMode.of(isLargeOrFullscreen))
+
     fun updateLayout(
-        formFactor: PlayerFormFactor,
+        mode: PlayerLayoutMode,
         transform: (PlayerFormFactorLayout) -> PlayerFormFactorLayout,
     ): PlayerLayoutPrefs {
-        val updated = when (formFactor) {
-            PlayerFormFactor.TouchEmbedded -> copy(touchEmbedded = transform(touchEmbedded))
-            PlayerFormFactor.TouchFullscreen -> copy(touchFullscreen = transform(touchFullscreen))
-            PlayerFormFactor.PointerEmbedded -> copy(pointerEmbedded = transform(pointerEmbedded))
-            PlayerFormFactor.PointerFullscreen -> copy(pointerFullscreen = transform(pointerFullscreen))
+        val updated = when (mode) {
+            PlayerLayoutMode.Embedded -> copy(embedded = transform(embedded))
+            PlayerLayoutMode.Fullscreen -> copy(fullscreen = transform(fullscreen))
         }
         return updated.sanitize()
     }
@@ -527,22 +648,26 @@ data class PlayerLayoutPrefs(
         transform: (ListenLayoutConfig) -> ListenLayoutConfig,
     ): PlayerLayoutPrefs = copy(listen = transform(listen)).sanitize()
 
-    fun sanitize(): PlayerLayoutPrefs = copy(
-        version = PLAYER_LAYOUT_PREFS_VERSION,
-        touchEmbedded = touchEmbedded.sanitize(isFullscreen = false),
-        touchFullscreen = touchFullscreen.sanitize(isFullscreen = true),
-        pointerEmbedded = pointerEmbedded.sanitize(isFullscreen = false),
-        pointerFullscreen = pointerFullscreen.sanitize(isFullscreen = true),
-        seekButtonSeconds = seekButtonSeconds.coerceIn(MIN_SEEK_SECONDS, MAX_SEEK_SECONDS),
-        doubleTapSeekSeconds = doubleTapSeekSeconds.coerceIn(MIN_SEEK_SECONDS, MAX_SEEK_SECONDS),
-        listen = listen.sanitize(),
-    )
+    fun sanitize(): PlayerLayoutPrefs {
+        val clampedSeek = seekButtonSeconds.coerceIn(MIN_SEEK_SECONDS, MAX_SEEK_SECONDS)
+        val clampedDoubleTap = doubleTapSeekSeconds.coerceIn(MIN_SEEK_SECONDS, MAX_SEEK_SECONDS)
+        return copy(
+            version = PLAYER_LAYOUT_PREFS_VERSION,
+            embedded = embedded.sanitize(isFullscreen = false),
+            fullscreen = fullscreen.sanitize(isFullscreen = true),
+            seekButtonSeconds = clampedSeek,
+            doubleTapSeekSeconds = clampedDoubleTap,
+            listen = listen.sanitize(fallbackSeekSeconds = clampedSeek),
+        )
+    }
 
     companion object {
-        private fun c(id: PlayerControlId): PlayerPanelItem = PlayerPanelItem.Control(id)
+        private fun c(id: PlayerControlId, showBackground: Boolean = true): PlayerPanelItem =
+            PlayerPanelItem.Control(id, showBackground)
+
         private val sp: PlayerPanelItem = PlayerPanelItem.Spacer
 
-        val DefaultTouchCenter = CenterClusterConfig(
+        val DefaultCenter = CenterClusterConfig(
             showCenterPlay = true,
             outerLeft = CenterSlotConfig(CenterSlotAction.None, CenterSlotScale.Small),
             innerLeft = CenterSlotConfig(CenterSlotAction.Previous, CenterSlotScale.Medium),
@@ -550,53 +675,24 @@ data class PlayerLayoutPrefs(
             outerRight = CenterSlotConfig(CenterSlotAction.None, CenterSlotScale.Small),
         )
 
-        val DefaultPointerCenter = CenterClusterConfig(
-            showCenterPlay = false,
+        val MinimalCenter = CenterClusterConfig(
+            showCenterPlay = true,
             outerLeft = CenterSlotConfig(CenterSlotAction.None, CenterSlotScale.Small),
             innerLeft = CenterSlotConfig(CenterSlotAction.None, CenterSlotScale.Medium),
             innerRight = CenterSlotConfig(CenterSlotAction.None, CenterSlotScale.Medium),
             outerRight = CenterSlotConfig(CenterSlotAction.None, CenterSlotScale.Small),
         )
 
-        val DefaultTouchEmbedded = PlayerFormFactorLayout(
-            center = DefaultTouchCenter,
-            topBar = listOf(sp, c(PlayerControlId.Pip), c(PlayerControlId.Share)),
-            bottomBar = listOf(
-                c(PlayerControlId.TimeLabel),
-                sp,
-                c(PlayerControlId.DanmakuInput),
-                c(PlayerControlId.SleepTimer),
-                c(PlayerControlId.Settings),
-                c(PlayerControlId.Fullscreen),
-            ),
+        private val PodcastCenter = CenterClusterConfig(
+            showCenterPlay = true,
+            outerLeft = CenterSlotConfig(CenterSlotAction.Previous, CenterSlotScale.Small),
+            innerLeft = CenterSlotConfig(CenterSlotAction.SeekBackward(15), CenterSlotScale.Medium),
+            innerRight = CenterSlotConfig(CenterSlotAction.SeekForward(15), CenterSlotScale.Medium),
+            outerRight = CenterSlotConfig(CenterSlotAction.Next, CenterSlotScale.Small),
         )
 
-        val DefaultTouchFullscreen = PlayerFormFactorLayout(
-            center = DefaultTouchCenter,
-            topBar = listOf(
-                c(PlayerControlId.Back),
-                c(PlayerControlId.Title),
-                sp,
-                c(PlayerControlId.SystemStatus),
-                c(PlayerControlId.Pip),
-                c(PlayerControlId.Settings),
-            ),
-            bottomBar = listOf(
-                c(PlayerControlId.TimeLabel),
-                c(PlayerControlId.DanmakuInput),
-                sp,
-                c(PlayerControlId.Speed),
-                c(PlayerControlId.Quality),
-                c(PlayerControlId.Audio),
-                c(PlayerControlId.Subtitle),
-                c(PlayerControlId.SleepTimer),
-                c(PlayerControlId.DanmakuToggle),
-                c(PlayerControlId.Fullscreen),
-            ),
-        )
-
-        val DefaultPointerEmbedded = PlayerFormFactorLayout(
-            center = DefaultPointerCenter,
+        val DefaultEmbedded = PlayerFormFactorLayout(
+            center = DefaultCenter,
             topBar = listOf(sp, c(PlayerControlId.Pip), c(PlayerControlId.Share)),
             bottomBar = listOf(
                 c(PlayerControlId.PlayPause),
@@ -612,8 +708,8 @@ data class PlayerLayoutPrefs(
             ),
         )
 
-        val DefaultPointerFullscreen = PlayerFormFactorLayout(
-            center = DefaultPointerCenter,
+        val DefaultFullscreen = PlayerFormFactorLayout(
+            center = DefaultCenter,
             topBar = listOf(
                 c(PlayerControlId.Back),
                 c(PlayerControlId.Title),
@@ -642,10 +738,9 @@ data class PlayerLayoutPrefs(
 
         val Default = PlayerLayoutPrefs(
             version = PLAYER_LAYOUT_PREFS_VERSION,
-            touchEmbedded = DefaultTouchEmbedded,
-            touchFullscreen = DefaultTouchFullscreen,
-            pointerEmbedded = DefaultPointerEmbedded,
-            pointerFullscreen = DefaultPointerFullscreen,
+            embedded = DefaultEmbedded,
+            fullscreen = DefaultFullscreen,
+            showCenterControlsOnTouch = true,
             seekButtonSeconds = DEFAULT_SEEK_SECONDS,
             doubleTapSeekSeconds = DEFAULT_DOUBLE_TAP_SEEK_SECONDS,
             syncDoubleTapWithSeekButton = true,
@@ -654,32 +749,8 @@ data class PlayerLayoutPrefs(
 
         val Minimal = PlayerLayoutPrefs(
             version = PLAYER_LAYOUT_PREFS_VERSION,
-            touchEmbedded = PlayerFormFactorLayout(
-                center = DefaultPointerCenter.copy(showCenterPlay = true),
-                topBar = listOf(sp),
-                bottomBar = listOf(
-                    c(PlayerControlId.TimeLabel),
-                    sp,
-                    c(PlayerControlId.Settings),
-                    c(PlayerControlId.Fullscreen),
-                ),
-            ),
-            touchFullscreen = PlayerFormFactorLayout(
-                center = DefaultPointerCenter.copy(showCenterPlay = true),
-                topBar = listOf(
-                    c(PlayerControlId.Back),
-                    c(PlayerControlId.Title),
-                    sp,
-                    c(PlayerControlId.Settings),
-                ),
-                bottomBar = listOf(
-                    c(PlayerControlId.TimeLabel),
-                    sp,
-                    c(PlayerControlId.Fullscreen),
-                ),
-            ),
-            pointerEmbedded = PlayerFormFactorLayout(
-                center = DefaultPointerCenter,
+            embedded = PlayerFormFactorLayout(
+                center = MinimalCenter,
                 topBar = listOf(sp),
                 bottomBar = listOf(
                     c(PlayerControlId.PlayPause),
@@ -690,8 +761,8 @@ data class PlayerLayoutPrefs(
                     c(PlayerControlId.Fullscreen),
                 ),
             ),
-            pointerFullscreen = PlayerFormFactorLayout(
-                center = DefaultPointerCenter,
+            fullscreen = PlayerFormFactorLayout(
+                center = MinimalCenter,
                 topBar = listOf(
                     c(PlayerControlId.Back),
                     c(PlayerControlId.Title),
@@ -706,54 +777,17 @@ data class PlayerLayoutPrefs(
                     c(PlayerControlId.Fullscreen),
                 ),
             ),
+            showCenterControlsOnTouch = true,
             seekButtonSeconds = DEFAULT_SEEK_SECONDS,
             doubleTapSeekSeconds = DEFAULT_DOUBLE_TAP_SEEK_SECONDS,
             syncDoubleTapWithSeekButton = true,
             listen = ListenLayoutConfig.Default,
         ).sanitize()
 
-        private val PodcastTouchCenter = CenterClusterConfig(
-            showCenterPlay = true,
-            outerLeft = CenterSlotConfig(CenterSlotAction.Previous, CenterSlotScale.Small),
-            innerLeft = CenterSlotConfig(CenterSlotAction.SeekBackward(15), CenterSlotScale.Medium),
-            innerRight = CenterSlotConfig(CenterSlotAction.SeekForward(15), CenterSlotScale.Medium),
-            outerRight = CenterSlotConfig(CenterSlotAction.Next, CenterSlotScale.Small),
-        )
-
         val Podcast = PlayerLayoutPrefs(
             version = PLAYER_LAYOUT_PREFS_VERSION,
-            touchEmbedded = PlayerFormFactorLayout(
-                center = PodcastTouchCenter,
-                topBar = listOf(sp, c(PlayerControlId.Pip), c(PlayerControlId.Share)),
-                bottomBar = listOf(
-                    c(PlayerControlId.TimeLabel),
-                    sp,
-                    c(PlayerControlId.Speed),
-                    c(PlayerControlId.SleepTimer),
-                    c(PlayerControlId.Settings),
-                    c(PlayerControlId.Fullscreen),
-                ),
-            ),
-            touchFullscreen = PlayerFormFactorLayout(
-                center = PodcastTouchCenter,
-                topBar = listOf(
-                    c(PlayerControlId.Back),
-                    c(PlayerControlId.Title),
-                    sp,
-                    c(PlayerControlId.SystemStatus),
-                    c(PlayerControlId.Settings),
-                ),
-                bottomBar = listOf(
-                    c(PlayerControlId.TimeLabel),
-                    sp,
-                    c(PlayerControlId.Speed),
-                    c(PlayerControlId.SleepTimer),
-                    c(PlayerControlId.DanmakuToggle),
-                    c(PlayerControlId.Fullscreen),
-                ),
-            ),
-            pointerEmbedded = PlayerFormFactorLayout(
-                center = DefaultPointerCenter,
+            embedded = PlayerFormFactorLayout(
+                center = PodcastCenter,
                 topBar = listOf(sp, c(PlayerControlId.Pip), c(PlayerControlId.Share)),
                 bottomBar = listOf(
                     c(PlayerControlId.PlayPause),
@@ -770,8 +804,8 @@ data class PlayerLayoutPrefs(
                     c(PlayerControlId.Fullscreen),
                 ),
             ),
-            pointerFullscreen = PlayerFormFactorLayout(
-                center = DefaultPointerCenter,
+            fullscreen = PlayerFormFactorLayout(
+                center = PodcastCenter,
                 topBar = listOf(
                     c(PlayerControlId.Back),
                     c(PlayerControlId.Title),
@@ -794,12 +828,16 @@ data class PlayerLayoutPrefs(
                     c(PlayerControlId.Fullscreen),
                 ),
             ),
+            showCenterControlsOnTouch = true,
             seekButtonSeconds = 15,
             doubleTapSeekSeconds = 15,
             syncDoubleTapWithSeekButton = true,
             listen = ListenLayoutConfig(
                 coverStyle = ListenCoverStyle.VinylDisc,
-                sideAction = ListenSideAction.SeekDelta,
+                outerLeft = CenterSlotConfig(CenterSlotAction.Previous, CenterSlotScale.Small),
+                innerLeft = CenterSlotConfig(CenterSlotAction.SeekBackward(15), CenterSlotScale.Medium),
+                innerRight = CenterSlotConfig(CenterSlotAction.SeekForward(15), CenterSlotScale.Medium),
+                outerRight = CenterSlotConfig(CenterSlotAction.Next, CenterSlotScale.Small),
                 visibleChips = ListenQuickChip.entries,
             ),
         ).sanitize()

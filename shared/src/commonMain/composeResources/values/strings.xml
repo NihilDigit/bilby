@@ -1161,6 +1161,14 @@
     <string name="player_custom_listen_side_seek">快退  快进 ±%1$d 秒</string>
     <string name="player_custom_listen_side_none">无</string>
     <string name="player_custom_listen_chips_title">快捷项显示</string>
+    <string name="player_custom_show_background">显示底色</string>
+    <string name="player_custom_show_background_subtitle">关闭后仅保留图标与文字，减少画面遮挡</string>
+    <string name="player_custom_show_center_on_touch">触控时在画面中央显示播放控件</string>
+    <string name="player_custom_show_center_on_touch_subtitle">开启后触控操作优先使用画面中央按钮，键鼠操作仍使用底栏</string>
+    <string name="player_custom_slot_outer_left_short">外左</string>
+    <string name="player_custom_slot_inner_left_short">内左</string>
+    <string name="player_custom_slot_inner_right_short">内右</string>
+    <string name="player_custom_slot_outer_right_short">外右</string>
 
     <!-- 启动页与导航栏自定义 -->
     <string name="settings_section_navigation_customization">启动页与导航栏</string>
