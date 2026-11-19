@@ -28,10 +28,10 @@ class PlayerLayoutPrefsTest {
             assertTrue(layout.center.innerLeft.showBackground)
             assertTrue(layout.center.outerLeft.showBackground)
 
-            // Bottom bar keeps PlayPause/Previous/Next for pointer/center-off mode.
+            // Bottom bar keeps PlayPause for pointer/center-off mode; Previous/Next live in the center cluster.
             assertTrue(layout.hasInBottomBar(PlayerControlId.PlayPause))
-            assertTrue(layout.hasInBottomBar(PlayerControlId.Previous))
-            assertTrue(layout.hasInBottomBar(PlayerControlId.Next))
+            assertFalse(layout.hasInBottomBar(PlayerControlId.Previous))
+            assertFalse(layout.hasInBottomBar(PlayerControlId.Next))
 
             // On touch with center controls active, PlayPause/Previous/Next are deduplicated from bars.
             val touchCenterActive = prefs.isCenterControlsActive(isTouch = true)
@@ -46,6 +46,59 @@ class PlayerLayoutPrefsTest {
             assertFalse(layout.isHiddenByCenter(PlayerControlId.Previous, pointerCenterActive))
             assertFalse(layout.isHiddenByCenter(PlayerControlId.Next, pointerCenterActive))
         }
+
+        // Exact default embedded bar ordering.
+        assertEquals(
+            listOf(
+                PlayerPanelItem.Spacer,
+                PlayerPanelItem.Control(PlayerControlId.Pip),
+                PlayerPanelItem.Control(PlayerControlId.SleepTimer),
+                PlayerPanelItem.Control(PlayerControlId.Share),
+            ),
+            prefs.embedded.topBar,
+        )
+        assertEquals(
+            listOf(
+                PlayerPanelItem.Control(PlayerControlId.PlayPause),
+                PlayerPanelItem.Control(PlayerControlId.TimeLabel),
+                PlayerPanelItem.Control(PlayerControlId.DanmakuToggle),
+                PlayerPanelItem.Control(PlayerControlId.DanmakuInput),
+                PlayerPanelItem.Control(PlayerControlId.Quality),
+                PlayerPanelItem.Control(PlayerControlId.Volume),
+                PlayerPanelItem.Control(PlayerControlId.Settings),
+                PlayerPanelItem.Control(PlayerControlId.Fullscreen),
+            ),
+            prefs.embedded.bottomBar,
+        )
+
+        // Exact default fullscreen bar ordering (SystemStatus has showBackground = false).
+        assertEquals(
+            listOf(
+                PlayerPanelItem.Control(PlayerControlId.Back),
+                PlayerPanelItem.Control(PlayerControlId.Title),
+                PlayerPanelItem.Spacer,
+                PlayerPanelItem.Control(PlayerControlId.SystemStatus, showBackground = false),
+                PlayerPanelItem.Control(PlayerControlId.Pip),
+                PlayerPanelItem.Control(PlayerControlId.SleepTimer),
+                PlayerPanelItem.Control(PlayerControlId.Settings),
+            ),
+            prefs.fullscreen.topBar,
+        )
+        assertEquals(
+            listOf(
+                PlayerPanelItem.Control(PlayerControlId.PlayPause),
+                PlayerPanelItem.Control(PlayerControlId.TimeLabel),
+                PlayerPanelItem.Control(PlayerControlId.DanmakuToggle),
+                PlayerPanelItem.Control(PlayerControlId.DanmakuInput),
+                PlayerPanelItem.Control(PlayerControlId.Speed),
+                PlayerPanelItem.Control(PlayerControlId.Quality),
+                PlayerPanelItem.Control(PlayerControlId.Audio),
+                PlayerPanelItem.Control(PlayerControlId.Subtitle),
+                PlayerPanelItem.Control(PlayerControlId.Volume),
+                PlayerPanelItem.Control(PlayerControlId.Fullscreen),
+            ),
+            prefs.fullscreen.bottomBar,
+        )
 
         // Fullscreen has single Settings in top bar, NOT duplicated in bottom bar; Embedded has Settings in bottom bar.
         assertTrue(prefs.fullscreen.hasInTopBar(PlayerControlId.Settings))
@@ -71,6 +124,7 @@ class PlayerLayoutPrefsTest {
             it is PlayerPanelItem.Control && it.id == PlayerControlId.SystemStatus
         }
         assertTrue(statusIdx >= 0)
+        assertFalse((PlayerLayoutPrefs.Default.fullscreen.topBar[statusIdx] as PlayerPanelItem.Control).showBackground)
 
         val custom = PlayerLayoutPrefs.Default.copy(
             showCenterControlsOnTouch = false,
@@ -89,7 +143,7 @@ class PlayerLayoutPrefsTest {
             ).withBarItemBackground(
                 bar = PlayerBarSlot.Top,
                 index = statusIdx,
-                showBackground = false,
+                showBackground = true,
                 isFullscreen = true,
             )
         }.updateListen { listen ->
@@ -104,7 +158,7 @@ class PlayerLayoutPrefsTest {
         assertFalse(decoded.showCenterControlsOnTouch)
         assertFalse(decoded.fullscreen.center.outerLeft.showBackground)
         val decodedStatus = decoded.fullscreen.topBar[statusIdx] as PlayerPanelItem.Control
-        assertFalse(decodedStatus.showBackground)
+        assertTrue(decodedStatus.showBackground)
         assertFalse(decoded.listen.outerLeft.showBackground)
         assertFalse(decoded.listen.outerRight.showBackground)
         assertEquals(CenterSlotAction.SeekForward(20), decoded.listen.outerRight.action)
