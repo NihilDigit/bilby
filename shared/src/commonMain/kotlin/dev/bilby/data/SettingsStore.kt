@@ -274,6 +274,39 @@ class SettingsStore(private val store: DataStore<Preferences>) {
         p[KEY_START_TAB]?.let { name -> StartTab.entries.firstOrNull { it.name == name } } ?: StartTab.Feed
     }
 
+    /** 启动页、主导航栏与桌面端侧栏快捷入口偏好。未落盘时兼容旧版 [KEY_START_TAB]。 */
+    val navigationPrefs: Flow<NavigationPrefs> = store.data.map { p ->
+        val raw = p[KEY_NAVIGATION_PREFS_JSON]
+        if (!raw.isNullOrBlank()) {
+            decodeNavigationPrefs(raw)
+        } else {
+            val legacyTab = p[KEY_START_TAB]?.let { name -> StartTab.entries.firstOrNull { it.name == name } }
+            val startup = when (legacyTab) {
+                StartTab.Search -> StartupDestination.Search
+                StartTab.Profile -> StartupDestination.Library
+                StartTab.Feed, null -> StartupDestination.Feed
+            }
+            NavigationPrefs.Default.copy(startupPage = startup).sanitize()
+        }
+    }
+
+    suspend fun saveNavigationPrefs(prefs: NavigationPrefs) {
+        val sanitized = prefs.sanitize()
+        store.edit { p ->
+            p[KEY_NAVIGATION_PREFS_JSON] = encodeNavigationPrefs(sanitized)
+            when (sanitized.startupPage) {
+                StartupDestination.Feed -> p[KEY_START_TAB] = StartTab.Feed.name
+                StartupDestination.Search -> p[KEY_START_TAB] = StartTab.Search.name
+                StartupDestination.Library -> p[KEY_START_TAB] = StartTab.Profile.name
+                StartupDestination.ToView,
+                StartupDestination.FavFolders,
+                StartupDestination.History,
+                StartupDestination.Offline,
+                -> Unit
+            }
+        }
+    }
+
     suspend fun saveThemeMode(mode: ThemeMode) {
         store.edit { p -> p[KEY_THEME_MODE] = mode.name }
     }
@@ -702,6 +735,7 @@ class SettingsStore(private val store: DataStore<Preferences>) {
         private val KEY_SWIPE_BRIGHTNESS_VOLUME = booleanPreferencesKey("player_swipe_brightness_volume")
         private val KEY_PBP_OUTRO_COMPLETION = booleanPreferencesKey("player_pbp_outro_completion")
         private val KEY_PLAYER_LAYOUT_JSON = stringPreferencesKey("player_layout_json")
+        private val KEY_NAVIGATION_PREFS_JSON = stringPreferencesKey("navigation_prefs_json")
 
         const val DEFAULT_HOLD_SPEED = 2.5f
         val HOLD_SPEED_OPTIONS = listOf(1.5f, 2f, 2.5f, 3f, 3.5f)

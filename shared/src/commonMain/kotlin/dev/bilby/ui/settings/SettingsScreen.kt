@@ -28,6 +28,7 @@ import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material.icons.outlined.AutoAwesome
 import androidx.compose.material.icons.outlined.Bedtime
 import androidx.compose.material.icons.outlined.Check
+import androidx.compose.material.icons.outlined.Explore
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.Memory
 import androidx.compose.material.icons.outlined.Palette
@@ -266,6 +267,17 @@ fun SettingsScreen(
                             target = RowTarget.Page,
                             onClick = { onOpenSection(SettingsSection.Gestures) },
                             selected = selected(SettingsSection.Gestures),
+                        )
+                    }
+                    row { position ->
+                        CategoryRow(
+                            position = position,
+                            title = stringResource(Res.string.settings_section_navigation_customization),
+                            icon = Icons.Outlined.Explore,
+                            value = state.loaded.then { startupDestinationLabel(state.navigationPrefs.startupPage) },
+                            target = RowTarget.Page,
+                            onClick = { onOpenSection(SettingsSection.Navigation) },
+                            selected = selected(SettingsSection.Navigation),
                         )
                     }
                 }

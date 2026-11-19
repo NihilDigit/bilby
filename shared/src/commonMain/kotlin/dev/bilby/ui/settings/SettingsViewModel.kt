@@ -23,6 +23,7 @@ import dev.bilby.agent.LlmClient
 import dev.bilby.agent.LlmModelInfo
 import dev.bilby.data.ExcludedUp
 import dev.bilby.data.LlmConfig
+import dev.bilby.data.NavigationPrefs
 import dev.bilby.data.PlayEndMode
 import dev.bilby.data.PlayerLayoutPrefs
 import dev.bilby.data.SettingsStore
@@ -76,6 +77,7 @@ data class SettingsUiState(
     val swipeSeek: Boolean = true,
     val swipeBrightnessVolume: Boolean = true,
     val playerLayout: PlayerLayoutPrefs = PlayerLayoutPrefs.Default,
+    val navigationPrefs: NavigationPrefs = NavigationPrefs.Default,
     /** 一条内容播完后的行为。见 [dev.bilby.data.PlaybackPrefs.endMode]。 */
     val endMode: PlayEndMode = PlayEndMode.Continue,
     /** 见 [dev.bilby.data.PlayerPrefs.pbpOutroCompletion]。 */
@@ -301,6 +303,11 @@ class SettingsViewModel(
                 _state.update { it.copy(nightMode = prefs) }
             }
         }
+        viewModelScope.launch {
+            settings.navigationPrefs.collect { prefs ->
+                _state.update { it.copy(navigationPrefs = prefs) }
+            }
+        }
     }
 
     fun clearExcludedFeedMids() {
@@ -437,6 +444,20 @@ class SettingsViewModel(
 
     fun resetPlayerLayout() {
         setPlayerLayout(PlayerLayoutPrefs.Default)
+    }
+
+    fun saveNavigationPrefs(prefs: NavigationPrefs) {
+        val sanitized = prefs.sanitize()
+        _state.update { it.copy(navigationPrefs = sanitized) }
+        persist { settings.saveNavigationPrefs(sanitized) }
+    }
+
+    fun updateNavigationPrefs(transform: (NavigationPrefs) -> NavigationPrefs) {
+        saveNavigationPrefs(transform(_state.value.navigationPrefs))
+    }
+
+    fun resetNavigationPrefs() {
+        saveNavigationPrefs(NavigationPrefs.Default)
     }
 
     fun setThemeMode(mode: ThemeMode) {

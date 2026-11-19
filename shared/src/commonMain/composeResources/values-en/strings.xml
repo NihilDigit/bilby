@@ -1069,4 +1069,15 @@
     <string name="player_custom_listen_side_seek">Rewind  Forward ±%1$ds</string>
     <string name="player_custom_listen_side_none">None</string>
     <string name="player_custom_listen_chips_title">Quick chips</string>
+
+    <!-- Startup page & navigation customization -->
+    <string name="settings_section_navigation_customization">Startup page &amp; navigation</string>
+    <string name="nav_custom_startup_subtitle">Page opened on cold launch when no schedule restriction is active</string>
+    <string name="nav_custom_group_primary_tabs">Navigation bar items</string>
+    <string name="nav_custom_last_visible_tab_hint">At least one primary navigation item must remain visible</string>
+    <string name="nav_custom_group_rail_utilities">Desktop rail shortcuts</string>
+    <string name="nav_custom_utility_dynamics">Dynamics</string>
+    <string name="nav_custom_settings_required_hint">Required entry, cannot be hidden</string>
+    <string name="nav_custom_move_up">Move up</string>
+    <string name="nav_custom_move_down">Move down</string>
 </resources>

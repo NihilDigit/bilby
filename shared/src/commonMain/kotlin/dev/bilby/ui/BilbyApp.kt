@@ -80,7 +80,9 @@ import androidx.compose.material3.Surface
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.material.icons.outlined.AccountCircle
 import androidx.compose.material.icons.outlined.Checklist
+import androidx.compose.material.icons.outlined.DownloadForOffline
 import androidx.compose.material.icons.outlined.Forum
+import androidx.compose.material.icons.outlined.History
 import dev.bilby.ui.components.EmptyState
 import dev.bilby.ui.components.FullScreenLoading
 import androidx.compose.material.icons.outlined.Mail
@@ -92,6 +94,7 @@ import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.Subscriptions
 import androidx.compose.material.icons.outlined.VideoLibrary
+import androidx.compose.material.icons.outlined.WatchLater
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -113,7 +116,6 @@ import androidx.compose.ui.platform.LocalWindowInfo
 import dev.bilby.data.AccountInfo
 import dev.bilby.ui.components.Avatar
 import dev.bilby.ui.components.BilbyTooltip
-import dev.bilby.ui.components.CoinGlyph
 import dev.bilby.ui.components.MetaSeparator
 import dev.bilby.ui.components.SkeletonPulse
 import dev.bilby.ui.components.skeleton
@@ -152,7 +154,10 @@ import dev.bilby.stringResource
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.bilby.data.AppearancePrefs
-import dev.bilby.data.StartTab
+import dev.bilby.data.NavigationPrefs
+import dev.bilby.data.RailUtilityId
+import dev.bilby.data.RootTabId
+import dev.bilby.data.StartupDestination
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
@@ -279,6 +284,7 @@ import dev.bilby.ui.player.PlayerGestureOptions
 import dev.bilby.ui.settings.AboutSettingsPage
 import dev.bilby.ui.settings.AgentSettingsPage
 import dev.bilby.ui.settings.AppearanceSettingsPage
+import dev.bilby.ui.settings.NavigationCustomizationPage
 import dev.bilby.ui.settings.PlayerCustomizationPage
 import dev.bilby.ui.settings.PlaybackSettingsPage
 import dev.bilby.data.model.ArticleRef
@@ -446,6 +452,8 @@ private fun BilbyApp(
     // 夜间模式配置在冷启动首帧内先读完再建导航树，落在生效窗口内时不闪过常规信息流。
     val nightPrefsState by container.settings.nightModePrefs.collectAsStateWithLifecycle(initialValue = null)
     val nightPrefs = nightPrefsState ?: return
+    val navigationPrefsState by container.settings.navigationPrefs.collectAsStateWithLifecycle(initialValue = null)
+    val navigationPrefs = navigationPrefsState ?: return
     val nightStatus by produceState(
         initialValue = evaluateNightMode(nightPrefs, System.currentTimeMillis()),
         key1 = nightPrefs,
@@ -478,6 +486,26 @@ private fun BilbyApp(
 
     val reducedMotion = rememberReducedMotion()
     val backStack = rememberNavBackStack(DestinationSavedState, Home)
+
+    var appliedStartupDestination by rememberSaveable { mutableStateOf(false) }
+    LaunchedEffect(Unit) {
+        if (appliedStartupDestination) return@LaunchedEffect
+        appliedStartupDestination = true
+        if (nightEngaged) return@LaunchedEffect
+        val subDestination: NavKey? = when (navigationPrefs.startupPage) {
+            StartupDestination.ToView -> ToViewList
+            StartupDestination.FavFolders -> FavFolders
+            StartupDestination.History -> History
+            StartupDestination.Offline -> Offline
+            StartupDestination.Feed,
+            StartupDestination.Search,
+            StartupDestination.Library,
+            -> null
+        }
+        if (subDestination != null && backStack.size == 1 && backStack.firstOrNull() == Home) {
+            backStack.pushUnique(subDestination)
+        }
+    }
 
     val snackbarScope = rememberCoroutineScope()
     val system = LocalSystemActions.current
@@ -1107,12 +1135,12 @@ private fun BilbyApp(
                     if (backStack.none { it is Settings }) openSettings()
                     return@onPreviewKeyEvent true
                 }
-                // Ctrl+1/2/3 切换三个根目的地(播放与直播中不切走页面)
+                // Ctrl+1/2/3 切换当前可见主导航目的地(播放与直播中不切走页面)
                 if (ctrl && !event.isShiftPressed) {
                     val targetTab = when (event.key) {
-                        Key.One, Key.NumPad1 -> RootTab.Feed
-                        Key.Two, Key.NumPad2 -> RootTab.Search
-                        Key.Three, Key.NumPad3 -> RootTab.Profile
+                        Key.One, Key.NumPad1 -> navigationPrefs.primaryTabs.getOrNull(0)?.toRootTab()
+                        Key.Two, Key.NumPad2 -> navigationPrefs.primaryTabs.getOrNull(1)?.toRootTab()
+                        Key.Three, Key.NumPad3 -> navigationPrefs.primaryTabs.getOrNull(2)?.toRootTab()
                         else -> null
                     }
                     if (targetTab != null) {
@@ -1320,6 +1348,7 @@ private fun BilbyApp(
                     } else {
                         RootTabs(
                             container = container,
+                            navigationPrefs = navigationPrefs,
                             hasVideoPage = hasVideoPage,
                             tabRequest = rootTabRequest,
                             focusSearchNonce = focusSearchNonce,
@@ -1968,9 +1997,28 @@ private fun CutoutSafe(content: @Composable () -> Unit) {
  * **没有顶栏。** 三个 tab 都不再有共用的 `BilbyTopBar`,理由和状态栏 inset 的处理见下面
  * `Scaffold` 调用处的注释。
  */
+private fun RootTabId.toRootTab(): RootTab = when (this) {
+    RootTabId.Feed -> RootTab.Feed
+    RootTabId.Search -> RootTab.Search
+    RootTabId.Library -> RootTab.Profile
+}
+
+private fun initialRootTab(prefs: NavigationPrefs): RootTab {
+    val clean = prefs.sanitize()
+    val directTab = clean.startupPage.rootTabId
+    if (directTab != null && directTab in clean.primaryTabs) {
+        return directTab.toRootTab()
+    }
+    if (clean.startupPage.isLibrarySubDestination && RootTabId.Library in clean.primaryTabs) {
+        return RootTab.Profile
+    }
+    return clean.primaryTabs.first().toRootTab()
+}
+
 @Composable
 private fun RootTabs(
     container: AppContainer,
+    navigationPrefs: NavigationPrefs,
     hasVideoPage: Boolean,
     tabRequest: Pair<RootTab, Int>? = null,
     focusSearchNonce: Int = 0,
@@ -1999,21 +2047,14 @@ private fun RootTabs(
     /** 搜索框里的编号或链接直接打开的那一页,可以是任何一种目的地。 */
     onOpen: (NavKey) -> Unit,
 ) {
-    val persistedStartTab by container.settings.startTab.collectAsStateWithLifecycle(initialValue = null)
-    var selected by rememberSaveable { mutableStateOf<RootTab?>(null) }
-    var appliedStartTab by rememberSaveable { mutableStateOf(false) }
-    LaunchedEffect(persistedStartTab) {
-        val tab = persistedStartTab ?: return@LaunchedEffect
-        // 仅在冷启动首次初始化时按设置落点，避免用户在设置页改完「默认启动页」后立刻把当前标签切走。
-        if (!appliedStartTab) {
-            appliedStartTab = true
-            if (selected == null) {
-                selected = when (tab) {
-                    StartTab.Feed -> RootTab.Feed
-                    StartTab.Search -> RootTab.Search
-                    StartTab.Profile -> RootTab.Profile
-                }
-            }
+    val cleanNavPrefs = remember(navigationPrefs) { navigationPrefs.sanitize() }
+    val visibleTabs = remember(cleanNavPrefs.primaryTabs) {
+        cleanNavPrefs.primaryTabs.map { it.toRootTab() }
+    }
+    var selected by rememberSaveable { mutableStateOf(initialRootTab(cleanNavPrefs)) }
+    LaunchedEffect(visibleTabs) {
+        if (selected !in visibleTabs) {
+            selected = visibleTabs.first()
         }
     }
     val windowSize = rememberBilbyWindowSize()
@@ -2034,10 +2075,9 @@ private fun RootTabs(
     }
     LaunchedEffect(tabRequest?.second) {
         val target = tabRequest?.first ?: return@LaunchedEffect
-        appliedStartTab = true
         if (selected != target) selected = target
     }
-    val currentSelected = selected ?: return
+    val currentSelected = selected
     val profileVm: ProfileViewModel = viewModel(
         key = "root-profile",
         factory = viewModelFactory {
@@ -2060,7 +2100,7 @@ private fun RootTabs(
             Scaffold(
                 bottomBar = {
                     ShortNavigationBar {
-                        RootTab.entries.forEach { tab ->
+                        visibleTabs.forEach { tab ->
                             ShortNavigationBarItem(
                                 selected = currentSelected == tab,
                                 onClick = { onTabClick(tab) },
@@ -2166,6 +2206,8 @@ private fun RootTabs(
             Row(modifier = Modifier.weight(1f).fillMaxWidth()) {
                 RootNavigationRail(
                     selected = currentSelected,
+                    visibleTabs = visibleTabs,
+                    railUtilities = cleanNavPrefs.railUtilities,
                     isHeightCompact = isHeightCompact,
                     desktopFramed = desktopFramed,
                     profileState = profileState,
@@ -2173,8 +2215,11 @@ private fun RootTabs(
                     onOpenSelf = onUserClick,
                     onRetryAccount = profileVm::retryAccount,
                     onOpenFollowings = onOpenFollowings,
-                    onOpenCoinLog = onOpenCoinLog,
+                    onOpenOtherDynamics = onOpenOtherDynamics,
                     onOpenMessages = onOpenMessages,
+                    onOpenOffline = onOpenOffline,
+                    onOpenHistory = onOpenHistory,
+                    onOpenToView = onOpenToView,
                     onSettingsClick = onSettingsClick,
                 )
                 if (desktopFramed) {
@@ -2198,13 +2243,14 @@ private val SlimRailWidth = 80.dp
 private val RailAvatarSize = 40.dp
 private val RailUtilityVisualSize = 40.dp
 private val RailUtilityIconSize = 20.dp
-private val RailUtilityCoinSize = 18.dp
 private val RailCompactHeightThresholdDesktop = 500.dp
 private val RailCompactHeightThresholdInset = 540.dp
 
 @Composable
 private fun RootNavigationRail(
     selected: RootTab,
+    visibleTabs: List<RootTab>,
+    railUtilities: List<RailUtilityId>,
     isHeightCompact: Boolean,
     desktopFramed: Boolean,
     profileState: ProfileUiState,
@@ -2212,8 +2258,11 @@ private fun RootNavigationRail(
     onOpenSelf: (Long) -> Unit,
     onRetryAccount: () -> Unit,
     onOpenFollowings: () -> Unit,
-    onOpenCoinLog: () -> Unit,
+    onOpenOtherDynamics: () -> Unit,
     onOpenMessages: () -> Unit,
+    onOpenOffline: () -> Unit,
+    onOpenHistory: () -> Unit,
+    onOpenToView: () -> Unit,
     onSettingsClick: () -> Unit,
 ) {
     val containerHeightDp = with(LocalDensity.current) { LocalWindowInfo.current.containerSize.height.toDp() }
@@ -2224,11 +2273,6 @@ private fun RootNavigationRail(
     }
     val compactRailLayout = isHeightCompact || containerHeightDp < compactHeightThreshold
     val railInsets = if (desktopFramed) WindowInsets(0) else NavigationRailDefaults.windowInsets
-    val cutoutColor = if (desktopFramed) {
-        MaterialTheme.colorScheme.surfaceContainer
-    } else {
-        NavigationRailDefaults.ContainerColor
-    }
     val verticalInset = if (compactRailLayout) Spacing.Hair else Spacing.Cozy
     val scrollModifier = if (compactRailLayout) {
         Modifier.verticalScroll(rememberScrollState())
@@ -2273,7 +2317,7 @@ private fun RootNavigationRail(
                 verticalArrangement = Arrangement.spacedBy(if (compactRailLayout) Spacing.Hair else Spacing.Tight),
                 modifier = Modifier.fillMaxWidth(),
             ) {
-                RootTab.entries.forEach { tab ->
+                visibleTabs.forEach { tab ->
                     NavigationRailItem(
                         selected = selected == tab,
                         onClick = { onTabClick(tab) },
@@ -2297,10 +2341,13 @@ private fun RootNavigationRail(
 
             RootRailUtilitySection(
                 account = profileState.account,
-                cutoutColor = cutoutColor,
+                utilities = railUtilities,
                 onOpenFollowings = onOpenFollowings,
-                onOpenCoinLog = onOpenCoinLog,
+                onOpenOtherDynamics = onOpenOtherDynamics,
                 onOpenMessages = onOpenMessages,
+                onOpenOffline = onOpenOffline,
+                onOpenHistory = onOpenHistory,
+                onOpenToView = onOpenToView,
                 onSettingsClick = onSettingsClick,
             )
         }
@@ -2369,74 +2416,128 @@ private fun RootRailAccountHeader(
 @Composable
 private fun RootRailUtilitySection(
     account: AccountInfo?,
-    cutoutColor: Color,
+    utilities: List<RailUtilityId>,
     onOpenFollowings: () -> Unit,
-    onOpenCoinLog: () -> Unit,
+    onOpenOtherDynamics: () -> Unit,
     onOpenMessages: () -> Unit,
+    onOpenOffline: () -> Unit,
+    onOpenHistory: () -> Unit,
+    onOpenToView: () -> Unit,
     onSettingsClick: () -> Unit,
 ) {
     val followingLabel = stringResource(Res.string.profile_following)
-    val coinsLabel = stringResource(Res.string.profile_coins)
+    val dynamicsLabel = stringResource(Res.string.nav_custom_utility_dynamics)
     val messagesLabel = stringResource(Res.string.message_title)
+    val offlineLabel = stringResource(Res.string.offline_title)
+    val historyLabel = stringResource(Res.string.history_title)
+    val toViewLabel = stringResource(Res.string.tab_toview)
     val settingsLabel = stringResource(Res.string.settings_title)
     val followingValue = account?.following?.let { formatSegmentValue(it.toDouble()) }
-    val coinsValue = account?.let { formatSegmentValue(it.coins) }
     val tint = MaterialTheme.colorScheme.onSurfaceVariant
 
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
-        RootRailUtilityItem(
-            label = followingLabel,
-            tooltip = followingValue?.let { "$it $followingLabel" } ?: followingLabel,
-            onClick = onOpenFollowings,
-            icon = {
-                Icon(
-                    imageVector = Icons.Outlined.PeopleAlt,
-                    contentDescription = followingLabel,
-                    tint = tint,
-                    modifier = Modifier.size(RailUtilityIconSize),
+        utilities.forEach { utility ->
+            when (utility) {
+                RailUtilityId.Followings -> RootRailUtilityItem(
+                    label = followingLabel,
+                    tooltip = followingValue?.let { "$it $followingLabel" } ?: followingLabel,
+                    onClick = onOpenFollowings,
+                    icon = {
+                        Icon(
+                            imageVector = Icons.Outlined.PeopleAlt,
+                            contentDescription = followingLabel,
+                            tint = tint,
+                            modifier = Modifier.size(RailUtilityIconSize),
+                        )
+                    },
                 )
-            },
-        )
-        RootRailUtilityItem(
-            label = coinsLabel,
-            tooltip = coinsValue?.let { "$it $coinsLabel" } ?: coinsLabel,
-            onClick = onOpenCoinLog,
-            icon = {
-                CoinGlyph(
-                    tint = tint,
-                    filled = false,
-                    cutout = cutoutColor,
-                    size = RailUtilityCoinSize,
+
+                RailUtilityId.Dynamics -> RootRailUtilityItem(
+                    label = dynamicsLabel,
+                    tooltip = dynamicsLabel,
+                    onClick = onOpenOtherDynamics,
+                    icon = {
+                        Icon(
+                            imageVector = Icons.Outlined.Forum,
+                            contentDescription = dynamicsLabel,
+                            tint = tint,
+                            modifier = Modifier.size(RailUtilityIconSize),
+                        )
+                    },
                 )
-            },
-        )
-        RootRailUtilityItem(
-            label = messagesLabel,
-            tooltip = messagesLabel,
-            onClick = onOpenMessages,
-            icon = {
-                Icon(
-                    imageVector = Icons.Outlined.Mail,
-                    contentDescription = messagesLabel,
-                    tint = tint,
-                    modifier = Modifier.size(RailUtilityIconSize),
+
+                RailUtilityId.Messages -> RootRailUtilityItem(
+                    label = messagesLabel,
+                    tooltip = messagesLabel,
+                    onClick = onOpenMessages,
+                    icon = {
+                        Icon(
+                            imageVector = Icons.Outlined.Mail,
+                            contentDescription = messagesLabel,
+                            tint = tint,
+                            modifier = Modifier.size(RailUtilityIconSize),
+                        )
+                    },
                 )
-            },
-        )
-        RootRailUtilityItem(
-            label = settingsLabel,
-            tooltip = settingsLabel,
-            shortcut = "Ctrl+,",
-            onClick = onSettingsClick,
-            icon = {
-                Icon(
-                    imageVector = Icons.Outlined.Settings,
-                    contentDescription = settingsLabel,
-                    tint = tint,
-                    modifier = Modifier.size(RailUtilityIconSize),
+
+                RailUtilityId.Offline -> RootRailUtilityItem(
+                    label = offlineLabel,
+                    tooltip = offlineLabel,
+                    onClick = onOpenOffline,
+                    icon = {
+                        Icon(
+                            imageVector = Icons.Outlined.DownloadForOffline,
+                            contentDescription = offlineLabel,
+                            tint = tint,
+                            modifier = Modifier.size(RailUtilityIconSize),
+                        )
+                    },
                 )
-            },
-        )
+
+                RailUtilityId.History -> RootRailUtilityItem(
+                    label = historyLabel,
+                    tooltip = historyLabel,
+                    onClick = onOpenHistory,
+                    icon = {
+                        Icon(
+                            imageVector = Icons.Outlined.History,
+                            contentDescription = historyLabel,
+                            tint = tint,
+                            modifier = Modifier.size(RailUtilityIconSize),
+                        )
+                    },
+                )
+
+                RailUtilityId.ToView -> RootRailUtilityItem(
+                    label = toViewLabel,
+                    tooltip = toViewLabel,
+                    onClick = onOpenToView,
+                    icon = {
+                        Icon(
+                            imageVector = Icons.Outlined.WatchLater,
+                            contentDescription = toViewLabel,
+                            tint = tint,
+                            modifier = Modifier.size(RailUtilityIconSize),
+                        )
+                    },
+                )
+
+                RailUtilityId.Settings -> RootRailUtilityItem(
+                    label = settingsLabel,
+                    tooltip = settingsLabel,
+                    shortcut = "Ctrl+,",
+                    onClick = onSettingsClick,
+                    icon = {
+                        Icon(
+                            imageVector = Icons.Outlined.Settings,
+                            contentDescription = settingsLabel,
+                            tint = tint,
+                            modifier = Modifier.size(RailUtilityIconSize),
+                        )
+                    },
+                )
+            }
+        }
     }
 }
 
@@ -3111,6 +3212,13 @@ private fun SettingsPageRoute(
             onDefaultHoldSpeedChange = vm::setDefaultHoldSpeed,
             onSwipeSeekChange = vm::setSwipeSeek,
             onSwipeBrightnessVolumeChange = vm::setSwipeBrightnessVolume,
+            onBack = onBack,
+        )
+
+        SettingsSection.Navigation -> NavigationCustomizationPage(
+            state = state,
+            onUpdatePrefs = vm::updateNavigationPrefs,
+            onResetPrefs = vm::resetNavigationPrefs,
             onBack = onBack,
         )
 

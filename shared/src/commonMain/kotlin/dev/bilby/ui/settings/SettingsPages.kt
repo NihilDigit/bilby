@@ -159,6 +159,7 @@ import androidx.compose.foundation.layout.size
 import org.jetbrains.compose.resources.StringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.selection.selectable
@@ -203,6 +204,7 @@ enum class SettingsSection {
     Appearance,
     Playback,
     Gestures,
+    Navigation,
 
     /** SponsorBlock 的九个分类。从播放页再降一层,理由见 [PlaybackSettingsPage]。 */
     SponsorCategories,
@@ -222,7 +224,7 @@ enum class SettingsSection {
  * 分组由各页自己套 [SettingsGroup]。一页只有一组时不给组标题,节名就是顶栏标题。
  */
 @Composable
-private fun SettingsSubPage(
+internal fun SettingsSubPage(
     title: String,
     /** null 时不画返回:两栏的右栏里,这一页不是"进来的",返回在左栏的顶栏上。 */
     onBack: (() -> Unit)?,
@@ -231,6 +233,7 @@ private fun SettingsSubPage(
      * [SettingsUiState.loaded]。顶栏照画:标题和返回不依赖任何一项设置,先出来才不会闪。
      */
     ready: Boolean = true,
+    actions: @Composable RowScope.() -> Unit = {},
     content: @Composable () -> Unit,
 ) {
     // pinned 而不是 enterAlways:顶栏留着不动,只在内容滚起来之后换一档容器色。各页的内容
@@ -246,7 +249,12 @@ private fun SettingsSubPage(
         containerColor = MaterialTheme.colorScheme.surface,
         topBar = {
             SettingsTopBarTheme {
-                BilbyTopBar(title = title, onBack = onBack, scrollBehavior = scrollBehavior)
+                BilbyTopBar(
+                    title = title,
+                    onBack = onBack,
+                    scrollBehavior = scrollBehavior,
+                    actions = actions,
+                )
             }
         },
         modifier = Modifier.fillMaxSize().nestedScroll(scrollBehavior.nestedScrollConnection),
