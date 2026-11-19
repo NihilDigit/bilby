@@ -1,11 +1,5 @@
 package dev.bilby.ui.settings
 
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.core.MutableTransitionState
-import androidx.compose.animation.expandVertically
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -77,6 +71,7 @@ import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -93,6 +88,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
@@ -123,6 +119,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
@@ -155,12 +152,9 @@ import kotlin.math.roundToInt
 import dev.bilby.resources.*
 import dev.bilby.stringResource
 import dev.bilby.ui.AdaptiveContent
-import dev.bilby.ui.BilbyWindowSize
 import dev.bilby.ui.components.BilbyIcons
 import dev.bilby.ui.components.BilbyTopBar
-import dev.bilby.ui.components.PaneSheet
 import dev.bilby.ui.components.trackEditableFocus
-import dev.bilby.ui.isAtLeast
 import dev.bilby.ui.navigationBarsBottom
 import dev.bilby.ui.padScaffoldExceptBottom
 import dev.bilby.ui.player.BatteryStatus
@@ -171,8 +165,6 @@ import dev.bilby.ui.player.PlayerStatusCluster
 import dev.bilby.ui.player.PlayerSystemStatus
 import dev.bilby.ui.player.formatSpeed
 import dev.bilby.ui.player.mediaControlContainer
-import dev.bilby.ui.rememberBilbyWindowSize
-import dev.bilby.ui.theme.Breakpoints
 import dev.bilby.ui.theme.Dimens
 import dev.bilby.ui.theme.FixedColors
 import dev.bilby.ui.theme.PlayerTheme
@@ -241,10 +233,12 @@ private sealed interface DropTarget {
     data object Remove : DropTarget
 }
 
+private class OffsetRef(var value: Offset = Offset.Zero)
+
 @Stable
 private class PlayerEditorDragState {
     var activeDrag by mutableStateOf<ActiveDrag?>(null)
-    var rootOriginInWindow by mutableStateOf(Offset.Zero)
+    var rootOriginInWindow: Offset = Offset.Zero
     var topBarBounds: Rect? = null
     var bottomBarBounds: Rect? = null
     var paletteBounds: Rect? = null
@@ -253,16 +247,27 @@ private class PlayerEditorDragState {
     val centerSlotBounds = mutableMapOf<CenterSlotPosition, Rect>()
 
     fun startDrag(payload: DragPayload, pointerInWindow: Offset) {
+        if (!pointerInWindow.x.isFinite() || !pointerInWindow.y.isFinite()) return
         activeDrag = ActiveDrag(payload, pointerInWindow)
     }
 
     fun updateDrag(pointerInWindow: Offset) {
+        if (!pointerInWindow.x.isFinite() || !pointerInWindow.y.isFinite()) return
         val current = activeDrag ?: return
         activeDrag = current.copy(pointerInWindow = pointerInWindow)
     }
 
     fun cancelDrag() {
         activeDrag = null
+    }
+
+    fun pruneBarBounds(topSize: Int, bottomSize: Int) {
+        barItemBounds.keys.removeAll { (bar, idx) ->
+            when (bar) {
+                PlayerBarSlot.Top -> idx >= topSize
+                PlayerBarSlot.Bottom -> idx >= bottomSize
+            }
+        }
     }
 
     fun clearBounds() {
@@ -389,7 +394,6 @@ fun PlayerCustomizationPage(
     }
     var listenSection by rememberSaveable { mutableStateOf(ListenEditorSection.SideSlot) }
     var selectedListenSlot by rememberSaveable { mutableStateOf(CenterSlotPosition.InnerLeft) }
-    var addControlTargetBar by remember { mutableStateOf<PlayerBarSlot?>(null) }
     val dragState = remember { PlayerEditorDragState() }
 
     LaunchedEffect(surfaceMode) {
@@ -397,13 +401,14 @@ fun PlayerCustomizationPage(
         dragState.clearBounds()
     }
 
-    // 切换形态、隐藏触控中央控件或列表长度变化时修正越界选中索引。
+    // 切换形态、隐藏触控中央控件或列表长度变化时修正越界选中索引并清理过期边界缓存。
     LaunchedEffect(
         layoutMode,
         layoutPrefs.showCenterControlsOnTouch,
         activeLayout.topBar.size,
         activeLayout.bottomBar.size,
     ) {
+        dragState.pruneBarBounds(activeLayout.topBar.size, activeLayout.bottomBar.size)
         val current = selection
         if (!layoutPrefs.showCenterControlsOnTouch && current is PreviewSelection.CenterSlot) {
             selection = if (activeLayout.bottomBar.isNotEmpty()) {
@@ -512,8 +517,6 @@ fun PlayerCustomizationPage(
     }
 
     val scrollBehavior = TopAppBarDefaults.pinnedScrollBehavior()
-    val windowSize = rememberBilbyWindowSize()
-    val useTwoPane = windowSize.isAtLeast(BilbyWindowSize.Expanded)
 
     Scaffold(
         containerColor = MaterialTheme.colorScheme.surface,
@@ -535,148 +538,111 @@ fun PlayerCustomizationPage(
     ) { insets ->
         if (!state.loaded) return@Scaffold
 
-        val paletteTray: @Composable () -> Unit = {
-            ControlPaletteTray(
-                layout = activeLayout,
-                isFullscreen = editingFullscreen,
-                showCenterControls = layoutPrefs.showCenterControlsOnTouch,
-                seekButtonSeconds = layoutPrefs.seekButtonSeconds,
-                dragState = dragState,
-                dropTarget = currentDropTarget,
-                onFinishDrag = finishDrag,
-                onQuickAddControl = { controlId ->
-                    val targetBar = if (
-                        editingFullscreen &&
-                        controlId in listOf(PlayerControlId.Title, PlayerControlId.SystemStatus, PlayerControlId.Lock)
-                    ) {
-                        PlayerBarSlot.Top
-                    } else {
-                        PlayerBarSlot.Bottom
-                    }
-                    onUpdateLayout { prefs ->
-                        prefs.updateLayout(layoutMode) {
-                            it.addToBar(targetBar, PlayerPanelItem.Control(controlId), layoutMode.isFullscreen)
-                        }
-                    }
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .onGloballyPositioned { coords ->
+                    if (coords.isAttached) dragState.rootOriginInWindow = coords.positionInWindow()
                 },
-                onQuickAddSpacer = {
-                    val nextIdx = activeLayout.itemsFor(PlayerBarSlot.Bottom).size
-                    onUpdateLayout { prefs ->
-                        prefs.updateLayout(layoutMode) {
-                            it.addToBar(PlayerBarSlot.Bottom, PlayerPanelItem.Spacer, layoutMode.isFullscreen)
-                        }
-                    }
-                    selection = PreviewSelection.PanelItem(PlayerBarSlot.Bottom, nextIdx)
-                },
-            )
-        }
-
-        val previewPane: @Composable (Modifier) -> Unit = { mod ->
-            Column(
-                modifier = mod,
-                verticalArrangement = Arrangement.spacedBy(Spacing.Cozy),
+        ) {
+            AdaptiveContent(
+                modifier = Modifier.fillMaxSize().padScaffoldExceptBottom(insets),
+                maxWidth = 840.dp,
             ) {
-                SurfaceModeToggleGroup(
-                    surfaceMode = surfaceMode,
-                    onSurfaceModeChange = { surfaceMode = it },
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                when (surfaceMode) {
-                    EditorSurfaceMode.Listen -> {
-                        ListenPreviewCanvas(
-                            config = layoutPrefs.listen,
-                            selectedSection = listenSection,
-                            selectedSlot = selectedListenSlot,
-                            onSelectSection = { listenSection = it },
-                            onSelectSlot = { pos ->
-                                selectedListenSlot = pos
-                                listenSection = ListenEditorSection.SideSlot
-                            },
-                        )
-                        Text(
-                            text = stringResource(Res.string.player_custom_listen_preview_hint),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                    EditorSurfaceMode.Gestures -> {
-                        GesturePreviewCanvas(
-                            state = state,
-                            layoutPrefs = layoutPrefs,
-                        )
-                        Text(
-                            text = stringResource(Res.string.player_custom_gesture_preview_hint),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                    EditorSurfaceMode.Embedded, EditorSurfaceMode.Fullscreen -> {
-                        PlayerPreviewCanvas(
-                            layout = activeLayout,
-                            isFullscreen = editingFullscreen,
-                            showCenterControls = layoutPrefs.showCenterControlsOnTouch,
-                            seekButtonSeconds = layoutPrefs.seekButtonSeconds,
-                            selection = selection,
-                            dragState = dragState,
-                            dropTarget = currentDropTarget,
-                            onSelect = { selection = it },
-                            onFinishDrag = finishDrag,
-                        )
-                        Text(
-                            text = stringResource(Res.string.player_custom_dnd_preview_hint),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                        paletteTray()
-                    }
-                }
-                if (!isGestureMode) {
-                    PresetChipsRow(
-                        current = layoutPrefs,
-                        onApplyPreset = { preset -> onUpdateLayout { PlayerLayoutPrefs.preset(preset) } },
+                Column(
+                    verticalArrangement = Arrangement.spacedBy(Spacing.Cozy),
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .verticalScroll(rememberScrollState())
+                        .padding(horizontal = Spacing.Comfortable)
+                        .padding(top = Spacing.Cozy, bottom = Spacing.Spacious + navigationBarsBottom()),
+                ) {
+                    SurfaceModeToggleGroup(
+                        surfaceMode = surfaceMode,
+                        onSurfaceModeChange = { surfaceMode = it },
+                        modifier = Modifier.fillMaxWidth(),
                     )
-                }
-            }
-        }
 
-        val editorPane: @Composable (Modifier) -> Unit = { mod ->
-            Column(
-                modifier = mod,
-                verticalArrangement = Arrangement.spacedBy(Spacing.Cozy),
-            ) {
-                when (surfaceMode) {
-                    EditorSurfaceMode.Listen -> {
-                        ListenCustomizationCards(
-                            config = layoutPrefs.listen,
-                            seekButtonSeconds = layoutPrefs.seekButtonSeconds,
-                            selectedSection = listenSection,
-                            selectedSlot = selectedListenSlot,
-                            onSelectSection = { listenSection = it },
-                            onSelectSlot = { pos ->
-                                selectedListenSlot = pos
-                                listenSection = ListenEditorSection.SideSlot
-                            },
-                            onUpdateLayout = onUpdateLayout,
-                        )
-                    }
-                    EditorSurfaceMode.Gestures -> {
-                        GestureCustomizationCards(
-                            state = state,
-                            layoutPrefs = layoutPrefs,
-                            onUpdateLayout = onUpdateLayout,
-                            onDoubleTapSeekChange = onDoubleTapSeekChange,
-                            onLongPressSpeedChange = onLongPressSpeedChange,
-                            onLongPressSpeedDialChange = onLongPressSpeedDialChange,
-                            onDefaultHoldSpeedChange = onDefaultHoldSpeedChange,
-                            onSwipeSeekChange = onSwipeSeekChange,
-                            onSwipeBrightnessVolumeChange = onSwipeBrightnessVolumeChange,
-                        )
-                    }
-                    EditorSurfaceMode.Embedded, EditorSurfaceMode.Fullscreen -> {
-                        SettingsGroup {
-                            row { pos ->
-                                ToggleSettingRow(
-                                    position = pos,
+                    when (surfaceMode) {
+                        EditorSurfaceMode.Embedded, EditorSurfaceMode.Fullscreen -> {
+                            PlayerPreviewCanvas(
+                                layout = activeLayout,
+                                isFullscreen = editingFullscreen,
+                                showCenterControls = layoutPrefs.showCenterControlsOnTouch,
+                                seekButtonSeconds = layoutPrefs.seekButtonSeconds,
+                                selection = selection,
+                                dragState = dragState,
+                                dropTarget = currentDropTarget,
+                                onSelect = { selection = it },
+                                onFinishDrag = finishDrag,
+                            )
+
+                            SelectionInspectorStrip(
+                                layoutMode = layoutMode,
+                                layout = activeLayout,
+                                layoutPrefs = layoutPrefs,
+                                selection = selection,
+                                onSelect = { selection = it },
+                                onUpdateLayout = onUpdateLayout,
+                            )
+
+                            ControlPaletteTray(
+                                layout = activeLayout,
+                                isFullscreen = editingFullscreen,
+                                showCenterControls = layoutPrefs.showCenterControlsOnTouch,
+                                seekButtonSeconds = layoutPrefs.seekButtonSeconds,
+                                dragState = dragState,
+                                dropTarget = currentDropTarget,
+                                onFinishDrag = finishDrag,
+                                onQuickAddControl = { controlId ->
+                                    val targetBar = if (
+                                        editingFullscreen &&
+                                        controlId in listOf(
+                                            PlayerControlId.Title,
+                                            PlayerControlId.SystemStatus,
+                                            PlayerControlId.Lock,
+                                        )
+                                    ) {
+                                        PlayerBarSlot.Top
+                                    } else {
+                                        PlayerBarSlot.Bottom
+                                    }
+                                    onUpdateLayout { prefs ->
+                                        prefs.updateLayout(layoutMode) {
+                                            it.addToBar(
+                                                targetBar,
+                                                PlayerPanelItem.Control(controlId),
+                                                layoutMode.isFullscreen,
+                                            )
+                                        }
+                                    }
+                                },
+                                onQuickAddSpacer = {
+                                    val nextIdx = activeLayout.itemsFor(PlayerBarSlot.Bottom).size
+                                    onUpdateLayout { prefs ->
+                                        prefs.updateLayout(layoutMode) {
+                                            it.addToBar(
+                                                PlayerBarSlot.Bottom,
+                                                PlayerPanelItem.Spacer,
+                                                layoutMode.isFullscreen,
+                                            )
+                                        }
+                                    }
+                                    selection = PreviewSelection.PanelItem(PlayerBarSlot.Bottom, nextIdx)
+                                },
+                            )
+
+                            PresetChipsRow(
+                                current = layoutPrefs,
+                                onApplyPreset = { preset -> onUpdateLayout { PlayerLayoutPrefs.preset(preset) } },
+                            )
+
+                            Surface(
+                                shape = MaterialTheme.shapes.large,
+                                color = MaterialTheme.colorScheme.surfaceContainer,
+                                modifier = Modifier.fillMaxWidth(),
+                            ) {
+                                PlainToggleRow(
                                     icon = Icons.Filled.PlayArrow,
                                     title = stringResource(Res.string.player_custom_show_center_on_touch),
                                     subtitle = stringResource(Res.string.player_custom_show_center_on_touch_subtitle),
@@ -684,130 +650,66 @@ fun PlayerCustomizationPage(
                                     onCheckedChange = { enabled ->
                                         onUpdateLayout { prefs -> prefs.copy(showCenterControlsOnTouch = enabled) }
                                     },
+                                    modifier = Modifier.padding(horizontal = Spacing.Comfortable, vertical = Spacing.Cozy),
                                 )
                             }
                         }
 
-                        SelectionInspectorCard(
-                            layoutMode = layoutMode,
-                            layout = activeLayout,
-                            layoutPrefs = layoutPrefs,
-                            selection = selection,
-                            onSelect = { selection = it },
-                            onUpdateLayout = onUpdateLayout,
-                        )
-
-                        PanelQuickAddCard(
-                            isFullscreen = editingFullscreen,
-                            onAddControl = { bar -> addControlTargetBar = bar },
-                            onAddSpacer = { bar ->
-                                val nextIdx = activeLayout.itemsFor(bar).size
-                                onUpdateLayout { prefs ->
-                                    prefs.updateLayout(layoutMode) {
-                                        it.addToBar(bar, PlayerPanelItem.Spacer, layoutMode.isFullscreen)
-                                    }
-                                }
-                                selection = PreviewSelection.PanelItem(bar, nextIdx)
-                            },
-                        )
-                    }
-                }
-            }
-        }
-
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .onGloballyPositioned { dragState.rootOriginInWindow = it.positionInWindow() },
-        ) {
-            if (useTwoPane) {
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(Spacing.Comfortable),
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padScaffoldExceptBottom(insets)
-                        .padding(horizontal = Spacing.Comfortable, vertical = Spacing.Cozy),
-                ) {
-                    previewPane(
-                        Modifier
-                            .weight(1.05f)
-                            .fillMaxHeight()
-                            .verticalScroll(rememberScrollState())
-                            .padding(bottom = Spacing.Spacious + navigationBarsBottom()),
-                    )
-                    editorPane(
-                        Modifier
-                            .weight(1f)
-                            .fillMaxHeight()
-                            .verticalScroll(rememberScrollState())
-                            .padding(bottom = Spacing.Spacious + navigationBarsBottom()),
-                    )
-                }
-            } else {
-                AdaptiveContent(
-                    modifier = Modifier.fillMaxSize().padScaffoldExceptBottom(insets),
-                    maxWidth = Breakpoints.ReadableWidth,
-                ) {
-                    Column(modifier = Modifier.fillMaxSize()) {
-                        // 窄屏下 16:9 预览画布与形态切换固定在顶部，下方编辑器独立滚动。
-                        Column(
-                            verticalArrangement = Arrangement.spacedBy(Spacing.Tight),
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = Spacing.Comfortable, vertical = Spacing.Tight),
-                        ) {
-                            SurfaceModeToggleGroup(
-                                surfaceMode = surfaceMode,
-                                onSurfaceModeChange = { surfaceMode = it },
-                                modifier = Modifier.fillMaxWidth(),
+                        EditorSurfaceMode.Listen -> {
+                            ListenPreviewCanvas(
+                                config = layoutPrefs.listen,
+                                selectedSection = listenSection,
+                                selectedSlot = selectedListenSlot,
+                                onSelectSection = { listenSection = it },
+                                onSelectSlot = { pos ->
+                                    selectedListenSlot = pos
+                                    listenSection = ListenEditorSection.SideSlot
+                                },
                             )
-                            when (surfaceMode) {
-                                EditorSurfaceMode.Listen -> ListenPreviewCanvas(
-                                    config = layoutPrefs.listen,
-                                    selectedSection = listenSection,
-                                    selectedSlot = selectedListenSlot,
-                                    onSelectSection = { listenSection = it },
-                                    onSelectSlot = { pos ->
-                                        selectedListenSlot = pos
-                                        listenSection = ListenEditorSection.SideSlot
-                                    },
-                                )
-                                EditorSurfaceMode.Gestures -> GesturePreviewCanvas(
-                                    state = state,
-                                    layoutPrefs = layoutPrefs,
-                                )
-                                EditorSurfaceMode.Embedded, EditorSurfaceMode.Fullscreen -> PlayerPreviewCanvas(
-                                    layout = activeLayout,
-                                    isFullscreen = editingFullscreen,
-                                    showCenterControls = layoutPrefs.showCenterControlsOnTouch,
-                                    seekButtonSeconds = layoutPrefs.seekButtonSeconds,
-                                    selection = selection,
-                                    dragState = dragState,
-                                    dropTarget = currentDropTarget,
-                                    onSelect = { selection = it },
-                                    onFinishDrag = finishDrag,
-                                )
-                            }
+                            Text(
+                                text = stringResource(Res.string.player_custom_listen_preview_hint),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            ListenCustomizationCards(
+                                config = layoutPrefs.listen,
+                                seekButtonSeconds = layoutPrefs.seekButtonSeconds,
+                                selectedSection = listenSection,
+                                selectedSlot = selectedListenSlot,
+                                onSelectSection = { listenSection = it },
+                                onSelectSlot = { pos ->
+                                    selectedListenSlot = pos
+                                    listenSection = ListenEditorSection.SideSlot
+                                },
+                                onUpdateLayout = onUpdateLayout,
+                            )
+                            PresetChipsRow(
+                                current = layoutPrefs,
+                                onApplyPreset = { preset -> onUpdateLayout { PlayerLayoutPrefs.preset(preset) } },
+                            )
                         }
-                        Column(
-                            verticalArrangement = Arrangement.spacedBy(Spacing.Cozy),
-                            modifier = Modifier
-                                .weight(1f)
-                                .fillMaxWidth()
-                                .verticalScroll(rememberScrollState())
-                                .padding(horizontal = Spacing.Comfortable)
-                                .padding(top = Spacing.Tight, bottom = Spacing.Spacious + navigationBarsBottom()),
-                        ) {
-                            if (!isListenMode && !isGestureMode) {
-                                paletteTray()
-                            }
-                            if (!isGestureMode) {
-                                PresetChipsRow(
-                                    current = layoutPrefs,
-                                    onApplyPreset = { preset -> onUpdateLayout { PlayerLayoutPrefs.preset(preset) } },
-                                )
-                            }
-                            editorPane(Modifier.fillMaxWidth())
+
+                        EditorSurfaceMode.Gestures -> {
+                            GesturePreviewCanvas(
+                                state = state,
+                                layoutPrefs = layoutPrefs,
+                            )
+                            Text(
+                                text = stringResource(Res.string.player_custom_gesture_preview_hint),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            GestureCustomizationCards(
+                                state = state,
+                                layoutPrefs = layoutPrefs,
+                                onUpdateLayout = onUpdateLayout,
+                                onDoubleTapSeekChange = onDoubleTapSeekChange,
+                                onLongPressSpeedChange = onLongPressSpeedChange,
+                                onLongPressSpeedDialChange = onLongPressSpeedDialChange,
+                                onDefaultHoldSpeedChange = onDefaultHoldSpeedChange,
+                                onSwipeSeekChange = onSwipeSeekChange,
+                                onSwipeBrightnessVolumeChange = onSwipeBrightnessVolumeChange,
+                            )
                         }
                     }
                 }
@@ -827,30 +729,6 @@ fun PlayerCustomizationPage(
                     removing = removing,
                 )
             }
-        }
-    }
-
-    val targetBar = addControlTargetBar
-    if (targetBar != null) {
-        PaneSheet(
-            onDismissRequest = { addControlTargetBar = null },
-            title = stringResource(
-                if (targetBar == PlayerBarSlot.Top) Res.string.player_custom_top_bar else Res.string.player_custom_bottom_bar,
-            ),
-        ) {
-            AddControlPickerContent(
-                targetBar = targetBar,
-                isFullscreen = editingFullscreen,
-                layout = activeLayout,
-                onPick = { controlId ->
-                    onUpdateLayout { prefs ->
-                        prefs.updateLayout(layoutMode) {
-                            it.addToBar(targetBar, PlayerPanelItem.Control(controlId), layoutMode.isFullscreen)
-                        }
-                    }
-                    addControlTargetBar = null
-                },
-            )
         }
     }
 }
@@ -1588,6 +1466,129 @@ private fun PresetChipsRow(
     }
 }
 
+private data class PreviewDensity(
+    val barHorizontalPadding: Dp,
+    val barMinHeight: Dp,
+    val barItemSpacing: Dp,
+    val chipPaddingH: Dp,
+    val chipPaddingV: Dp,
+    val iconContainerSize: Dp,
+    val iconSize: Dp,
+    val pillPaddingH: Dp,
+    val pillPaddingV: Dp,
+    val pillFontSize: TextUnit,
+    val badgeIconSize: Dp,
+    val timeText: String,
+    val timeMinWidth: Dp,
+    val titleMaxWidth: Dp,
+    val titleFontSize: TextUnit,
+    val spacerMinWidth: Dp,
+    val spacerHeight: Dp,
+    val centerPlayOuterSize: Dp,
+    val centerPlayInnerSize: Dp,
+    val centerPlayIconSize: Dp,
+    val centerSideBaseSize: Dp,
+    val centerSpacing: Dp,
+)
+
+private fun previewDensityFor(canvasWidth: Dp): PreviewDensity = when {
+    canvasWidth >= 600.dp -> PreviewDensity(
+        barHorizontalPadding = 8.dp,
+        barMinHeight = 36.dp,
+        barItemSpacing = 3.dp,
+        chipPaddingH = 2.dp,
+        chipPaddingV = 2.dp,
+        iconContainerSize = 26.dp,
+        iconSize = 16.dp,
+        pillPaddingH = 6.dp,
+        pillPaddingV = 2.dp,
+        pillFontSize = 11.sp,
+        badgeIconSize = 14.dp,
+        timeText = "1:23 / 12:34",
+        timeMinWidth = 68.dp,
+        titleMaxWidth = 140.dp,
+        titleFontSize = 12.sp,
+        spacerMinWidth = 12.dp,
+        spacerHeight = 26.dp,
+        centerPlayOuterSize = 46.dp,
+        centerPlayInnerSize = 40.dp,
+        centerPlayIconSize = 22.dp,
+        centerSideBaseSize = 42.dp,
+        centerSpacing = 8.dp,
+    )
+    canvasWidth >= 420.dp -> PreviewDensity(
+        barHorizontalPadding = 6.dp,
+        barMinHeight = 30.dp,
+        barItemSpacing = 2.dp,
+        chipPaddingH = 1.dp,
+        chipPaddingV = 1.dp,
+        iconContainerSize = 22.dp,
+        iconSize = 14.dp,
+        pillPaddingH = 4.dp,
+        pillPaddingV = 1.5.dp,
+        pillFontSize = 10.sp,
+        badgeIconSize = 12.dp,
+        timeText = "1:23 / 12:34",
+        timeMinWidth = 58.dp,
+        titleMaxWidth = 96.dp,
+        titleFontSize = 11.sp,
+        spacerMinWidth = 8.dp,
+        spacerHeight = 22.dp,
+        centerPlayOuterSize = 40.dp,
+        centerPlayInnerSize = 34.dp,
+        centerPlayIconSize = 20.dp,
+        centerSideBaseSize = 36.dp,
+        centerSpacing = 6.dp,
+    )
+    else -> PreviewDensity(
+        barHorizontalPadding = 4.dp,
+        barMinHeight = 26.dp,
+        barItemSpacing = 1.dp,
+        chipPaddingH = 1.dp,
+        chipPaddingV = 1.dp,
+        iconContainerSize = 19.dp,
+        iconSize = 12.dp,
+        pillPaddingH = 3.dp,
+        pillPaddingV = 1.dp,
+        pillFontSize = 8.5.sp,
+        badgeIconSize = 10.dp,
+        timeText = "1:23/12:34",
+        timeMinWidth = 44.dp,
+        titleMaxWidth = 72.dp,
+        titleFontSize = 10.sp,
+        spacerMinWidth = 8.dp,
+        spacerHeight = 19.dp,
+        centerPlayOuterSize = 34.dp,
+        centerPlayInnerSize = 29.dp,
+        centerPlayIconSize = 17.dp,
+        centerSideBaseSize = 31.dp,
+        centerSpacing = 4.dp,
+    )
+}
+
+private fun estimateBarMinWidth(items: List<PlayerPanelItem>, density: PreviewDensity): Dp {
+    if (items.isEmpty()) return 0.dp
+    var total = density.barItemSpacing * (items.size - 1)
+    val chipPad = density.chipPaddingH * 2
+    for (item in items) {
+        total += when (item) {
+            PlayerPanelItem.Spacer -> density.spacerMinWidth
+            is PlayerPanelItem.Control -> when (item.id) {
+                PlayerControlId.Title -> density.titleMaxWidth + chipPad
+                PlayerControlId.SystemStatus -> 76.dp + chipPad
+                PlayerControlId.TimeLabel -> density.timeMinWidth + chipPad
+                PlayerControlId.Speed -> density.pillPaddingH * 2 + 24.dp + chipPad
+                PlayerControlId.Quality -> density.pillPaddingH * 2 + 30.dp + chipPad
+                PlayerControlId.Audio -> density.pillPaddingH * 2 + 32.dp + chipPad
+                PlayerControlId.SeekBackward, PlayerControlId.SeekForward ->
+                    density.pillPaddingH * 2 + density.badgeIconSize + 18.dp + chipPad
+                else -> density.iconContainerSize + chipPad
+            }
+        }
+    }
+    return total
+}
+
 @Composable
 private fun PlayerPreviewCanvas(
     layout: PlayerFormFactorLayout,
@@ -1607,7 +1608,6 @@ private fun PlayerPreviewCanvas(
             network = NetworkKind.Wifi,
         )
     }
-    val latestFinishDrag by rememberUpdatedState(onFinishDrag)
     val activePlaced = dragState.activeDrag?.payload as? DragPayload.PlacedBarItem
     val topBarDropIndex = (dropTarget as? DropTarget.BarInsert)
         ?.takeIf { it.bar == PlayerBarSlot.Top }?.insertIndex
@@ -1616,11 +1616,13 @@ private fun PlayerPreviewCanvas(
     val hoveredCenterSlot = (dropTarget as? DropTarget.CenterSlot)?.position
 
     PlayerTheme {
-        Box(
+        BoxWithConstraints(
             modifier = Modifier
                 .fillMaxWidth()
                 .aspectRatio(16f / 9f)
-                .onGloballyPositioned { dragState.previewCanvasBounds = it.boundsInWindow() }
+                .onGloballyPositioned { coords ->
+                    if (coords.isAttached) dragState.previewCanvasBounds = coords.boundsInWindow()
+                }
                 .clip(MaterialTheme.shapes.large)
                 .background(
                     Brush.linearGradient(
@@ -1629,82 +1631,37 @@ private fun PlayerPreviewCanvas(
                 )
                 .border(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f), MaterialTheme.shapes.large),
         ) {
+            val density = previewDensityFor(maxWidth)
+            val availableBarWidth = (maxWidth - density.barHorizontalPadding * 2).coerceAtLeast(120.dp)
+
             // 顶栏预览（支持直接拖拽重排、跨栏放置与实时插入指示线）
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(2.dp),
+            PreviewControlBar(
+                bar = PlayerBarSlot.Top,
+                items = layout.topBar,
+                isFullscreen = isFullscreen,
+                seekButtonSeconds = seekButtonSeconds,
+                sampleStatus = sampleStatus,
+                density = density,
+                availableWidth = availableBarWidth,
+                selection = selection,
+                activePlaced = activePlaced,
+                dropIndex = topBarDropIndex,
+                dragState = dragState,
+                onSelect = onSelect,
+                onFinishDrag = onFinishDrag,
+                onBarBounds = { dragState.topBarBounds = it },
                 modifier = Modifier
                     .align(Alignment.TopCenter)
                     .fillMaxWidth()
-                    .heightIn(min = 34.dp)
-                    .onGloballyPositioned { dragState.topBarBounds = it.boundsInWindow() }
                     .background(Brush.verticalGradient(listOf(ControlScrimBottom, Color.Transparent)))
-                    .then(
-                        if (topBarDropIndex != null) {
-                            Modifier.border(1.5.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.75f), RoundedCornerShape(8.dp))
-                        } else {
-                            Modifier
-                        },
-                    )
-                    .padding(horizontal = Spacing.Tight, vertical = Spacing.Hair),
-            ) {
-                layout.topBar.forEachIndexed { index, item ->
-                    if (topBarDropIndex == index) {
-                        BarInsertionIndicator()
-                    }
-                    val isSelected = selection == PreviewSelection.PanelItem(PlayerBarSlot.Top, index)
-                    val isBeingDragged = activePlaced?.bar == PlayerBarSlot.Top && activePlaced.index == index
-                    val canDrag = !(isFullscreen && item is PlayerPanelItem.Control && item.id == PlayerControlId.Back)
-                    var itemOrigin by remember { mutableStateOf(Offset.Zero) }
-                    PreviewPanelItemChip(
-                        item = item,
-                        isFullscreen = isFullscreen,
-                        seekButtonSeconds = seekButtonSeconds,
-                        sampleStatus = sampleStatus,
-                        selected = isSelected,
-                        onClick = { onSelect(PreviewSelection.PanelItem(PlayerBarSlot.Top, index)) },
-                        modifier = (if (item == PlayerPanelItem.Spacer) Modifier.weight(1f) else Modifier)
-                            .alpha(if (isBeingDragged) 0.32f else 1f)
-                            .onGloballyPositioned { coords ->
-                                itemOrigin = coords.positionInWindow()
-                                dragState.barItemBounds[PlayerBarSlot.Top to index] = coords.boundsInWindow()
-                            }
-                            .then(
-                                if (canDrag) {
-                                    Modifier.pointerInput(PlayerBarSlot.Top, index, item) {
-                                        var pointerWindow = Offset.Zero
-                                        detectDragGestures(
-                                            onDragStart = { startOffset ->
-                                                pointerWindow = itemOrigin + startOffset
-                                                dragState.startDrag(
-                                                    DragPayload.PlacedBarItem(PlayerBarSlot.Top, index, item),
-                                                    pointerWindow,
-                                                )
-                                            },
-                                            onDrag = { change, dragAmount ->
-                                                change.consume()
-                                                pointerWindow += dragAmount
-                                                dragState.updateDrag(pointerWindow)
-                                            },
-                                            onDragEnd = { latestFinishDrag() },
-                                            onDragCancel = { dragState.cancelDrag() },
-                                        )
-                                    }
-                                } else {
-                                    Modifier
-                                },
-                            ),
-                    )
-                }
-                if (topBarDropIndex == layout.topBar.size) {
-                    BarInsertionIndicator()
-                }
-            }
+                    .padding(horizontal = density.barHorizontalPadding, vertical = Spacing.Hair),
+            )
 
             // 中央控件簇预览（触控中央控件开启时显示，含虚线圆框占位与拖放高亮）
             if (showCenterControls) {
                 PreviewCenterCluster(
                     config = layout.center,
+                    density = density,
                     selectedSlot = (selection as? PreviewSelection.CenterSlot)?.position,
                     dropTargetSlot = hoveredCenterSlot,
                     onSelectSlot = { onSelect(PreviewSelection.CenterSlot(it)) },
@@ -1720,53 +1677,124 @@ private fun PlayerPreviewCanvas(
                     .align(Alignment.BottomCenter)
                     .fillMaxWidth()
                     .background(Brush.verticalGradient(listOf(Color.Transparent, ControlScrimBottom)))
-                    .padding(horizontal = Spacing.Tight, vertical = Spacing.Hair),
+                    .padding(horizontal = density.barHorizontalPadding, vertical = Spacing.Hair),
             ) {
                 if (isFullscreen) {
                     PreviewSeekTrack(modifier = Modifier.fillMaxWidth().padding(horizontal = Spacing.Hair))
                 }
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(2.dp),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .heightIn(min = 32.dp)
-                        .onGloballyPositioned { dragState.bottomBarBounds = it.boundsInWindow() }
-                        .then(
-                            if (bottomBarDropIndex != null) {
-                                Modifier.border(1.5.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.75f), RoundedCornerShape(8.dp))
-                            } else {
-                                Modifier
-                            },
-                        ),
-                ) {
-                    layout.bottomBar.forEachIndexed { index, item ->
-                        if (bottomBarDropIndex == index) {
-                            BarInsertionIndicator()
+                PreviewControlBar(
+                    bar = PlayerBarSlot.Bottom,
+                    items = layout.bottomBar,
+                    isFullscreen = isFullscreen,
+                    seekButtonSeconds = seekButtonSeconds,
+                    sampleStatus = sampleStatus,
+                    density = density,
+                    availableWidth = availableBarWidth,
+                    selection = selection,
+                    activePlaced = activePlaced,
+                    dropIndex = bottomBarDropIndex,
+                    dragState = dragState,
+                    onSelect = onSelect,
+                    onFinishDrag = onFinishDrag,
+                    onBarBounds = { dragState.bottomBarBounds = it },
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun PreviewControlBar(
+    bar: PlayerBarSlot,
+    items: List<PlayerPanelItem>,
+    isFullscreen: Boolean,
+    seekButtonSeconds: Int,
+    sampleStatus: PlayerSystemStatus,
+    density: PreviewDensity,
+    availableWidth: Dp,
+    selection: PreviewSelection,
+    activePlaced: DragPayload.PlacedBarItem?,
+    dropIndex: Int?,
+    dragState: PlayerEditorDragState,
+    onSelect: (PreviewSelection) -> Unit,
+    onFinishDrag: () -> Unit,
+    onBarBounds: (Rect) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val latestFinishDrag by rememberUpdatedState(onFinishDrag)
+    val overflowScroll = estimateBarMinWidth(items, density) > availableWidth
+    val scrollMod = if (overflowScroll) Modifier.horizontalScroll(rememberScrollState()) else Modifier
+
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(density.barItemSpacing),
+        modifier = modifier
+            .heightIn(min = density.barMinHeight)
+            .onGloballyPositioned { coords ->
+                if (coords.isAttached) onBarBounds(coords.boundsInWindow())
+            }
+            .then(
+                if (dropIndex != null) {
+                    Modifier.border(
+                        1.5.dp,
+                        MaterialTheme.colorScheme.primary.copy(alpha = 0.75f),
+                        RoundedCornerShape(8.dp),
+                    )
+                } else {
+                    Modifier
+                },
+            )
+            .then(scrollMod),
+    ) {
+        items.forEachIndexed { index, item ->
+            if (dropIndex == index) {
+                BarInsertionIndicator(height = density.spacerHeight)
+            }
+            key(bar, index) {
+                val isSelected = selection == PreviewSelection.PanelItem(bar, index)
+                val isBeingDragged = activePlaced?.bar == bar && activePlaced.index == index
+                val canDrag = !(
+                    isFullscreen &&
+                        bar == PlayerBarSlot.Top &&
+                        item is PlayerPanelItem.Control &&
+                        item.id == PlayerControlId.Back
+                    )
+                val originRef = remember { OffsetRef() }
+                val spacerSizeMod = if (item == PlayerPanelItem.Spacer) {
+                    if (overflowScroll) {
+                        Modifier.width(density.spacerMinWidth.coerceAtLeast(18.dp))
+                    } else {
+                        Modifier.weight(1f)
+                    }
+                } else {
+                    Modifier
+                }
+                PreviewPanelItemChip(
+                    item = item,
+                    isFullscreen = isFullscreen,
+                    seekButtonSeconds = seekButtonSeconds,
+                    sampleStatus = sampleStatus,
+                    density = density,
+                    selected = isSelected,
+                    onClick = { onSelect(PreviewSelection.PanelItem(bar, index)) },
+                    modifier = spacerSizeMod
+                        .alpha(if (isBeingDragged) 0.32f else 1f)
+                        .onGloballyPositioned { coords ->
+                            if (coords.isAttached) {
+                                originRef.value = coords.positionInWindow()
+                                dragState.barItemBounds[bar to index] = coords.boundsInWindow()
+                            }
                         }
-                        val isSelected = selection == PreviewSelection.PanelItem(PlayerBarSlot.Bottom, index)
-                        val isBeingDragged = activePlaced?.bar == PlayerBarSlot.Bottom && activePlaced.index == index
-                        var itemOrigin by remember { mutableStateOf(Offset.Zero) }
-                        PreviewPanelItemChip(
-                            item = item,
-                            isFullscreen = isFullscreen,
-                            seekButtonSeconds = seekButtonSeconds,
-                            sampleStatus = sampleStatus,
-                            selected = isSelected,
-                            onClick = { onSelect(PreviewSelection.PanelItem(PlayerBarSlot.Bottom, index)) },
-                            modifier = (if (item == PlayerPanelItem.Spacer) Modifier.weight(1f) else Modifier)
-                                .alpha(if (isBeingDragged) 0.32f else 1f)
-                                .onGloballyPositioned { coords ->
-                                    itemOrigin = coords.positionInWindow()
-                                    dragState.barItemBounds[PlayerBarSlot.Bottom to index] = coords.boundsInWindow()
-                                }
-                                .pointerInput(PlayerBarSlot.Bottom, index, item) {
+                        .then(
+                            if (canDrag) {
+                                Modifier.pointerInput(bar, index, item) {
                                     var pointerWindow = Offset.Zero
                                     detectDragGestures(
                                         onDragStart = { startOffset ->
-                                            pointerWindow = itemOrigin + startOffset
+                                            pointerWindow = originRef.value + startOffset
                                             dragState.startDrag(
-                                                DragPayload.PlacedBarItem(PlayerBarSlot.Bottom, index, item),
+                                                DragPayload.PlacedBarItem(bar, index, item),
                                                 pointerWindow,
                                             )
                                         },
@@ -1778,24 +1806,26 @@ private fun PlayerPreviewCanvas(
                                         onDragEnd = { latestFinishDrag() },
                                         onDragCancel = { dragState.cancelDrag() },
                                     )
-                                },
-                        )
-                    }
-                    if (bottomBarDropIndex == layout.bottomBar.size) {
-                        BarInsertionIndicator()
-                    }
-                }
+                                }
+                            } else {
+                                Modifier
+                            },
+                        ),
+                )
             }
+        }
+        if (dropIndex == items.size) {
+            BarInsertionIndicator(height = density.spacerHeight)
         }
     }
 }
 
 @Composable
-private fun BarInsertionIndicator() {
+private fun BarInsertionIndicator(height: Dp = 24.dp) {
     Box(
         modifier = Modifier
             .width(3.dp)
-            .height(24.dp)
+            .height(height)
             .clip(CircleShape)
             .background(MaterialTheme.colorScheme.primary),
     )
@@ -1804,6 +1834,7 @@ private fun BarInsertionIndicator() {
 @Composable
 private fun PreviewCenterCluster(
     config: CenterClusterConfig,
+    density: PreviewDensity,
     selectedSlot: CenterSlotPosition?,
     dropTargetSlot: CenterSlotPosition?,
     onSelectSlot: (CenterSlotPosition) -> Unit,
@@ -1813,12 +1844,13 @@ private fun PreviewCenterCluster(
     val highlight = MaterialTheme.colorScheme.primary
     Row(
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
+        horizontalArrangement = Arrangement.spacedBy(density.centerSpacing),
         modifier = modifier,
     ) {
         PreviewCenterSideSlot(
             position = CenterSlotPosition.OuterLeft,
             slot = config.outerLeft,
+            baseSize = density.centerSideBaseSize,
             selected = selectedSlot == CenterSlotPosition.OuterLeft,
             dropHighlighted = dropTargetSlot == CenterSlotPosition.OuterLeft,
             onSelect = { onSelectSlot(CenterSlotPosition.OuterLeft) },
@@ -1827,6 +1859,7 @@ private fun PreviewCenterCluster(
         PreviewCenterSideSlot(
             position = CenterSlotPosition.InnerLeft,
             slot = config.innerLeft,
+            baseSize = density.centerSideBaseSize,
             selected = selectedSlot == CenterSlotPosition.InnerLeft,
             dropHighlighted = dropTargetSlot == CenterSlotPosition.InnerLeft,
             onSelect = { onSelectSlot(CenterSlotPosition.InnerLeft) },
@@ -1837,7 +1870,7 @@ private fun PreviewCenterCluster(
         Box(
             contentAlignment = Alignment.Center,
             modifier = Modifier
-                .size(44.dp)
+                .size(density.centerPlayOuterSize)
                 .clip(CircleShape)
                 .then(if (centerSelected) Modifier.border(2.dp, highlight, CircleShape) else Modifier)
                 .clickable { onSelectSlot(CenterSlotPosition.Center) }
@@ -1847,7 +1880,7 @@ private fun PreviewCenterCluster(
                 Box(
                     contentAlignment = Alignment.Center,
                     modifier = Modifier
-                        .size(38.dp)
+                        .size(density.centerPlayInnerSize)
                         .clip(CircleShape)
                         .background(highlight),
                 ) {
@@ -1855,27 +1888,30 @@ private fun PreviewCenterCluster(
                         imageVector = Icons.Filled.PlayArrow,
                         contentDescription = null,
                         tint = MaterialTheme.colorScheme.onPrimary,
-                        modifier = Modifier.size(22.dp),
+                        modifier = Modifier.size(density.centerPlayIconSize),
                     )
                 }
             } else {
                 val strokeColor = if (centerSelected) highlight else FixedColors.OnMedia.copy(alpha = 0.45f)
-                Canvas(modifier = Modifier.size(38.dp)) {
+                Canvas(modifier = Modifier.size(density.centerPlayInnerSize)) {
                     val strokePx = (if (centerSelected) 2.dp else 1.2.dp).toPx()
-                    drawCircle(
-                        color = strokeColor,
-                        radius = (size.minDimension - strokePx) / 2f,
-                        style = Stroke(
-                            width = strokePx,
-                            pathEffect = PathEffect.dashPathEffect(floatArrayOf(8f, 6f), 0f),
-                        ),
-                    )
+                    val radius = (size.minDimension - strokePx) / 2f
+                    if (radius > 0f) {
+                        drawCircle(
+                            color = strokeColor,
+                            radius = radius,
+                            style = Stroke(
+                                width = strokePx,
+                                pathEffect = PathEffect.dashPathEffect(floatArrayOf(8f, 6f), 0f),
+                            ),
+                        )
+                    }
                 }
                 Icon(
                     imageVector = Icons.Filled.PlayArrow,
                     contentDescription = null,
                     tint = strokeColor,
-                    modifier = Modifier.size(18.dp),
+                    modifier = Modifier.size((density.centerPlayIconSize - 4.dp).coerceAtLeast(14.dp)),
                 )
             }
         }
@@ -1883,6 +1919,7 @@ private fun PreviewCenterCluster(
         PreviewCenterSideSlot(
             position = CenterSlotPosition.InnerRight,
             slot = config.innerRight,
+            baseSize = density.centerSideBaseSize,
             selected = selectedSlot == CenterSlotPosition.InnerRight,
             dropHighlighted = dropTargetSlot == CenterSlotPosition.InnerRight,
             onSelect = { onSelectSlot(CenterSlotPosition.InnerRight) },
@@ -1891,6 +1928,7 @@ private fun PreviewCenterCluster(
         PreviewCenterSideSlot(
             position = CenterSlotPosition.OuterRight,
             slot = config.outerRight,
+            baseSize = density.centerSideBaseSize,
             selected = selectedSlot == CenterSlotPosition.OuterRight,
             dropHighlighted = dropTargetSlot == CenterSlotPosition.OuterRight,
             onSelect = { onSelectSlot(CenterSlotPosition.OuterRight) },
@@ -1903,14 +1941,17 @@ private fun PreviewCenterCluster(
 private fun PreviewCenterSideSlot(
     position: CenterSlotPosition,
     slot: CenterSlotConfig,
+    baseSize: Dp,
     selected: Boolean,
     dropHighlighted: Boolean,
     onSelect: () -> Unit,
     onBounds: (Rect) -> Unit,
 ) {
     val highlight = MaterialTheme.colorScheme.primary
-    val diameter = (42.dp * slot.scale.ratio).coerceIn(24.dp, 38.dp)
-    val boundsMod = Modifier.onGloballyPositioned { onBounds(it.boundsInWindow()) }
+    val diameter = (baseSize * slot.scale.ratio).coerceIn(20.dp, 38.dp)
+    val boundsMod = Modifier.onGloballyPositioned { coords ->
+        if (coords.isAttached) onBounds(coords.boundsInWindow())
+    }
 
     if (slot.action == CenterSlotAction.None) {
         val strokeColor = when {
@@ -1930,20 +1971,23 @@ private fun PreviewCenterSideSlot(
         ) {
             Canvas(modifier = Modifier.fillMaxSize()) {
                 val strokePx = strokeWidth.toPx()
-                drawCircle(
-                    color = strokeColor,
-                    radius = (size.minDimension - strokePx) / 2f,
-                    style = Stroke(
-                        width = strokePx,
-                        pathEffect = PathEffect.dashPathEffect(floatArrayOf(6f, 5f), 0f),
-                    ),
-                )
+                val radius = (size.minDimension - strokePx) / 2f
+                if (radius > 0f) {
+                    drawCircle(
+                        color = strokeColor,
+                        radius = radius,
+                        style = Stroke(
+                            width = strokePx,
+                            pathEffect = PathEffect.dashPathEffect(floatArrayOf(6f, 5f), 0f),
+                        ),
+                    )
+                }
             }
             Icon(
                 imageVector = Icons.Filled.Add,
                 contentDescription = centerSlotLabel(position),
                 tint = strokeColor,
-                modifier = Modifier.size((diameter * 0.45f).coerceIn(11.dp, 16.dp)),
+                modifier = Modifier.size((diameter * 0.45f).coerceIn(10.dp, 16.dp)),
             )
         }
         return
@@ -1957,7 +2001,7 @@ private fun PreviewCenterSideSlot(
         CenterSlotAction.None -> Icons.Filled.Add
     }
     val secondsBadge = slot.action.seekSecondsOrNull()
-    val iconSize = (diameter * (if (secondsBadge != null) 0.42f else 0.56f)).coerceIn(11.dp, 18.dp)
+    val iconSize = (diameter * (if (secondsBadge != null) 0.42f else 0.56f)).coerceIn(10.dp, 18.dp)
     Box(
         contentAlignment = Alignment.Center,
         modifier = boundsMod
@@ -2044,7 +2088,9 @@ private fun ControlPaletteTray(
         },
         modifier = Modifier
             .fillMaxWidth()
-            .onGloballyPositioned { dragState.paletteBounds = it.boundsInWindow() }
+            .onGloballyPositioned { coords ->
+                if (coords.isAttached) dragState.paletteBounds = coords.boundsInWindow()
+            }
             .border(if (isRemovingHover) 2.dp else 1.dp, borderColor, shape),
     ) {
         Column(
@@ -2100,14 +2146,16 @@ private fun ControlPaletteTray(
                     onTap = onQuickAddSpacer,
                 )
                 for (id in unusedControls) {
-                    DraggablePaletteChip(
-                        icon = controlIcon(id, isFullscreen),
-                        label = controlLabel(id),
-                        payload = DragPayload.PaletteControl(id),
-                        dragState = dragState,
-                        onFinishDrag = onFinishDrag,
-                        onTap = { onQuickAddControl(id) },
-                    )
+                    key(id) {
+                        DraggablePaletteChip(
+                            icon = controlIcon(id, isFullscreen),
+                            label = controlLabel(id),
+                            payload = DragPayload.PaletteControl(id),
+                            dragState = dragState,
+                            onFinishDrag = onFinishDrag,
+                            onTap = { onQuickAddControl(id) },
+                        )
+                    }
                 }
                 if (unusedControls.isEmpty()) {
                     Text(
@@ -2179,13 +2227,15 @@ private fun DraggablePaletteChip(
     onTap: () -> Unit,
 ) {
     val latestFinishDrag by rememberUpdatedState(onFinishDrag)
-    var itemOrigin by remember { mutableStateOf(Offset.Zero) }
+    val originRef = remember { OffsetRef() }
     val shape = CircleShape
     Surface(
         shape = shape,
         color = MaterialTheme.colorScheme.surfaceContainerHigh,
         modifier = Modifier
-            .onGloballyPositioned { itemOrigin = it.positionInWindow() }
+            .onGloballyPositioned { coords ->
+                if (coords.isAttached) originRef.value = coords.positionInWindow()
+            }
             .clip(shape)
             .border(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f), shape)
             .clickable(onClick = onTap)
@@ -2194,7 +2244,7 @@ private fun DraggablePaletteChip(
                 var pointerWindow = Offset.Zero
                 detectDragGestures(
                     onDragStart = { startOffset ->
-                        pointerWindow = itemOrigin + startOffset
+                        pointerWindow = originRef.value + startOffset
                         dragState.startDrag(payload, pointerWindow)
                     },
                     onDrag = { change, dragAmount ->
@@ -2283,10 +2333,9 @@ private fun DragGhostOverlay(
         modifier = Modifier
             .zIndex(100f)
             .offset {
-                IntOffset(
-                    x = (pointerInRoot.x - 48f).roundToInt(),
-                    y = (pointerInRoot.y - 44f).roundToInt(),
-                )
+                val safeX = if (pointerInRoot.x.isFinite()) (pointerInRoot.x - 48f).roundToInt() else 0
+                val safeY = if (pointerInRoot.y.isFinite()) (pointerInRoot.y - 44f).roundToInt() else 0
+                IntOffset(x = safeX, y = safeY)
             },
     ) {
         Row(
@@ -2553,6 +2602,7 @@ private fun PreviewPanelItemChip(
     isFullscreen: Boolean,
     seekButtonSeconds: Int,
     sampleStatus: PlayerSystemStatus,
+    density: PreviewDensity,
     selected: Boolean,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
@@ -2561,35 +2611,41 @@ private fun PreviewPanelItemChip(
     val shape = RoundedCornerShape(8.dp)
     if (item == PlayerPanelItem.Spacer) {
         val strokeColor = if (selected) highlight else FixedColors.OnMedia.copy(alpha = 0.35f)
-        Box(
+        BoxWithConstraints(
             contentAlignment = Alignment.Center,
             modifier = modifier
-                .height(26.dp)
-                .widthIn(min = 24.dp)
+                .height(density.spacerHeight)
+                .widthIn(min = density.spacerMinWidth)
                 .clip(shape)
                 .clickable(onClick = onClick)
                 .pointerHoverIcon(PointerIcon.Hand),
         ) {
             Canvas(modifier = Modifier.fillMaxSize()) {
                 val strokePx = (if (selected) 2.dp else 1.dp).toPx()
-                drawRoundRect(
+                val rectW = size.width - strokePx
+                val rectH = size.height - strokePx
+                if (rectW > 0f && rectH > 0f) {
+                    drawRoundRect(
+                        color = strokeColor,
+                        topLeft = Offset(strokePx / 2f, strokePx / 2f),
+                        size = Size(rectW, rectH),
+                        cornerRadius = CornerRadius(6.dp.toPx(), 6.dp.toPx()),
+                        style = Stroke(
+                            width = strokePx,
+                            pathEffect = PathEffect.dashPathEffect(floatArrayOf(8f, 6f), 0f),
+                        ),
+                    )
+                }
+            }
+            if (maxWidth >= 22.dp) {
+                Text(
+                    text = stringResource(Res.string.player_custom_spacer_short),
+                    style = MaterialTheme.typography.labelSmall.copy(fontSize = density.pillFontSize),
                     color = strokeColor,
-                    topLeft = Offset(strokePx / 2f, strokePx / 2f),
-                    size = Size(size.width - strokePx, size.height - strokePx),
-                    cornerRadius = CornerRadius(6.dp.toPx(), 6.dp.toPx()),
-                    style = Stroke(
-                        width = strokePx,
-                        pathEffect = PathEffect.dashPathEffect(floatArrayOf(8f, 6f), 0f),
-                    ),
+                    maxLines = 1,
+                    overflow = TextOverflow.Clip,
                 )
             }
-            Text(
-                text = stringResource(Res.string.player_custom_spacer_short),
-                style = MaterialTheme.typography.labelSmall,
-                color = strokeColor,
-                maxLines = 1,
-                overflow = TextOverflow.Clip,
-            )
         }
         return
     }
@@ -2607,44 +2663,47 @@ private fun PreviewPanelItemChip(
             .then(borderMod)
             .clickable(onClick = onClick)
             .pointerHoverIcon(PointerIcon.Hand)
-            .padding(horizontal = 3.dp, vertical = 2.dp),
+            .padding(horizontal = density.chipPaddingH, vertical = density.chipPaddingV),
     ) {
         when (control.id) {
             PlayerControlId.Title -> Text(
                 text = stringResource(Res.string.player_custom_preview_title),
-                style = MaterialTheme.typography.labelMedium,
+                style = MaterialTheme.typography.labelMedium.copy(fontSize = density.titleFontSize),
                 color = FixedColors.OnMedia,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.widthIn(max = 110.dp),
+                modifier = Modifier.widthIn(max = density.titleMaxWidth),
             )
             PlayerControlId.SystemStatus -> PlayerStatusCluster(
                 status = sampleStatus,
                 showBackground = control.showBackground,
             )
             PlayerControlId.TimeLabel -> Text(
-                text = "01:23 / 12:34",
-                style = MaterialTheme.typography.labelSmall.tabular,
+                text = density.timeText,
+                style = MaterialTheme.typography.labelSmall.tabular.copy(fontSize = density.pillFontSize),
                 color = FixedColors.OnMedia,
                 maxLines = 1,
+                softWrap = false,
             )
-            PlayerControlId.Speed -> PreviewTextPill("1.0x", showBackground = control.showBackground)
-            PlayerControlId.Quality -> PreviewTextPill("1080P", showBackground = control.showBackground)
-            PlayerControlId.Audio -> PreviewTextPill("Hi-Res", showBackground = control.showBackground)
+            PlayerControlId.Speed -> PreviewTextPill("1.0x", density = density, showBackground = control.showBackground)
+            PlayerControlId.Quality -> PreviewTextPill("1080P", density = density, showBackground = control.showBackground)
+            PlayerControlId.Audio -> PreviewTextPill("Hi-Res", density = density, showBackground = control.showBackground)
             PlayerControlId.SeekBackward -> PreviewIconWithBadge(
                 Icons.Filled.FastRewind,
                 "${seekButtonSeconds}s",
+                density = density,
                 showBackground = control.showBackground,
             )
             PlayerControlId.SeekForward -> PreviewIconWithBadge(
                 Icons.Filled.FastForward,
                 "${seekButtonSeconds}s",
+                density = density,
                 showBackground = control.showBackground,
             )
             PlayerControlId.PlayPause -> Box(
                 contentAlignment = Alignment.Center,
                 modifier = Modifier
-                    .size(24.dp)
+                    .size(density.iconContainerSize)
                     .clip(CircleShape)
                     .background(MaterialTheme.colorScheme.primary),
             ) {
@@ -2652,13 +2711,13 @@ private fun PreviewPanelItemChip(
                     imageVector = Icons.Filled.PlayArrow,
                     contentDescription = controlLabel(control.id),
                     tint = MaterialTheme.colorScheme.onPrimary,
-                    modifier = Modifier.size(16.dp),
+                    modifier = Modifier.size(density.iconSize),
                 )
             }
             else -> Box(
                 contentAlignment = Alignment.Center,
                 modifier = Modifier
-                    .size(24.dp)
+                    .size(density.iconContainerSize)
                     .clip(CircleShape)
                     .background(if (control.showBackground) mediaControlContainer() else Color.Transparent),
             ) {
@@ -2666,7 +2725,7 @@ private fun PreviewPanelItemChip(
                     imageVector = controlIcon(control.id, isFullscreen),
                     contentDescription = controlLabel(control.id),
                     tint = FixedColors.OnMedia,
-                    modifier = Modifier.size(16.dp),
+                    modifier = Modifier.size(density.iconSize),
                 )
             }
         }
@@ -2674,43 +2733,62 @@ private fun PreviewPanelItemChip(
 }
 
 @Composable
-private fun PreviewTextPill(text: String, showBackground: Boolean = true) {
+private fun PreviewTextPill(
+    text: String,
+    density: PreviewDensity,
+    showBackground: Boolean = true,
+) {
+    val baseStyle = MaterialTheme.typography.labelSmall.tabular.copy(fontSize = density.pillFontSize)
     Text(
         text = text,
         style = if (showBackground) {
-            MaterialTheme.typography.labelSmall.tabular
+            baseStyle
         } else {
-            MaterialTheme.typography.labelSmall.tabular.copy(shadow = MediaBorderlessTextShadow)
+            baseStyle.copy(shadow = MediaBorderlessTextShadow)
         },
         color = FixedColors.OnMedia,
         maxLines = 1,
+        softWrap = false,
         modifier = Modifier
             .clip(CircleShape)
             .background(if (showBackground) mediaControlContainer() else Color.Transparent)
-            .padding(horizontal = if (showBackground) 6.dp else 3.dp, vertical = 2.dp),
+            .padding(
+                horizontal = if (showBackground) density.pillPaddingH else (density.pillPaddingH / 2),
+                vertical = density.pillPaddingV,
+            ),
     )
 }
 
 @Composable
-private fun PreviewIconWithBadge(icon: ImageVector, badge: String, showBackground: Boolean = true) {
+private fun PreviewIconWithBadge(
+    icon: ImageVector,
+    badge: String,
+    density: PreviewDensity,
+    showBackground: Boolean = true,
+) {
+    val baseStyle = MaterialTheme.typography.labelSmall.tabular.copy(fontSize = density.pillFontSize)
     Row(
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(2.dp),
+        horizontalArrangement = Arrangement.spacedBy(1.dp),
         modifier = Modifier
             .clip(CircleShape)
             .background(if (showBackground) mediaControlContainer() else Color.Transparent)
-            .padding(horizontal = if (showBackground) 5.dp else 2.dp, vertical = 2.dp),
+            .padding(
+                horizontal = if (showBackground) density.pillPaddingH else (density.pillPaddingH / 2),
+                vertical = density.pillPaddingV,
+            ),
     ) {
-        Icon(icon, contentDescription = null, tint = FixedColors.OnMedia, modifier = Modifier.size(14.dp))
+        Icon(icon, contentDescription = null, tint = FixedColors.OnMedia, modifier = Modifier.size(density.badgeIconSize))
         Text(
             badge,
             style = if (showBackground) {
-                MaterialTheme.typography.labelSmall.tabular
+                baseStyle
             } else {
-                MaterialTheme.typography.labelSmall.tabular.copy(shadow = MediaBorderlessTextShadow)
+                baseStyle.copy(shadow = MediaBorderlessTextShadow)
             },
             color = FixedColors.OnMedia,
             maxLines = 1,
+            softWrap = false,
         )
     }
 }
@@ -2720,9 +2798,54 @@ private fun supportsBackgroundToggle(id: PlayerControlId): Boolean = when (id) {
     else -> true
 }
 
+@Composable
+private fun PlainToggleRow(
+    icon: ImageVector,
+    title: String,
+    subtitle: String? = null,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(Spacing.Cozy),
+        modifier = modifier
+            .fillMaxWidth()
+            .clip(MaterialTheme.shapes.medium)
+            .clickable { onCheckedChange(!checked) }
+            .pointerHoverIcon(PointerIcon.Hand),
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(20.dp),
+        )
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = title,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+            if (subtitle != null) {
+                Text(
+                    text = subtitle,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+        Switch(
+            checked = checked,
+            onCheckedChange = onCheckedChange,
+        )
+    }
+}
+
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun SelectionInspectorCard(
+private fun SelectionInspectorStrip(
     layoutMode: PlayerLayoutMode,
     layout: PlayerFormFactorLayout,
     layoutPrefs: PlayerLayoutPrefs,
@@ -2730,59 +2853,314 @@ private fun SelectionInspectorCard(
     onSelect: (PreviewSelection) -> Unit,
     onUpdateLayout: ((PlayerLayoutPrefs) -> PlayerLayoutPrefs) -> Unit,
 ) {
-    val selectedTitle = when (selection) {
-        is PreviewSelection.CenterSlot -> centerSlotLabel(selection.position)
-        is PreviewSelection.PanelItem -> {
-            val item = layout.itemsFor(selection.bar).getOrNull(selection.index)
-            when (item) {
-                null -> ""
-                PlayerPanelItem.Spacer -> stringResource(Res.string.player_custom_spacer)
-                is PlayerPanelItem.Control -> controlLabel(item.id)
-            }
-        }
+    if (selection is PreviewSelection.PanelItem &&
+        layout.itemsFor(selection.bar).getOrNull(selection.index) == null
+    ) {
+        return
     }
-
     Surface(
         shape = MaterialTheme.shapes.large,
         color = MaterialTheme.colorScheme.surfaceContainer,
         modifier = Modifier.fillMaxWidth(),
     ) {
-        Column(
-            verticalArrangement = Arrangement.spacedBy(Spacing.Cozy),
-            modifier = Modifier.padding(Spacing.Comfortable),
-        ) {
-            Text(
-                text = stringResource(Res.string.player_custom_selected_item, selectedTitle),
-                style = MaterialTheme.typography.titleSmall,
-                color = MaterialTheme.colorScheme.primary,
-            )
+        when (selection) {
+            is PreviewSelection.PanelItem -> {
+                val items = layout.itemsFor(selection.bar)
+                val item = items[selection.index]
+                val itemTitle = when (item) {
+                    PlayerPanelItem.Spacer -> stringResource(Res.string.player_custom_spacer)
+                    is PlayerPanelItem.Control -> controlLabel(item.id)
+                }
+                val itemIcon = when (item) {
+                    PlayerPanelItem.Spacer -> Icons.Filled.SpaceBar
+                    is PlayerPanelItem.Control -> controlIcon(item.id, layoutMode.isFullscreen)
+                }
+                val canMoveLeft = selection.index > 0 &&
+                    !(layoutMode.isFullscreen && selection.bar == PlayerBarSlot.Top && selection.index <= 1)
+                val canMoveRight = selection.index < items.lastIndex &&
+                    !(layoutMode.isFullscreen && selection.bar == PlayerBarSlot.Top && selection.index == 0)
+                val canMoveOtherBar = item !is PlayerPanelItem.Control || item.id != PlayerControlId.Back
+                val canRemove = layout.canRemoveBarItem(selection.bar, selection.index, layoutMode.isFullscreen)
+                val supportsBg = item is PlayerPanelItem.Control && supportsBackgroundToggle(item.id)
 
-            when (selection) {
-                is PreviewSelection.CenterSlot -> {
-                    if (selection.position == CenterSlotPosition.Center) {
-                        SettingsGroup {
-                            row { pos ->
-                                ToggleSettingRow(
-                                    position = pos,
-                                    icon = Icons.Filled.PlayArrow,
-                                    title = stringResource(Res.string.player_custom_show_center_play),
-                                    subtitle = stringResource(Res.string.player_custom_show_center_play_subtitle),
-                                    checked = layout.center.showCenterPlay,
-                                    onCheckedChange = { show ->
+                BoxWithConstraints(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = Spacing.Comfortable, vertical = Spacing.Tight),
+                ) {
+                    val inlineBgSwitch = maxWidth >= 460.dp
+                    Column(verticalArrangement = Arrangement.spacedBy(Spacing.Hair)) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Icon(
+                                imageVector = itemIcon,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(18.dp),
+                            )
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = itemTitle,
+                                    style = MaterialTheme.typography.titleSmall,
+                                    color = MaterialTheme.colorScheme.primary,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                                if (!canRemove) {
+                                    Text(
+                                        text = stringResource(Res.string.player_custom_required_item),
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                }
+                            }
+                            if (supportsBg && inlineBgSwitch) {
+                                val control = item as PlayerPanelItem.Control
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
+                                ) {
+                                    Text(
+                                        text = stringResource(Res.string.player_custom_show_background),
+                                        style = MaterialTheme.typography.labelMedium,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        maxLines = 1,
+                                    )
+                                    Switch(
+                                        checked = control.showBackground,
+                                        onCheckedChange = { showBg ->
+                                            onUpdateLayout { prefs ->
+                                                prefs.updateLayout(layoutMode) {
+                                                    it.withBarItemBackground(
+                                                        bar = selection.bar,
+                                                        index = selection.index,
+                                                        showBackground = showBg,
+                                                        isFullscreen = layoutMode.isFullscreen,
+                                                    )
+                                                }
+                                            }
+                                        },
+                                    )
+                                }
+                            }
+                            IconButton(
+                                enabled = canMoveLeft,
+                                onClick = {
+                                    val target = selection.index - 1
+                                    onUpdateLayout { prefs ->
+                                        prefs.updateLayout(layoutMode) {
+                                            it.moveBarItem(selection.bar, selection.index, target, layoutMode.isFullscreen)
+                                        }
+                                    }
+                                    onSelect(PreviewSelection.PanelItem(selection.bar, target))
+                                },
+                                modifier = Modifier.size(36.dp),
+                            ) {
+                                Icon(
+                                    imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                                    contentDescription = stringResource(Res.string.player_custom_move_left),
+                                    modifier = Modifier.size(18.dp),
+                                )
+                            }
+                            IconButton(
+                                enabled = canMoveRight,
+                                onClick = {
+                                    val target = selection.index + 1
+                                    onUpdateLayout { prefs ->
+                                        prefs.updateLayout(layoutMode) {
+                                            it.moveBarItem(selection.bar, selection.index, target, layoutMode.isFullscreen)
+                                        }
+                                    }
+                                    onSelect(PreviewSelection.PanelItem(selection.bar, target))
+                                },
+                                modifier = Modifier.size(36.dp),
+                            ) {
+                                Icon(
+                                    imageVector = Icons.AutoMirrored.Filled.ArrowForward,
+                                    contentDescription = stringResource(Res.string.player_custom_move_right),
+                                    modifier = Modifier.size(18.dp),
+                                )
+                            }
+                            if (canMoveOtherBar) {
+                                IconButton(
+                                    onClick = {
+                                        val otherBar = selection.bar.other()
                                         onUpdateLayout { prefs ->
                                             prefs.updateLayout(layoutMode) {
-                                                it.withCenterPlay(show, layoutMode.isFullscreen)
+                                                it.moveBarItemToOtherBar(
+                                                    selection.bar,
+                                                    selection.index,
+                                                    layoutMode.isFullscreen,
+                                                )
+                                            }
+                                        }
+                                        onSelect(PreviewSelection.PanelItem(otherBar, layout.itemsFor(otherBar).size))
+                                    },
+                                    modifier = Modifier.size(36.dp),
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Filled.SwapVert,
+                                        contentDescription = stringResource(
+                                            if (selection.bar == PlayerBarSlot.Top) {
+                                                Res.string.player_custom_move_to_bottom
+                                            } else {
+                                                Res.string.player_custom_move_to_top
+                                            },
+                                        ),
+                                        modifier = Modifier.size(18.dp),
+                                    )
+                                }
+                            }
+                            IconButton(
+                                enabled = canRemove,
+                                onClick = {
+                                    onUpdateLayout { prefs ->
+                                        prefs.updateLayout(layoutMode) {
+                                            it.removeBarItem(selection.bar, selection.index, layoutMode.isFullscreen)
+                                        }
+                                    }
+                                },
+                                modifier = Modifier.size(36.dp),
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Outlined.DeleteOutline,
+                                    contentDescription = stringResource(Res.string.player_custom_remove_item),
+                                    modifier = Modifier.size(18.dp),
+                                )
+                            }
+                        }
+                        if (supportsBg && !inlineBgSwitch) {
+                            val control = item as PlayerPanelItem.Control
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(MaterialTheme.shapes.small)
+                                    .clickable {
+                                        onUpdateLayout { prefs ->
+                                            prefs.updateLayout(layoutMode) {
+                                                it.withBarItemBackground(
+                                                    bar = selection.bar,
+                                                    index = selection.index,
+                                                    showBackground = !control.showBackground,
+                                                    isFullscreen = layoutMode.isFullscreen,
+                                                )
+                                            }
+                                        }
+                                    },
+                            ) {
+                                Text(
+                                    text = stringResource(Res.string.player_custom_show_background),
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                    modifier = Modifier.weight(1f),
+                                )
+                                Switch(
+                                    checked = control.showBackground,
+                                    onCheckedChange = { showBg ->
+                                        onUpdateLayout { prefs ->
+                                            prefs.updateLayout(layoutMode) {
+                                                it.withBarItemBackground(
+                                                    bar = selection.bar,
+                                                    index = selection.index,
+                                                    showBackground = showBg,
+                                                    isFullscreen = layoutMode.isFullscreen,
+                                                )
                                             }
                                         }
                                     },
                                 )
                             }
                         }
-                    } else {
-                        val slot = layout.center.slot(selection.position)
-                        val currentSeconds = slot.action.seekSecondsOrNull() ?: layoutPrefs.seekButtonSeconds
+                    }
+                }
+            }
 
-                        // 动作选择
+            is PreviewSelection.CenterSlot -> {
+                if (selection.position == CenterSlotPosition.Center) {
+                    PlainToggleRow(
+                        icon = Icons.Filled.PlayArrow,
+                        title = stringResource(Res.string.player_custom_show_center_play),
+                        subtitle = stringResource(Res.string.player_custom_show_center_play_subtitle),
+                        checked = layout.center.showCenterPlay,
+                        onCheckedChange = { show ->
+                            onUpdateLayout { prefs ->
+                                prefs.updateLayout(layoutMode) {
+                                    it.withCenterPlay(show, layoutMode.isFullscreen)
+                                }
+                            }
+                        },
+                        modifier = Modifier.padding(horizontal = Spacing.Comfortable, vertical = Spacing.Cozy),
+                    )
+                } else {
+                    val slot = layout.center.slot(selection.position)
+                    val currentSeconds = slot.action.seekSecondsOrNull() ?: layoutPrefs.seekButtonSeconds
+                    Column(
+                        verticalArrangement = Arrangement.spacedBy(Spacing.Tight),
+                        modifier = Modifier.padding(horizontal = Spacing.Comfortable, vertical = Spacing.Cozy),
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Text(
+                                text = centerSlotLabel(selection.position),
+                                style = MaterialTheme.typography.titleSmall,
+                                color = MaterialTheme.colorScheme.primary,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f),
+                            )
+                            FilledTonalButton(
+                                onClick = {
+                                    onUpdateLayout { prefs ->
+                                        prefs.updateLayout(layoutMode) {
+                                            it.withSymmetricCenterSlot(selection.position, layoutMode.isFullscreen)
+                                        }
+                                    }
+                                },
+                                contentPadding = PaddingValues(horizontal = Spacing.Cozy, vertical = 6.dp),
+                            ) {
+                                Icon(Icons.Filled.SwapHoriz, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(Modifier.width(Spacing.Hair))
+                                Text(
+                                    text = stringResource(Res.string.player_custom_apply_symmetric),
+                                    style = MaterialTheme.typography.labelMedium,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            }
+                            if (slot.action != CenterSlotAction.None) {
+                                OutlinedButton(
+                                    onClick = {
+                                        onUpdateLayout { prefs ->
+                                            prefs.updateLayout(layoutMode) {
+                                                it.withCenterSlot(
+                                                    selection.position,
+                                                    slot.copy(action = CenterSlotAction.None),
+                                                    layoutMode.isFullscreen,
+                                                )
+                                            }
+                                        }
+                                    },
+                                    contentPadding = PaddingValues(horizontal = Spacing.Cozy, vertical = 6.dp),
+                                ) {
+                                    Text(
+                                        text = stringResource(Res.string.player_custom_clear_slot),
+                                        style = MaterialTheme.typography.labelMedium,
+                                        maxLines = 1,
+                                    )
+                                }
+                            }
+                        }
+
                         FlowRow(
                             horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
                             verticalArrangement = Arrangement.spacedBy(Spacing.Hair),
@@ -2818,7 +3196,41 @@ private fun SelectionInspectorCard(
                             }
                         }
 
-                        // 快进/快退秒数选择（快捷档 + 自定义整数 1..300s）
+                        FlowRow(
+                            horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
+                            verticalArrangement = Arrangement.spacedBy(Spacing.Hair),
+                        ) {
+                            Text(
+                                text = stringResource(Res.string.player_custom_scale_title),
+                                style = MaterialTheme.typography.labelLarge,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.align(Alignment.CenterVertically),
+                            )
+                            val scales = listOf(
+                                CenterSlotScale.Large to stringResource(Res.string.player_custom_scale_large),
+                                CenterSlotScale.Medium to stringResource(Res.string.player_custom_scale_medium),
+                                CenterSlotScale.Small to stringResource(Res.string.player_custom_scale_small),
+                                CenterSlotScale.ExtraSmall to stringResource(Res.string.player_custom_scale_extra_small),
+                            )
+                            for ((scaleOption, label) in scales) {
+                                FilterChip(
+                                    selected = slot.scale == scaleOption,
+                                    onClick = {
+                                        onUpdateLayout { prefs ->
+                                            prefs.updateLayout(layoutMode) {
+                                                it.withCenterSlot(
+                                                    selection.position,
+                                                    slot.copy(scale = scaleOption),
+                                                    layoutMode.isFullscreen,
+                                                )
+                                            }
+                                        }
+                                    },
+                                    label = { Text(label) },
+                                )
+                            }
+                        }
+
                         val isSeekAction = slot.action is CenterSlotAction.SeekBackward ||
                             slot.action is CenterSlotAction.SeekForward
                         if (isSeekAction) {
@@ -2846,43 +3258,6 @@ private fun SelectionInspectorCard(
                             )
                         }
 
-                        // 相对尺寸档位
-                        Column(verticalArrangement = Arrangement.spacedBy(Spacing.Hair)) {
-                            Text(
-                                text = stringResource(Res.string.player_custom_scale_title),
-                                style = MaterialTheme.typography.labelLarge,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                            FlowRow(
-                                horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
-                                verticalArrangement = Arrangement.spacedBy(Spacing.Hair),
-                            ) {
-                                val scales = listOf(
-                                    CenterSlotScale.Large to stringResource(Res.string.player_custom_scale_large),
-                                    CenterSlotScale.Medium to stringResource(Res.string.player_custom_scale_medium),
-                                    CenterSlotScale.Small to stringResource(Res.string.player_custom_scale_small),
-                                    CenterSlotScale.ExtraSmall to stringResource(Res.string.player_custom_scale_extra_small),
-                                )
-                                for ((scaleOption, label) in scales) {
-                                    FilterChip(
-                                        selected = slot.scale == scaleOption,
-                                        onClick = {
-                                            onUpdateLayout { prefs ->
-                                                prefs.updateLayout(layoutMode) {
-                                                    it.withCenterSlot(
-                                                        selection.position,
-                                                        slot.copy(scale = scaleOption),
-                                                        layoutMode.isFullscreen,
-                                                    )
-                                                }
-                                            }
-                                        },
-                                        label = { Text(label) },
-                                    )
-                                }
-                            }
-                        }
-
                         if (slot.action != CenterSlotAction.None) {
                             ShowBackgroundSwitchRow(
                                 checked = slot.showBackground,
@@ -2897,159 +3272,6 @@ private fun SelectionInspectorCard(
                                         }
                                     }
                                 },
-                            )
-                        }
-
-                        // 对称应用 + 清空
-                        Row(
-                            horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
-                            modifier = Modifier.fillMaxWidth(),
-                        ) {
-                            FilledTonalButton(
-                                onClick = {
-                                    onUpdateLayout { prefs ->
-                                        prefs.updateLayout(layoutMode) {
-                                            it.withSymmetricCenterSlot(selection.position, layoutMode.isFullscreen)
-                                        }
-                                    }
-                                },
-                                modifier = Modifier.weight(1f),
-                            ) {
-                                Icon(Icons.Filled.SwapHoriz, contentDescription = null, modifier = Modifier.size(18.dp))
-                                Spacer(Modifier.width(Spacing.Hair))
-                                Text(stringResource(Res.string.player_custom_apply_symmetric), maxLines = 1, overflow = TextOverflow.Ellipsis)
-                            }
-                            if (slot.action != CenterSlotAction.None) {
-                                OutlinedButton(
-                                    onClick = {
-                                        onUpdateLayout { prefs ->
-                                            prefs.updateLayout(layoutMode) {
-                                                it.withCenterSlot(
-                                                    selection.position,
-                                                    slot.copy(action = CenterSlotAction.None),
-                                                    layoutMode.isFullscreen,
-                                                )
-                                            }
-                                        }
-                                    },
-                                ) {
-                                    Text(stringResource(Res.string.player_custom_clear_slot))
-                                }
-                            }
-                        }
-                    }
-                }
-
-                is PreviewSelection.PanelItem -> {
-                    val items = layout.itemsFor(selection.bar)
-                    val item = items.getOrNull(selection.index)
-                    if (item != null) {
-                        val canMoveLeft = selection.index > 0 &&
-                            !(layoutMode.isFullscreen && selection.bar == PlayerBarSlot.Top && selection.index <= 1)
-                        val canMoveRight = selection.index < items.lastIndex &&
-                            !(layoutMode.isFullscreen && selection.bar == PlayerBarSlot.Top && selection.index == 0)
-                        val canMoveOtherBar = item !is PlayerPanelItem.Control || item.id != PlayerControlId.Back
-                        val canRemove = layout.canRemoveBarItem(selection.bar, selection.index, layoutMode.isFullscreen)
-
-                        if (item is PlayerPanelItem.Control && supportsBackgroundToggle(item.id)) {
-                            ShowBackgroundSwitchRow(
-                                checked = item.showBackground,
-                                onCheckedChange = { showBg ->
-                                    onUpdateLayout { prefs ->
-                                        prefs.updateLayout(layoutMode) {
-                                            it.withBarItemBackground(
-                                                bar = selection.bar,
-                                                index = selection.index,
-                                                showBackground = showBg,
-                                                isFullscreen = layoutMode.isFullscreen,
-                                            )
-                                        }
-                                    }
-                                },
-                            )
-                        }
-
-                        FlowRow(
-                            horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
-                            verticalArrangement = Arrangement.spacedBy(Spacing.Tight),
-                        ) {
-                            FilledTonalButton(
-                                enabled = canMoveLeft,
-                                onClick = {
-                                    val target = selection.index - 1
-                                    onUpdateLayout { prefs ->
-                                        prefs.updateLayout(layoutMode) {
-                                            it.moveBarItem(selection.bar, selection.index, target, layoutMode.isFullscreen)
-                                        }
-                                    }
-                                    onSelect(PreviewSelection.PanelItem(selection.bar, target))
-                                },
-                            ) {
-                                Icon(Icons.AutoMirrored.Filled.ArrowBack, null, modifier = Modifier.size(18.dp))
-                                Spacer(Modifier.width(Spacing.Hair))
-                                Text(stringResource(Res.string.player_custom_move_left))
-                            }
-                            FilledTonalButton(
-                                enabled = canMoveRight,
-                                onClick = {
-                                    val target = selection.index + 1
-                                    onUpdateLayout { prefs ->
-                                        prefs.updateLayout(layoutMode) {
-                                            it.moveBarItem(selection.bar, selection.index, target, layoutMode.isFullscreen)
-                                        }
-                                    }
-                                    onSelect(PreviewSelection.PanelItem(selection.bar, target))
-                                },
-                            ) {
-                                Text(stringResource(Res.string.player_custom_move_right))
-                                Spacer(Modifier.width(Spacing.Hair))
-                                Icon(Icons.AutoMirrored.Filled.ArrowForward, null, modifier = Modifier.size(18.dp))
-                            }
-                            if (canMoveOtherBar) {
-                                OutlinedButton(
-                                    onClick = {
-                                        val otherBar = selection.bar.other()
-                                        onUpdateLayout { prefs ->
-                                            prefs.updateLayout(layoutMode) {
-                                                it.moveBarItemToOtherBar(selection.bar, selection.index, layoutMode.isFullscreen)
-                                            }
-                                        }
-                                        onSelect(PreviewSelection.PanelItem(otherBar, layout.itemsFor(otherBar).size))
-                                    },
-                                ) {
-                                    Icon(Icons.Filled.SwapVert, null, modifier = Modifier.size(18.dp))
-                                    Spacer(Modifier.width(Spacing.Hair))
-                                    Text(
-                                        stringResource(
-                                            if (selection.bar == PlayerBarSlot.Top) {
-                                                Res.string.player_custom_move_to_bottom
-                                            } else {
-                                                Res.string.player_custom_move_to_top
-                                            },
-                                        ),
-                                    )
-                                }
-                            }
-                            OutlinedButton(
-                                enabled = canRemove,
-                                onClick = {
-                                    onUpdateLayout { prefs ->
-                                        prefs.updateLayout(layoutMode) {
-                                            it.removeBarItem(selection.bar, selection.index, layoutMode.isFullscreen)
-                                        }
-                                    }
-                                },
-                            ) {
-                                Icon(Icons.Outlined.DeleteOutline, null, modifier = Modifier.size(18.dp))
-                                Spacer(Modifier.width(Spacing.Hair))
-                                Text(stringResource(Res.string.player_custom_remove_item))
-                            }
-                        }
-                        if (!canRemove) {
-                            Text(
-                                text = stringResource(Res.string.player_custom_required_item),
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
                         }
                     }
@@ -3111,113 +3333,33 @@ private fun SeekSecondsEditor(
 }
 
 @Composable
-private fun PanelQuickAddCard(
-    isFullscreen: Boolean,
-    onAddControl: (PlayerBarSlot) -> Unit,
-    onAddSpacer: (PlayerBarSlot) -> Unit,
-) {
-    Surface(
-        shape = MaterialTheme.shapes.large,
-        color = MaterialTheme.colorScheme.surfaceContainer,
-        modifier = Modifier.fillMaxWidth(),
-    ) {
-        Column(
-            verticalArrangement = Arrangement.spacedBy(Spacing.Cozy),
-            modifier = Modifier.padding(Spacing.Comfortable),
-        ) {
-            if (isFullscreen) {
-                PanelBarActionRow(
-                    title = stringResource(Res.string.player_custom_top_bar),
-                    onAddControl = { onAddControl(PlayerBarSlot.Top) },
-                    onAddSpacer = { onAddSpacer(PlayerBarSlot.Top) },
-                )
-            }
-            PanelBarActionRow(
-                title = stringResource(Res.string.player_custom_bottom_bar),
-                onAddControl = { onAddControl(PlayerBarSlot.Bottom) },
-                onAddSpacer = { onAddSpacer(PlayerBarSlot.Bottom) },
-            )
-        }
-    }
-}
-
-@Composable
-private fun PanelBarActionRow(
+private fun GestureSectionCard(
     title: String,
-    onAddControl: () -> Unit,
-    onAddSpacer: () -> Unit,
+    content: @Composable () -> Unit,
 ) {
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
-        modifier = Modifier.fillMaxWidth(),
-    ) {
+    Column(verticalArrangement = Arrangement.spacedBy(Spacing.Tight)) {
         Text(
             text = title,
             style = MaterialTheme.typography.titleSmall,
-            modifier = Modifier.weight(1f),
+            color = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.padding(horizontal = Spacing.Hair),
         )
-        FilledTonalButton(onClick = onAddControl) {
-            Icon(Icons.Filled.Add, null, modifier = Modifier.size(18.dp))
-            Spacer(Modifier.width(Spacing.Hair))
-            Text(stringResource(Res.string.player_custom_add_control))
-        }
-        OutlinedButton(onClick = onAddSpacer) {
-            Icon(Icons.Filled.SpaceBar, null, modifier = Modifier.size(18.dp))
-            Spacer(Modifier.width(Spacing.Hair))
-            Text(stringResource(Res.string.player_custom_add_spacer))
+        Surface(
+            shape = MaterialTheme.shapes.large,
+            color = MaterialTheme.colorScheme.surfaceContainer,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Column(
+                verticalArrangement = Arrangement.spacedBy(Spacing.Cozy),
+                modifier = Modifier.padding(Spacing.Comfortable),
+            ) {
+                content()
+            }
         }
     }
 }
 
 @OptIn(ExperimentalLayoutApi::class)
-@Composable
-private fun AddControlPickerContent(
-    targetBar: PlayerBarSlot,
-    isFullscreen: Boolean,
-    layout: PlayerFormFactorLayout,
-    onPick: (PlayerControlId) -> Unit,
-) {
-    val candidates = remember(targetBar, isFullscreen) {
-        PlayerControlId.entries.filter { id ->
-            when (id) {
-                PlayerControlId.Back -> false
-                PlayerControlId.Title, PlayerControlId.SystemStatus, PlayerControlId.Lock -> isFullscreen
-                else -> true
-            }
-        }
-    }
-    FlowRow(
-        horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
-        verticalArrangement = Arrangement.spacedBy(Spacing.Tight),
-        modifier = Modifier
-            .fillMaxWidth()
-            .verticalScroll(rememberScrollState())
-            .padding(Spacing.Comfortable),
-    ) {
-        for (id in candidates) {
-            val alreadyInTarget = if (targetBar == PlayerBarSlot.Top) {
-                layout.hasInTopBar(id)
-            } else {
-                layout.hasInBottomBar(id)
-            }
-            FilterChip(
-                selected = alreadyInTarget,
-                onClick = { onPick(id) },
-                leadingIcon = {
-                    Icon(
-                        imageVector = controlIcon(id, isFullscreen),
-                        contentDescription = null,
-                        modifier = Modifier.size(Dimens.IconInline),
-                    )
-                },
-                label = { Text(controlLabel(id)) },
-            )
-        }
-    }
-}
-
-@OptIn(ExperimentalMaterial3ExpressiveApi::class, ExperimentalLayoutApi::class)
 @Composable
 private fun GestureCustomizationCards(
     state: SettingsUiState,
@@ -3231,104 +3373,66 @@ private fun GestureCustomizationCards(
     onSwipeBrightnessVolumeChange: (Boolean) -> Unit,
 ) {
     val gestures = layoutPrefs.gestures
-    val holdSpeedShown = remember { MutableTransitionState(state.longPressSpeed) }
-    holdSpeedShown.targetState = state.longPressSpeed
-    val holdSpeedOnScreen = state.longPressSpeed || holdSpeedShown.currentState
-    val enter = expandVertically(MaterialTheme.motionScheme.fastSpatialSpec()) +
-        fadeIn(MaterialTheme.motionScheme.fastEffectsSpec())
-    val exit = shrinkVertically(MaterialTheme.motionScheme.fastSpatialSpec()) +
-        fadeOut(MaterialTheme.motionScheme.fastEffectsSpec())
 
     Column(verticalArrangement = Arrangement.spacedBy(Spacing.Cozy)) {
         // 1. 纵向滑动手势
-        SettingsGroup(title = stringResource(Res.string.player_custom_gesture_vertical_group)) {
-            row { position ->
-                ToggleSettingRow(
-                    position = position,
-                    icon = Icons.Outlined.SwapVert,
-                    title = stringResource(Res.string.settings_swipe_brightness_volume),
-                    subtitle = stringResource(Res.string.settings_swipe_brightness_volume_subtitle),
-                    checked = state.swipeBrightnessVolume,
-                    onCheckedChange = onSwipeBrightnessVolumeChange,
+        GestureSectionCard(title = stringResource(Res.string.player_custom_gesture_vertical_group)) {
+            PlainToggleRow(
+                icon = Icons.Outlined.SwapVert,
+                title = stringResource(Res.string.settings_swipe_brightness_volume),
+                subtitle = stringResource(Res.string.settings_swipe_brightness_volume_subtitle),
+                checked = state.swipeBrightnessVolume,
+                onCheckedChange = onSwipeBrightnessVolumeChange,
+            )
+            if (state.swipeBrightnessVolume) {
+                VerticalSwipeActionSelector(
+                    title = stringResource(Res.string.player_custom_gesture_left_vertical),
+                    selected = gestures.leftVerticalSwipe,
+                    onSelect = { action ->
+                        onUpdateLayout { it.updateGestures { g -> g.copy(leftVerticalSwipe = action) } }
+                    },
                 )
-            }
-        }
-        if (state.swipeBrightnessVolume) {
-            Surface(
-                shape = MaterialTheme.shapes.large,
-                color = MaterialTheme.colorScheme.surfaceContainer,
-                modifier = Modifier.fillMaxWidth(),
-            ) {
-                Column(
-                    verticalArrangement = Arrangement.spacedBy(Spacing.Cozy),
-                    modifier = Modifier.padding(Spacing.Comfortable),
-                ) {
-                    VerticalSwipeActionSelector(
-                        title = stringResource(Res.string.player_custom_gesture_left_vertical),
-                        selected = gestures.leftVerticalSwipe,
-                        onSelect = { action ->
-                            onUpdateLayout { it.updateGestures { g -> g.copy(leftVerticalSwipe = action) } }
-                        },
-                    )
-                    VerticalSwipeActionSelector(
-                        title = stringResource(Res.string.player_custom_gesture_right_vertical),
-                        selected = gestures.rightVerticalSwipe,
-                        onSelect = { action ->
-                            onUpdateLayout { it.updateGestures { g -> g.copy(rightVerticalSwipe = action) } }
-                        },
-                    )
-                    FractionSliderSection(
-                        title = stringResource(Res.string.player_custom_gesture_vertical_zone),
-                        value = gestures.verticalZoneFraction,
-                        valueRange = MIN_VERTICAL_ZONE_FRACTION..MAX_VERTICAL_ZONE_FRACTION,
-                        steps = 5,
-                        onValueChange = { fraction ->
-                            val snapped = ((fraction * 20f).roundToInt() / 20f)
-                                .coerceIn(MIN_VERTICAL_ZONE_FRACTION, MAX_VERTICAL_ZONE_FRACTION)
-                            onUpdateLayout { it.updateGestures { g -> g.copy(verticalZoneFraction = snapped) } }
-                        },
-                    )
-                }
+                VerticalSwipeActionSelector(
+                    title = stringResource(Res.string.player_custom_gesture_right_vertical),
+                    selected = gestures.rightVerticalSwipe,
+                    onSelect = { action ->
+                        onUpdateLayout { it.updateGestures { g -> g.copy(rightVerticalSwipe = action) } }
+                    },
+                )
+                FractionSliderSection(
+                    title = stringResource(Res.string.player_custom_gesture_vertical_zone),
+                    value = gestures.verticalZoneFraction,
+                    valueRange = MIN_VERTICAL_ZONE_FRACTION..MAX_VERTICAL_ZONE_FRACTION,
+                    steps = 5,
+                    onValueChange = { fraction ->
+                        val snapped = ((fraction * 20f).roundToInt() / 20f)
+                            .coerceIn(MIN_VERTICAL_ZONE_FRACTION, MAX_VERTICAL_ZONE_FRACTION)
+                        onUpdateLayout { it.updateGestures { g -> g.copy(verticalZoneFraction = snapped) } }
+                    },
+                )
             }
         }
 
         // 2. 横向滑动进度
-        SettingsGroup(title = stringResource(Res.string.player_custom_gesture_horizontal_group)) {
-            row { position ->
-                ToggleSettingRow(
-                    position = position,
-                    icon = Icons.Outlined.SwapHoriz,
-                    title = stringResource(Res.string.settings_swipe_seek),
-                    subtitle = stringResource(Res.string.settings_swipe_seek_subtitle),
-                    checked = state.swipeSeek,
-                    onCheckedChange = onSwipeSeekChange,
-                )
-            }
+        GestureSectionCard(title = stringResource(Res.string.player_custom_gesture_horizontal_group)) {
+            PlainToggleRow(
+                icon = Icons.Outlined.SwapHoriz,
+                title = stringResource(Res.string.settings_swipe_seek),
+                subtitle = stringResource(Res.string.settings_swipe_seek_subtitle),
+                checked = state.swipeSeek,
+                onCheckedChange = onSwipeSeekChange,
+            )
             if (state.swipeSeek) {
-                row { position ->
-                    ToggleSettingRow(
-                        position = position,
-                        icon = Icons.Outlined.Tune,
-                        title = stringResource(Res.string.player_custom_gesture_seek_cancel_zone),
-                        subtitle = stringResource(Res.string.player_custom_gesture_seek_cancel_zone_subtitle),
-                        checked = gestures.swipeSeekCancelZone,
-                        onCheckedChange = { enabled ->
-                            onUpdateLayout { it.updateGestures { g -> g.copy(swipeSeekCancelZone = enabled) } }
-                        },
-                    )
-                }
-            }
-        }
-        if (state.swipeSeek) {
-            Surface(
-                shape = MaterialTheme.shapes.large,
-                color = MaterialTheme.colorScheme.surfaceContainer,
-                modifier = Modifier.fillMaxWidth(),
-            ) {
-                Column(
-                    verticalArrangement = Arrangement.spacedBy(Spacing.Tight),
-                    modifier = Modifier.padding(Spacing.Comfortable),
-                ) {
+                PlainToggleRow(
+                    icon = Icons.Outlined.Tune,
+                    title = stringResource(Res.string.player_custom_gesture_seek_cancel_zone),
+                    subtitle = stringResource(Res.string.player_custom_gesture_seek_cancel_zone_subtitle),
+                    checked = gestures.swipeSeekCancelZone,
+                    onCheckedChange = { enabled ->
+                        onUpdateLayout { it.updateGestures { g -> g.copy(swipeSeekCancelZone = enabled) } }
+                    },
+                )
+                Column(verticalArrangement = Arrangement.spacedBy(Spacing.Hair)) {
                     Text(
                         text = stringResource(Res.string.player_custom_gesture_seek_sensitivity),
                         style = MaterialTheme.typography.labelLarge,
@@ -3355,103 +3459,86 @@ private fun GestureCustomizationCards(
         }
 
         // 3. 双击手势
-        SettingsGroup(title = stringResource(Res.string.player_custom_gesture_double_tap_group)) {
-            row { position ->
-                ToggleSettingRow(
-                    position = position,
-                    icon = Icons.Outlined.FastForward,
-                    title = stringResource(Res.string.settings_double_tap_seek),
-                    subtitle = stringResource(Res.string.settings_double_tap_seek_subtitle),
-                    checked = state.doubleTapSeek,
-                    onCheckedChange = onDoubleTapSeekChange,
-                )
-            }
+        GestureSectionCard(title = stringResource(Res.string.player_custom_gesture_double_tap_group)) {
+            PlainToggleRow(
+                icon = Icons.Outlined.FastForward,
+                title = stringResource(Res.string.settings_double_tap_seek),
+                subtitle = stringResource(Res.string.settings_double_tap_seek_subtitle),
+                checked = state.doubleTapSeek,
+                onCheckedChange = onDoubleTapSeekChange,
+            )
             if (state.doubleTapSeek) {
-                row { position ->
-                    ToggleSettingRow(
-                        position = position,
-                        icon = Icons.Outlined.Timer,
-                        title = stringResource(Res.string.player_custom_sync_double_tap),
-                        subtitle = stringResource(Res.string.player_custom_sync_double_tap_subtitle),
-                        checked = layoutPrefs.syncDoubleTapWithSeekButton,
-                        onCheckedChange = { sync ->
-                            onUpdateLayout { it.copy(syncDoubleTapWithSeekButton = sync) }
+                PlainToggleRow(
+                    icon = Icons.Outlined.Timer,
+                    title = stringResource(Res.string.player_custom_sync_double_tap),
+                    subtitle = stringResource(Res.string.player_custom_sync_double_tap_subtitle),
+                    checked = layoutPrefs.syncDoubleTapWithSeekButton,
+                    onCheckedChange = { sync ->
+                        onUpdateLayout { it.copy(syncDoubleTapWithSeekButton = sync) }
+                    },
+                )
+                FractionSliderSection(
+                    title = stringResource(Res.string.player_custom_gesture_double_tap_zone),
+                    value = gestures.doubleTapZoneFraction,
+                    valueRange = MIN_DOUBLE_TAP_ZONE_FRACTION..MAX_DOUBLE_TAP_ZONE_FRACTION,
+                    steps = 4,
+                    onValueChange = { fraction ->
+                        val snapped = ((fraction * 20f).roundToInt() / 20f)
+                            .coerceIn(MIN_DOUBLE_TAP_ZONE_FRACTION, MAX_DOUBLE_TAP_ZONE_FRACTION)
+                        onUpdateLayout { it.updateGestures { g -> g.copy(doubleTapZoneFraction = snapped) } }
+                    },
+                )
+                if (!layoutPrefs.syncDoubleTapWithSeekButton) {
+                    SeekSecondsEditor(
+                        title = stringResource(Res.string.player_custom_double_tap_seconds),
+                        seconds = layoutPrefs.doubleTapSeekSeconds,
+                        onSecondsChange = { sec ->
+                            onUpdateLayout { it.copy(doubleTapSeekSeconds = sec) }
                         },
                     )
-                }
-            }
-        }
-        if (state.doubleTapSeek) {
-            Surface(
-                shape = MaterialTheme.shapes.large,
-                color = MaterialTheme.colorScheme.surfaceContainer,
-                modifier = Modifier.fillMaxWidth(),
-            ) {
-                Column(
-                    verticalArrangement = Arrangement.spacedBy(Spacing.Cozy),
-                    modifier = Modifier.padding(Spacing.Comfortable),
-                ) {
-                    FractionSliderSection(
-                        title = stringResource(Res.string.player_custom_gesture_double_tap_zone),
-                        value = gestures.doubleTapZoneFraction,
-                        valueRange = MIN_DOUBLE_TAP_ZONE_FRACTION..MAX_DOUBLE_TAP_ZONE_FRACTION,
-                        steps = 4,
-                        onValueChange = { fraction ->
-                            val snapped = ((fraction * 20f).roundToInt() / 20f)
-                                .coerceIn(MIN_DOUBLE_TAP_ZONE_FRACTION, MAX_DOUBLE_TAP_ZONE_FRACTION)
-                            onUpdateLayout { it.updateGestures { g -> g.copy(doubleTapZoneFraction = snapped) } }
-                        },
-                    )
-                    if (!layoutPrefs.syncDoubleTapWithSeekButton) {
-                        SeekSecondsEditor(
-                            title = stringResource(Res.string.player_custom_double_tap_seconds),
-                            seconds = layoutPrefs.doubleTapSeekSeconds,
-                            onSecondsChange = { sec ->
-                                onUpdateLayout { it.copy(doubleTapSeekSeconds = sec) }
-                            },
-                        )
-                    }
                 }
             }
         }
 
         // 4. 长按倍速与选档
-        SettingsGroup(title = stringResource(Res.string.player_custom_gesture_speed_group)) {
-            row { position ->
-                ToggleSettingRow(
-                    position = position,
-                    icon = Icons.Outlined.Speed,
-                    title = stringResource(Res.string.settings_long_press_speed),
-                    subtitle = stringResource(Res.string.settings_long_press_speed_subtitle),
-                    checked = state.longPressSpeed,
-                    onCheckedChange = onLongPressSpeedChange,
+        GestureSectionCard(title = stringResource(Res.string.player_custom_gesture_speed_group)) {
+            PlainToggleRow(
+                icon = Icons.Outlined.Speed,
+                title = stringResource(Res.string.settings_long_press_speed),
+                subtitle = stringResource(Res.string.settings_long_press_speed_subtitle),
+                checked = state.longPressSpeed,
+                onCheckedChange = onLongPressSpeedChange,
+            )
+            if (state.longPressSpeed) {
+                PlainToggleRow(
+                    icon = Icons.Outlined.Tune,
+                    title = stringResource(Res.string.settings_long_press_speed_dial),
+                    subtitle = stringResource(Res.string.settings_long_press_speed_dial_subtitle),
+                    checked = state.longPressSpeedDial,
+                    onCheckedChange = onLongPressSpeedDialChange,
                 )
-            }
-            if (holdSpeedOnScreen) {
-                row { position ->
-                    AnimatedVisibility(visibleState = holdSpeedShown, enter = enter, exit = exit) {
-                        ToggleSettingRow(
-                            position = position,
-                            icon = Icons.Outlined.Tune,
-                            title = stringResource(Res.string.settings_long_press_speed_dial),
-                            subtitle = stringResource(Res.string.settings_long_press_speed_dial_subtitle),
-                            checked = state.longPressSpeedDial,
-                            onCheckedChange = onLongPressSpeedDialChange,
-                        )
-                    }
-                }
-                row { position ->
-                    AnimatedVisibility(visibleState = holdSpeedShown, enter = enter, exit = exit) {
-                        ChoiceRow(
-                            position = position,
-                            icon = Icons.Outlined.Speed,
-                            title = stringResource(Res.string.settings_default_hold_speed),
-                            options = SettingsStore.HOLD_SPEED_OPTIONS,
-                            selected = state.defaultHoldSpeed,
-                            label = { formatSpeed(it) },
-                            onChange = onDefaultHoldSpeedChange,
-                            valueAtEnd = true,
-                        )
+                Column(verticalArrangement = Arrangement.spacedBy(Spacing.Hair)) {
+                    Text(
+                        text = stringResource(Res.string.settings_default_hold_speed),
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
+                        verticalArrangement = Arrangement.spacedBy(Spacing.Hair),
+                    ) {
+                        for (option in SettingsStore.HOLD_SPEED_OPTIONS) {
+                            FilterChip(
+                                selected = state.defaultHoldSpeed == option,
+                                onClick = { onDefaultHoldSpeedChange(option) },
+                                label = {
+                                    Text(
+                                        text = formatSpeed(option),
+                                        style = MaterialTheme.typography.labelLarge.tabular,
+                                    )
+                                },
+                            )
+                        }
                     }
                 }
             }
