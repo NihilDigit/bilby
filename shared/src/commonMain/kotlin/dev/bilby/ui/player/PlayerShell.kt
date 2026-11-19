@@ -919,8 +919,67 @@ fun PlayerShell(
                 }
                 // 用鼠标看、控件收起且在播放时,光标跟着藏起来,不留一个箭头钉在画面上。
                 .playerCursor(hidden = !pointerSource.isTouchLike && !controlsVisible && isPlaying && speedController?.active != true)
-                // 统一互斥的拖拽(横划 seek / 纵划亮度音量 / 小窗拖动)与长按倍速选档状态机,
-                // 放在点按检测之前:拖拽或长按一旦认领便消费后续事件(含抬手),不会漏给 detectTapGestures。
+                .pointerInput(player, locked, gestures, pipWindow, speedController) {
+                    if (locked) {
+                        // 锁上时只留"点一下把解锁按钮唤出来",其余手势一概不接。
+                        detectTapGestures(onTap = { controlsVisible = !controlsVisible })
+                        return@pointerInput
+                    }
+                    detectTapGestures(
+                        onTap = {
+                            if (speedController?.active == true) return@detectTapGestures
+                            if (latestMenuOpen) {
+                                focusManager.clearFocus()
+                                keepAwake()
+                                return@detectTapGestures
+                            }
+                            if (pointerSource.isTouchLike) {
+                                controlsVisible = !controlsVisible
+                            } else {
+                                togglePlayPause()
+                                playToggleFlash++
+                            }
+                            keepAwake()
+                        },
+                        // 双击按落点分四段:两侧各四分之一是 ±10 秒,中间仍是播放/暂停,
+                        // 对齐 PiliPlus 的左右边缘手势区域。
+                        //
+                        // 中间保留下来是因为双击暂停本来就在,直接换掉等于拿走一个已有的常用
+                        // 操作;而三分法是 YouTube 立起来的惯例,两侧那两块也正是横屏握持时
+                        // 拇指自然落到的位置。关掉 seek 的场景(直播)下四段退化成整屏播放/暂停。
+                        onDoubleTap = double@{ offset ->
+                            if (speedController?.active == true) return@double
+                            // 窗口里双击进全屏,小窗里双击回窗口:同一个手势,放大一档。
+                            if (pipWindow != null) {
+                                pipWindow.exit()
+                                return@double
+                            }
+                            if (!pointerSource.isTouchLike) {
+                                onFullscreenChange(!isFullscreen)
+                                return@double
+                            }
+                            val quarter = size.width / 4f
+                            when {
+                                gestures.seek && gestures.doubleTapSeek && offset.x < quarter ->
+                                    nudgeSeek(player, progress, -DOUBLE_TAP_SEEK_MILLIS)
+                                        .also { seekNudgeMillis = accumulateNudge(seekNudgeMillis, -DOUBLE_TAP_SEEK_MILLIS) }
+
+                                gestures.seek && gestures.doubleTapSeek && offset.x > size.width - quarter ->
+                                    nudgeSeek(player, progress, DOUBLE_TAP_SEEK_MILLIS)
+                                        .also { seekNudgeMillis = accumulateNudge(seekNudgeMillis, DOUBLE_TAP_SEEK_MILLIS) }
+
+                                else -> {
+                                    togglePlayPause()
+                                    playToggleFlash++
+                                }
+                            }
+                            keepAwake()
+                        },
+                    )
+                }
+                // 统一互斥的拖拽(横划 seek / 纵划亮度音量 / 小窗拖动)与长按倍速选档状态机。
+                // PointerEventPass.Main 为自内向外(链尾优先)分发,放在 detectTapGestures 之后确保
+                // 先拿到未消费的 down,且一旦认领拖拽或长按便先消费后续事件(含抬手)不漏给点按检测。
                 .playerSurfaceGestures(
                     key1 = player,
                     locked = locked,
@@ -1016,65 +1075,7 @@ fun PlayerShell(
                         progress.dragPositionMillis = null
                         seekCancelArmed = null
                     },
-                )
-                .pointerInput(player, locked, gestures, pipWindow, speedController) {
-                    if (locked) {
-                        // 锁上时只留"点一下把解锁按钮唤出来",其余手势一概不接。
-                        detectTapGestures(onTap = { controlsVisible = !controlsVisible })
-                        return@pointerInput
-                    }
-                    detectTapGestures(
-                        onTap = {
-                            if (speedController?.active == true) return@detectTapGestures
-                            if (latestMenuOpen) {
-                                focusManager.clearFocus()
-                                keepAwake()
-                                return@detectTapGestures
-                            }
-                            if (pointerSource.isTouchLike) {
-                                controlsVisible = !controlsVisible
-                            } else {
-                                togglePlayPause()
-                                playToggleFlash++
-                            }
-                            keepAwake()
-                        },
-                        // 双击按落点分四段:两侧各四分之一是 ±10 秒,中间仍是播放/暂停,
-                        // 对齐 PiliPlus 的左右边缘手势区域。
-                        //
-                        // 中间保留下来是因为双击暂停本来就在,直接换掉等于拿走一个已有的常用
-                        // 操作;而三分法是 YouTube 立起来的惯例,两侧那两块也正是横屏握持时
-                        // 拇指自然落到的位置。关掉 seek 的场景(直播)下四段退化成整屏播放/暂停。
-                        onDoubleTap = double@{ offset ->
-                            if (speedController?.active == true) return@double
-                            // 窗口里双击进全屏,小窗里双击回窗口:同一个手势,放大一档。
-                            if (pipWindow != null) {
-                                pipWindow.exit()
-                                return@double
-                            }
-                            if (!pointerSource.isTouchLike) {
-                                onFullscreenChange(!isFullscreen)
-                                return@double
-                            }
-                            val quarter = size.width / 4f
-                            when {
-                                gestures.seek && gestures.doubleTapSeek && offset.x < quarter ->
-                                    nudgeSeek(player, progress, -DOUBLE_TAP_SEEK_MILLIS)
-                                        .also { seekNudgeMillis = accumulateNudge(seekNudgeMillis, -DOUBLE_TAP_SEEK_MILLIS) }
-
-                                gestures.seek && gestures.doubleTapSeek && offset.x > size.width - quarter ->
-                                    nudgeSeek(player, progress, DOUBLE_TAP_SEEK_MILLIS)
-                                        .also { seekNudgeMillis = accumulateNudge(seekNudgeMillis, DOUBLE_TAP_SEEK_MILLIS) }
-
-                                else -> {
-                                    togglePlayPause()
-                                    playToggleFlash++
-                                }
-                            }
-                            keepAwake()
-                        },
-                    )
-                },
+                ),
         )
 
         // 顶部渐变在 overlay **之前**,于是弹幕落在它上面而不是底下。托的是页面画在壳外面的
