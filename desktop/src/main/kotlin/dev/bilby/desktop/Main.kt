@@ -72,6 +72,7 @@ import java.awt.event.WindowFocusListener
 import java.awt.event.WindowStateListener
 import java.io.File
 import java.util.Properties
+import java.util.concurrent.atomic.AtomicBoolean
 import javax.swing.SwingUtilities
 import kotlin.system.exitProcess
 
@@ -124,12 +125,18 @@ fun main(args: Array<String>) {
             val windowState = remember { bounds.initialState() }
         var fullscreen: WindowsFullscreen? = null
         var pip: WindowsPip? = null
+        val exitWatchdogStarted = remember { AtomicBoolean(false) }
         val quit = {
             // 全屏时的尺寸是整块屏幕,记下来下次就开成一个没有边框位置的大窗口;小窗同理,
             // 下次会开成右下角一小块。
             if (fullscreen?.isFullscreen != true && pip?.active != true) bounds.save(windowState)
+            // 退出看门狗：避免 mpv 停播或 Recomposer/Window 卸载阻塞导致应用挂死（尤其是更新重启时的 120s 超时）。
+            if (exitWatchdogStarted.compareAndSet(false, true)) {
+                startExitWatchdog()
+            }
             // 关窗口就是结束这次观看:补上最后一条心跳再退出。
-            platform.playback.stop()
+            runCatching { platform.playback.stop() }
+                .onFailure { BiliLog.w("退出时停止播放失败", it) }
             exitApplication()
         }
         // 更新脚本已经在等这个进程退出,由它替换文件后再把应用拉起来。
@@ -412,6 +419,27 @@ internal val appIcon: Painter? by lazy {
 }
 
 private const val FocusLossEfficiencyDebounceMillis = 600L
+private const val ExitWatchdogGraceMillis = 5_000L
+private const val ExitWatchdogHaltDelayMillis = 3_000L
+
+private fun startExitWatchdog() {
+    Thread({
+        runCatching { Thread.sleep(ExitWatchdogGraceMillis) }
+        BiliLog.w("应用退出超过 ${ExitWatchdogGraceMillis}ms 仍未结束，强制结束进程")
+        // 另起守护线程做 halt 兜底，防止某个 shutdown hook 阻塞 exitProcess(0)。
+        Thread({
+            runCatching { Thread.sleep(ExitWatchdogHaltDelayMillis) }
+            Runtime.getRuntime().halt(0)
+        }, "bilby-exit-halt").apply {
+            isDaemon = true
+            start()
+        }
+        exitProcess(0)
+    }, "bilby-exit-watchdog").apply {
+        isDaemon = true
+        start()
+    }
+}
 
 private fun isOwnedByWindow(candidate: java.awt.Window?, root: java.awt.Window): Boolean {
     var current = candidate

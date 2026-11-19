@@ -291,7 +291,8 @@ class DesktopPlaybackHost(
     }
 
     override fun stop() {
-        closeProgressSession()
+        // 关窗/停播路径运行在 EDT 上，用非阻塞 observedPositionMillis 避免同步 JNI 抢 mpv 核心锁卡死退出。
+        closeProgressSession(atMillis = player?.observedPositionMillis)
         loadJob?.cancel()
         tickJob?.cancel()
         enrichJob?.cancel()
