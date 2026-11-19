@@ -22,6 +22,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -103,6 +104,7 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import dev.bilby.data.FeedUpStripPosition
 import dev.bilby.data.LiveUpBrief
@@ -115,6 +117,7 @@ import dev.bilby.stringResource
 import dev.bilby.ui.BilbyWindowSize
 import dev.bilby.ui.CaptionActionButton
 import dev.bilby.ui.CaptionDragHeight
+import dev.bilby.ui.DesktopIslandSurface
 import dev.bilby.ui.LocalWindowCaption
 import dev.bilby.ui.components.Avatar
 import dev.bilby.ui.components.BiliAsyncImage
@@ -128,6 +131,7 @@ import dev.bilby.ui.components.LoadingSpinner
 import dev.bilby.ui.components.LocalPointerSource
 import dev.bilby.ui.components.MediaBadge
 import dev.bilby.ui.components.MetaSeparator
+import dev.bilby.ui.components.PlayingIndicator
 import dev.bilby.ui.components.PrefetchNearEnd
 import dev.bilby.ui.components.RefreshBox
 import dev.bilby.ui.components.RegisterPageRefresh
@@ -567,116 +571,153 @@ private fun FeedList(
             val columns = rememberVideoGridColumnCount(resolvedWidth)
             val multiColumn = columns > 1
 
-            Column(modifier = Modifier.fillMaxSize()) {
+            val desktopSplitIslands = pinnedHeader && (showLeftUpsRail || showRightUpsRail)
+            val feedGridContent: @Composable (Modifier) -> Unit = { gridModifier ->
+                RefreshBox(
+                    refreshing = state.refreshing,
+                    onRefresh = onRefresh,
+                    modifier = gridModifier
+                        .onSizeChanged { containerWidth = with(density) { it.width.toDp() } },
+                ) {
+                    LazyVerticalGrid(
+                        columns = GridCells.Fixed(columns),
+                        state = listState,
+                        modifier = Modifier.fillMaxSize(),
+                        contentPadding = contentPadding,
+                    ) {
+                        if (!pinnedHeader) {
+                            item(key = "header", span = FullLine, contentType = "header") {
+                                FeedHeader(
+                                    actions = headerActions,
+                                    captionActions = captionActions,
+                                )
+                            }
+                        }
+                        if (showTopUpsRow) {
+                            item(key = "frequent-ups", span = FullLine, contentType = "frequent-ups") {
+                                FrequentUpsRow(
+                                    ups = state.topUps,
+                                    liveUps = state.liveUps,
+                                    liveCount = state.liveCount,
+                                    special = state.topUpsAreSpecial,
+                                    onUpClick = onUpClick,
+                                    onOpenLiveNow = { liveSheetOpen = true },
+                                    onOpenFollowings = onOpenFollowings,
+                                )
+                            }
+                        }
+                        if (state.items.isEmpty()) {
+                            item(key = "empty", span = FullLine, contentType = "empty") {
+                                EmptyState(stringResource(Res.string.feed_empty))
+                            }
+                        }
+                        feedDisplayNodes(
+                            nodes = beforeNodes,
+                            expandedBurstIds = expandedBurstIds,
+                            multiColumn = multiColumn,
+                            wide = wide,
+                            onExpandBurst = { expandedBurstIds = expandedBurstIds + it },
+                            onCollapseBurst = collapseBurst,
+                            onItemClick = onItemClick,
+                            onUpClick = onUpClick,
+                            onExcludeUp = onExcludeUp,
+                            onAddToView = onAddToView,
+                        )
+                        if (markerIndex != null) {
+                            item(key = "read-marker", span = FullLine, contentType = "read-marker") {
+                                ReadMarkerDivider(Modifier.animateItem())
+                            }
+                        }
+                        feedDisplayNodes(
+                            nodes = fromNodes,
+                            expandedBurstIds = expandedBurstIds,
+                            multiColumn = multiColumn,
+                            wide = wide,
+                            onExpandBurst = { expandedBurstIds = expandedBurstIds + it },
+                            onCollapseBurst = collapseBurst,
+                            onItemClick = onItemClick,
+                            onUpClick = onUpClick,
+                            onExcludeUp = onExcludeUp,
+                            onAddToView = onAddToView,
+                        )
+                        item(key = "footer", span = FullLine, contentType = "footer") {
+                            ListFooter(
+                                appending = state.appending,
+                                hasMore = state.hasMore,
+                                hasItems = state.items.isNotEmpty(),
+                            )
+                        }
+                    }
+                    ListScrollbar(listState, Modifier.align(Alignment.CenterEnd))
+                }
+            }
+            val upsRailContent: @Composable () -> Unit = {
+                FrequentUpsRail(
+                    ups = state.topUps,
+                    liveUps = state.liveUps,
+                    liveCount = state.liveCount,
+                    special = state.topUpsAreSpecial,
+                    onUpClick = onUpClick,
+                    onOpenLiveNow = { liveSheetOpen = true },
+                    onOpenFollowings = onOpenFollowings,
+                    contentPadding = contentPadding,
+                )
+            }
+
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .then(
+                        if (desktopSplitIslands) {
+                            Modifier.background(MaterialTheme.colorScheme.surfaceContainer)
+                        } else {
+                            Modifier
+                        },
+                    ),
+            ) {
                 if (pinnedHeader) {
                     FeedHeader(
                         actions = headerActions,
                         captionActions = captionActions,
+                        bottomPadding = if (desktopSplitIslands) Spacing.Hair else 0.dp,
                     )
                 }
-                Row(modifier = Modifier.weight(1f).fillMaxWidth()) {
+                Row(
+                    modifier = Modifier.weight(1f).fillMaxWidth(),
+                    horizontalArrangement = if (desktopSplitIslands) {
+                        Arrangement.spacedBy(Spacing.Tight)
+                    } else {
+                        Arrangement.Start
+                    },
+                ) {
                     if (showLeftUpsRail) {
-                        FrequentUpsRail(
-                            ups = state.topUps,
-                            liveUps = state.liveUps,
-                            liveCount = state.liveCount,
-                            special = state.topUpsAreSpecial,
-                            onUpClick = onUpClick,
-                            onOpenLiveNow = { liveSheetOpen = true },
-                            onOpenFollowings = onOpenFollowings,
-                            contentPadding = contentPadding,
-                        )
-                    }
-                    RefreshBox(
-                        refreshing = state.refreshing,
-                        onRefresh = onRefresh,
-                        modifier = Modifier
-                            .weight(1f)
-                            .fillMaxHeight()
-                            .onSizeChanged { containerWidth = with(density) { it.width.toDp() } },
-                    ) {
-                        LazyVerticalGrid(
-                            columns = GridCells.Fixed(columns),
-                            state = listState,
-                            modifier = Modifier.fillMaxSize(),
-                            contentPadding = contentPadding,
-                        ) {
-                            if (!pinnedHeader) {
-                                item(key = "header", span = FullLine, contentType = "header") {
-                                    FeedHeader(
-                                        actions = headerActions,
-                                        captionActions = captionActions,
-                                    )
-                                }
+                        if (desktopSplitIslands) {
+                            DesktopIslandSurface(modifier = Modifier.fillMaxHeight()) {
+                                upsRailContent()
                             }
-                            if (showTopUpsRow) {
-                                item(key = "frequent-ups", span = FullLine, contentType = "frequent-ups") {
-                                    FrequentUpsRow(
-                                        ups = state.topUps,
-                                        liveUps = state.liveUps,
-                                        liveCount = state.liveCount,
-                                        special = state.topUpsAreSpecial,
-                                        onUpClick = onUpClick,
-                                        onOpenLiveNow = { liveSheetOpen = true },
-                                        onOpenFollowings = onOpenFollowings,
-                                    )
-                                }
-                            }
-                            if (state.items.isEmpty()) {
-                                item(key = "empty", span = FullLine, contentType = "empty") {
-                                    EmptyState(stringResource(Res.string.feed_empty))
-                                }
-                            }
-                            feedDisplayNodes(
-                                nodes = beforeNodes,
-                                expandedBurstIds = expandedBurstIds,
-                                multiColumn = multiColumn,
-                                wide = wide,
-                                onExpandBurst = { expandedBurstIds = expandedBurstIds + it },
-                                onCollapseBurst = collapseBurst,
-                                onItemClick = onItemClick,
-                                onUpClick = onUpClick,
-                                onExcludeUp = onExcludeUp,
-                                onAddToView = onAddToView,
-                            )
-                            if (markerIndex != null) {
-                                item(key = "read-marker", span = FullLine, contentType = "read-marker") {
-                                    ReadMarkerDivider(Modifier.animateItem())
-                                }
-                            }
-                            feedDisplayNodes(
-                                nodes = fromNodes,
-                                expandedBurstIds = expandedBurstIds,
-                                multiColumn = multiColumn,
-                                wide = wide,
-                                onExpandBurst = { expandedBurstIds = expandedBurstIds + it },
-                                onCollapseBurst = collapseBurst,
-                                onItemClick = onItemClick,
-                                onUpClick = onUpClick,
-                                onExcludeUp = onExcludeUp,
-                                onAddToView = onAddToView,
-                            )
-                            item(key = "footer", span = FullLine, contentType = "footer") {
-                                ListFooter(
-                                    appending = state.appending,
-                                    hasMore = state.hasMore,
-                                    hasItems = state.items.isNotEmpty(),
-                                )
-                            }
+                        } else {
+                            upsRailContent()
                         }
-                        ListScrollbar(listState, Modifier.align(Alignment.CenterEnd))
+                    }
+                    if (desktopSplitIslands) {
+                        DesktopIslandSurface(
+                            modifier = Modifier
+                                .weight(1f)
+                                .fillMaxHeight(),
+                        ) {
+                            feedGridContent(Modifier.fillMaxSize())
+                        }
+                    } else {
+                        feedGridContent(Modifier.weight(1f).fillMaxHeight())
                     }
                     if (showRightUpsRail) {
-                        FrequentUpsRail(
-                            ups = state.topUps,
-                            liveUps = state.liveUps,
-                            liveCount = state.liveCount,
-                            special = state.topUpsAreSpecial,
-                            onUpClick = onUpClick,
-                            onOpenLiveNow = { liveSheetOpen = true },
-                            onOpenFollowings = onOpenFollowings,
-                            contentPadding = contentPadding,
-                        )
+                        if (desktopSplitIslands) {
+                            DesktopIslandSurface(modifier = Modifier.fillMaxHeight()) {
+                                upsRailContent()
+                            }
+                        } else {
+                            upsRailContent()
+                        }
                     }
                 }
             }
@@ -707,6 +748,7 @@ private fun FeedList(
 private fun FeedHeader(
     actions: (@Composable () -> Unit)?,
     captionActions: (@Composable RowScope.() -> Unit)? = null,
+    bottomPadding: Dp = 0.dp,
 ) {
     val captionSlot = rememberCaptionSlot()
     Row(
@@ -717,6 +759,7 @@ private fun FeedHeader(
                 start = Spacing.Comfortable,
                 end = if (captionSlot.buttons != null) Spacing.Hair else Spacing.Comfortable,
                 top = Spacing.Tight,
+                bottom = bottomPadding,
             ),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -1359,8 +1402,8 @@ private fun FrequentUpsRail(
     ) {
         if (liveUps.isNotEmpty()) {
             item(key = "live-now") {
-                LiveNowSlot(
-                    liveUps = liveUps.take(1),
+                LiveNowRailSlot(
+                    liveUps = liveUps,
                     count = liveCount.coerceAtLeast(liveUps.size),
                     onClick = onOpenLiveNow,
                 )
@@ -1375,6 +1418,117 @@ private fun FrequentUpsRail(
         }
         item(key = "followings") {
             FollowingsSlot(onClick = onOpenFollowings)
+        }
+    }
+}
+
+/**
+ * 纵向 UP 主轨顶部的「正在直播」前置格：沿用横向 [LiveNowSlot] 的 2dp `primary` 环形头像胶囊与
+ * `primaryContainer` 直播数胶囊，但改为纵向叠放至多三张等大头像，既在 `84.dp` 轨宽内与下方
+ * `48.dp` 头像中轴对齐，也完整呈现多人同播状态。
+ */
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
+@Composable
+private fun LiveNowRailSlot(
+    liveUps: List<LiveUpBrief>,
+    count: Int,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    if (liveUps.isEmpty()) return
+    val faces = liveUps.take(LiveRailMaxStackedFaces)
+    val totalLiveCount = count.coerceAtLeast(liveUps.size)
+    val colors = MaterialTheme.colorScheme
+    val outerSlotGap = (Spacing.Hair - LiveRailBadgeVerticalPadding).coerceAtLeast(0.dp)
+
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        modifier = modifier
+            .interactiveCard(
+                shape = MaterialTheme.shapes.medium,
+                baseColor = Color.Transparent,
+                hoverColor = colors.surfaceContainerLow,
+            )
+            .clickable(role = Role.Button, onClick = onClick)
+            .padding(
+                start = SlotInset,
+                end = SlotInset,
+                top = Spacing.Hair,
+                bottom = outerSlotGap,
+            )
+            .width(LiveRailSlotWidth),
+    ) {
+        LiveRingVerticalCapsule(faces = faces)
+
+        Surface(
+            shape = CircleShape,
+            color = colors.primaryContainer,
+            contentColor = colors.onPrimaryContainer,
+            modifier = Modifier.padding(top = outerSlotGap),
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(Spacing.Hair),
+                modifier = Modifier.padding(
+                    horizontal = LiveRailBadgeHorizontalPadding,
+                    vertical = LiveRailBadgeVerticalPadding,
+                ),
+            ) {
+                PlayingIndicator(
+                    active = true,
+                    color = colors.onPrimaryContainer,
+                    modifier = Modifier.size(LiveRailSlotPulseSize),
+                )
+                Text(
+                    text = stringResource(Res.string.feed_live_count_badge, totalLiveCount),
+                    style = MaterialTheme.typography.labelSmallEmphasized.tabular,
+                    color = colors.onPrimaryContainer,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun LiveRingVerticalCapsule(
+    faces: List<LiveUpBrief>,
+    modifier: Modifier = Modifier,
+) {
+    val colors = MaterialTheme.colorScheme
+    val capsuleHeight = Dimens.AvatarStack +
+        LiveRailAvatarOverlapStep * (faces.size.coerceIn(1, LiveRailMaxStackedFaces) - 1)
+    Box(
+        contentAlignment = Alignment.TopCenter,
+        modifier = modifier
+            .size(width = Dimens.AvatarStack, height = capsuleHeight)
+            .clip(CircleShape)
+            .background(colors.surfaceContainerLow)
+            .border(LiveRailRingStrokeWidth, colors.primary, CircleShape)
+            .padding(LiveRailRingInnerInset),
+    ) {
+        for (index in faces.lastIndex downTo 0) {
+            val topOffset = LiveRailAvatarOverlapStep * index
+            val hasBackNeighbor = index < faces.lastIndex
+            if (hasBackNeighbor) {
+                Box(
+                    contentAlignment = Alignment.Center,
+                    modifier = Modifier
+                        .offset(y = topOffset - LiveRailFaceSeparatorWidth)
+                        .size(LiveRailInnerAvatarSize + LiveRailFaceSeparatorWidth * 2)
+                        .clip(CircleShape)
+                        .background(colors.surface),
+                ) {
+                    Avatar(url = faces[index].faceUrl, size = LiveRailInnerAvatarSize)
+                }
+            } else {
+                Avatar(
+                    url = faces[index].faceUrl,
+                    size = LiveRailInnerAvatarSize,
+                    modifier = Modifier.offset(y = topOffset),
+                )
+            }
         }
     }
 }
@@ -1963,6 +2117,18 @@ private val AvatarSlotWidth = 60.dp
 
 /** 宽屏下纵向 UP 主头像轨宽度，与左侧 80dp 导航轨视觉协调。 */
 private val UpsRailWidth = 84.dp
+
+/** 纵向轨内直播叠放胶囊度量，与 [LiveNowSlot] 保持一致。 */
+private const val LiveRailMaxStackedFaces = 3
+private val LiveRailRingStrokeWidth = 2.dp
+private val LiveRailRingInnerInset = 3.dp
+private val LiveRailInnerAvatarSize = Dimens.AvatarStack - LiveRailRingInnerInset * 2
+private val LiveRailAvatarOverlapStep = 22.dp
+private val LiveRailFaceSeparatorWidth = 1.5.dp
+private val LiveRailBadgeHorizontalPadding = 7.dp
+private val LiveRailBadgeVerticalPadding = 2.dp
+private val LiveRailSlotPulseSize = 11.dp
+private val LiveRailSlotWidth = 68.dp
 
 /** 每格自己的左右内边距。算箭头对齐时要用到,见「关注列表」那一格的注释。 */
 private val SlotInset = 2.dp
