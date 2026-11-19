@@ -963,6 +963,7 @@ val LocalPlayerLayoutPrefs = staticCompositionLocalOf { PlayerLayoutPrefs.Defaul
  * - 真实播放态：空槽位与不可用切集槽位不渲染交互热区，仅在成对可见时以对称占位宽度保持中央播放键绝对居中。
  * - 所见即所得预览态（[previewMode] = true）：空槽位显示虚线圆框与微弱 `+`，点选任意槽位即可编辑。
  */
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 internal fun CenterControlCluster(
     config: CenterClusterConfig,

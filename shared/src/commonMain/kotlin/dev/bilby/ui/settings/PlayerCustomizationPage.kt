@@ -429,8 +429,15 @@ private fun BinaryTogglePair(
     onSelectRight: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val colors = ToggleButtonDefaults.colors(
+        containerColor = MaterialTheme.colorScheme.surfaceContainer,
+        contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+        checkedContainerColor = MaterialTheme.colorScheme.secondaryContainer,
+        checkedContentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+    )
     ButtonGroup(
         overflowIndicator = {},
+        horizontalArrangement = Arrangement.spacedBy(ButtonGroupDefaults.ConnectedSpaceBetween),
         modifier = modifier,
     ) {
         customItem(
@@ -439,7 +446,7 @@ private fun BinaryTogglePair(
                     checked = leftSelected,
                     onCheckedChange = { if (it) onSelectLeft() },
                     shapes = ButtonGroupDefaults.connectedLeadingButtonShapes(),
-                    colors = ToggleButtonDefaults.tonalToggleButtonColors(),
+                    colors = colors,
                     contentPadding = PaddingValues(horizontal = Spacing.Cozy, vertical = Spacing.Tight),
                     modifier = Modifier.weight(1f).heightIn(min = 40.dp),
                 ) {
@@ -454,7 +461,7 @@ private fun BinaryTogglePair(
                     checked = !leftSelected,
                     onCheckedChange = { if (it) onSelectRight() },
                     shapes = ButtonGroupDefaults.connectedTrailingButtonShapes(),
-                    colors = ToggleButtonDefaults.tonalToggleButtonColors(),
+                    colors = colors,
                     contentPadding = PaddingValues(horizontal = Spacing.Cozy, vertical = Spacing.Tight),
                     modifier = Modifier.weight(1f).heightIn(min = 40.dp),
                 ) {
