@@ -86,18 +86,18 @@ internal fun Modifier.playerSurfaceGestures(
 
                 if (canSpeedDial) {
                     val outcome: SurfaceGestureRace? = withTimeoutOrNull(longPressTimeout) {
+                        var result: SurfaceGestureRace = SurfaceGestureRace.Ended
                         while (true) {
                             val event = awaitPointerEvent(PointerEventPass.Main)
-                            val change = event.changes.firstOrNull { it.id == pointerId }
-                                ?: return@withTimeoutOrNull SurfaceGestureRace.Ended
-                            if (change.isConsumed || !change.pressed) {
-                                return@withTimeoutOrNull SurfaceGestureRace.Ended
-                            }
+                            val change = event.changes.firstOrNull { it.id == pointerId } ?: break
+                            if (change.isConsumed || !change.pressed) break
                             lastPosition = change.position
                             if ((change.position - startPosition).getDistance() > touchSlop) {
-                                return@withTimeoutOrNull SurfaceGestureRace.DragStarted(change)
+                                result = SurfaceGestureRace.DragStarted(change)
+                                break
                             }
                         }
+                        result
                     }
                     when (outcome) {
                         null -> enterSpeedDial = true
