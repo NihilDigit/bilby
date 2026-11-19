@@ -117,11 +117,19 @@ import androidx.compose.ui.input.pointer.PointerType
 import dev.bilby.data.CenterClusterConfig
 import dev.bilby.data.CenterSlotAction
 import dev.bilby.data.DEFAULT_DOUBLE_TAP_SEEK_SECONDS
+import dev.bilby.data.DEFAULT_DOUBLE_TAP_ZONE_FRACTION
+import dev.bilby.data.DEFAULT_VERTICAL_ZONE_FRACTION
+import dev.bilby.data.MAX_DOUBLE_TAP_ZONE_FRACTION
 import dev.bilby.data.MAX_SEEK_SECONDS
+import dev.bilby.data.MAX_VERTICAL_ZONE_FRACTION
+import dev.bilby.data.MIN_DOUBLE_TAP_ZONE_FRACTION
 import dev.bilby.data.MIN_SEEK_SECONDS
+import dev.bilby.data.MIN_VERTICAL_ZONE_FRACTION
 import dev.bilby.data.PlayerControlId
 import dev.bilby.data.PlayerLayoutPrefs
 import dev.bilby.data.PlayerPanelItem
+import dev.bilby.data.SwipeSeekSensitivity
+import dev.bilby.data.VerticalSwipeAction
 import dev.bilby.elapsedRealtimeMillis
 import dev.bilby.player.PlayerHandle
 import dev.bilby.ui.components.LocalEditableFocusTracker
@@ -155,12 +163,24 @@ data class PlayerGestureOptions(
     val doubleTapSeek: Boolean = true,
     /** 两侧双击单次步进秒数（1..300）。 */
     val doubleTapSeekSeconds: Int = DEFAULT_DOUBLE_TAP_SEEK_SECONDS,
-    /** 左半屏纵划调亮度、右半屏调音量。 */
+    /** 纵向滑动手势总开关（默认左亮右音，可自定义为亮度/音量/切换剧集/无）。 */
     val brightnessAndVolume: Boolean = true,
     /** 长按选择临时倍速。 */
     val fastForward: Boolean = true,
     /** 长按时展开倍速选档条并允许滑动切换或锁定倍速;关闭后仅按默认倍速临时加速并在画面顶部显示提示。 */
     val fastForwardDial: Boolean = true,
+    /** 左侧纵向滑动动作。 */
+    val leftVerticalSwipe: VerticalSwipeAction = VerticalSwipeAction.Brightness,
+    /** 右侧纵向滑动动作。 */
+    val rightVerticalSwipe: VerticalSwipeAction = VerticalSwipeAction.Volume,
+    /** 两侧纵向滑动热区宽度占比（0.20..0.50）。 */
+    val verticalZoneFraction: Float = DEFAULT_VERTICAL_ZONE_FRACTION,
+    /** 横划进度灵敏度。 */
+    val swipeSeekSensitivity: SwipeSeekSensitivity = SwipeSeekSensitivity.Standard,
+    /** 横划进度时顶部两角松手取消区开关。 */
+    val swipeSeekCancelZone: Boolean = true,
+    /** 两侧双击快进/快退热区宽度占比（0.15..0.40）。 */
+    val doubleTapZoneFraction: Float = DEFAULT_DOUBLE_TAP_ZONE_FRACTION,
 )
 
 /**
@@ -522,8 +542,16 @@ fun PlayerShell(
     /** 正在进行的手势;横划与纵划在第一段位移里定死,见下面的 onDrag。 */
     var gesture by remember { mutableStateOf<PlayerGesture?>(null) }
     var dragging by remember { mutableStateOf(false) }
+    var dragAxisLocked by remember { mutableStateOf(false) }
     var dragStartX by remember { mutableFloatStateOf(0f) }
     val dragAccumulated = remember { object { var value = Offset.Zero } }
+    /** 纵向滑动切集状态：direction 1 = 上滑下一集，-1 = 下滑上一集，0 = 未定方向。 */
+    var episodeSwipeActive by remember { mutableStateOf(false) }
+    var episodeSwipeDirection by remember { mutableIntStateOf(0) }
+    var episodeSwipeArmed by remember { mutableStateOf(false) }
+    val episodeSwipeMinPx = with(density) { 48.dp.toPx() }
+    val latestCanPrevious by rememberUpdatedState(playbackState.queue?.canPrevious == true)
+    val latestCanNext by rememberUpdatedState(playbackState.queue?.canNext == true)
 
     /** 纵划时浮层要显示的百分比。 */
     var adjustValue by remember { mutableFloatStateOf(0f) }
@@ -605,17 +633,35 @@ fun PlayerShell(
         }
     }
 
-    /** 定下这一次拖拽在做什么。返回 null 表示这次不做事(这一档手势被关掉)。 */
+    /** 定下这一次拖拽在做什么。返回 null 表示这次不做事(或由纵划切集接管)。 */
     val startGesture: (Boolean, Long) -> PlayerGesture? = start@{ horizontal, playerPosition ->
         if (horizontal) {
             return@start if (gestures.seek && gestures.swipeSeek) PlayerGesture.Seek(playerPosition) else null
         }
         if (!gestures.brightnessAndVolume) return@start null
-        val onLeftHalf = dragStartX < 0.5f
-        if (onLeftHalf) {
-            brightness?.let { PlayerGesture.Adjust(VerticalAdjust.Brightness, it.current()) }
-        } else {
-            volume?.let { PlayerGesture.Adjust(VerticalAdjust.Volume, it.current()) }
+        val zoneFraction = gestures.verticalZoneFraction.coerceIn(
+            MIN_VERTICAL_ZONE_FRACTION,
+            MAX_VERTICAL_ZONE_FRACTION,
+        )
+        val verticalAction = when {
+            dragStartX < zoneFraction -> gestures.leftVerticalSwipe
+            dragStartX > 1f - zoneFraction -> gestures.rightVerticalSwipe
+            else -> VerticalSwipeAction.None
+        }
+        when (verticalAction) {
+            VerticalSwipeAction.Brightness ->
+                brightness?.let { PlayerGesture.Adjust(VerticalAdjust.Brightness, it.current()) }
+            VerticalSwipeAction.Volume ->
+                volume?.let { PlayerGesture.Adjust(VerticalAdjust.Volume, it.current()) }
+            VerticalSwipeAction.Episode -> {
+                if (latestCanPrevious || latestCanNext) {
+                    episodeSwipeActive = true
+                    episodeSwipeDirection = 0
+                    episodeSwipeArmed = false
+                }
+                null
+            }
+            VerticalSwipeAction.None -> null
         }
     }
 
@@ -987,15 +1033,19 @@ fun PlayerShell(
                                 onFullscreenChange(!isFullscreen)
                                 return@double
                             }
-                            val quarter = size.width / 4f
+                            val zoneFraction = gestures.doubleTapZoneFraction.coerceIn(
+                                MIN_DOUBLE_TAP_ZONE_FRACTION,
+                                MAX_DOUBLE_TAP_ZONE_FRACTION,
+                            )
+                            val edgeWidth = size.width * zoneFraction
                             val doubleTapSeekMillis = gestures.doubleTapSeekSeconds
                                 .coerceIn(MIN_SEEK_SECONDS, MAX_SEEK_SECONDS) * 1_000L
                             when {
-                                gestures.seek && gestures.doubleTapSeek && offset.x < quarter ->
+                                gestures.seek && gestures.doubleTapSeek && offset.x < edgeWidth ->
                                     nudgeSeek(player, progress, -doubleTapSeekMillis)
                                         .also { seekNudgeMillis = accumulateNudge(seekNudgeMillis, -doubleTapSeekMillis) }
 
-                                gestures.seek && gestures.doubleTapSeek && offset.x > size.width - quarter ->
+                                gestures.seek && gestures.doubleTapSeek && offset.x > size.width - edgeWidth ->
                                     nudgeSeek(player, progress, doubleTapSeekMillis)
                                         .also { seekNudgeMillis = accumulateNudge(seekNudgeMillis, doubleTapSeekMillis) }
 
@@ -1022,19 +1072,26 @@ fun PlayerShell(
                     onSpeedStart = {
                         controlsVisible = false
                         gesture = null
+                        episodeSwipeActive = false
+                        episodeSwipeDirection = 0
+                        episodeSwipeArmed = false
                         progress.dragPositionMillis = null
                         keepAwake()
                     },
                     onDragStart = { start, width, height ->
                         dragging = true
+                        dragAxisLocked = false
                         gesture = null
+                        episodeSwipeActive = false
+                        episodeSwipeDirection = 0
+                        episodeSwipeArmed = false
                         dragAccumulated.value = Offset.Zero
                         dragStartX = start.x / width
                         // **起手就在取消区里的话,这次拖拽不给取消。** 顶部两角本来就是
                         // 横屏握持时拇指容易搭上去的地方;不排除的话,从那儿起手的 seek
                         // 一动就被判成"要取消",而用户根本没往哪儿拖。
                         seekCancelArmed =
-                            if (inSeekCancelZone(start, width, height)) null else false
+                            if (!gestures.swipeSeekCancelZone || inSeekCancelZone(start, width, height)) null else false
                     },
                     onDrag = drag@{ position, delta, width, height ->
                         dragAccumulated.value += delta
@@ -1054,21 +1111,52 @@ fun PlayerShell(
                         // 方向在第一段位移里定下,之后不再改判:不锁轴的话,横划途中手指
                         // 稍微飘一点就会跳去改音量。
                         val accumulated = dragAccumulated.value
-                        val current = gesture ?: startGesture(
-                            abs(accumulated.x) >= abs(accumulated.y),
-                            progress.activePendingTarget() ?: player.currentPosition,
-                        )?.also { gesture = it } ?: return@drag
+                        if (!dragAxisLocked) {
+                            dragAxisLocked = true
+                            gesture = startGesture(
+                                abs(accumulated.x) >= abs(accumulated.y),
+                                progress.activePendingTarget() ?: player.currentPosition,
+                            )
+                        }
+
+                        if (episodeSwipeActive) {
+                            val thresholdPx = (height * EPISODE_SWIPE_THRESHOLD_FRACTION)
+                                .coerceAtLeast(episodeSwipeMinPx)
+                            val dy = accumulated.y
+                            val dir = when {
+                                dy < -8f -> 1
+                                dy > 8f -> -1
+                                else -> 0
+                            }
+                            val canTrigger = when (dir) {
+                                1 -> latestCanNext
+                                -1 -> latestCanPrevious
+                                else -> false
+                            }
+                            val armed = canTrigger && abs(dy) >= thresholdPx
+                            if (armed && !episodeSwipeArmed) {
+                                haptics.performHapticFeedback(HapticFeedbackType.GestureThresholdActivate)
+                            }
+                            episodeSwipeDirection = dir
+                            episodeSwipeArmed = armed
+                            return@drag
+                        }
+
+                        val current = gesture ?: return@drag
 
                         when (current) {
                             is PlayerGesture.Seek -> {
                                 // 整屏宽对应多长:不超过 1 分钟的短视频按全长映射,避免半屏划到头;
-                                // 更长视频按时长的四分之一取,夹在 1 到 5 分钟之间。
+                                // 更长视频按时长的四分之一取,夹在 1 到 5 分钟之间,再乘以灵敏度系数。
                                 val dur = progress.durationMillis
-                                val span = if (dur <= 60_000L) {
+                                val baseSpan = if (dur <= 60_000L) {
                                     dur.coerceAtLeast(1L)
                                 } else {
                                     (dur / 4).coerceIn(60_000L, 300_000L)
                                 }
+                                val span = (baseSpan * gestures.swipeSeekSensitivity.spanMultiplier)
+                                    .toLong()
+                                    .coerceAtLeast(1L)
                                 val target = current.startPositionMillis +
                                     (accumulated.x / width * span).toLong()
                                 progress.dragPositionMillis = target.coerceIn(0L, dur.coerceAtLeast(0L))
@@ -1088,21 +1176,34 @@ fun PlayerShell(
                     },
                     onDragEnd = {
                         dragging = false
+                        dragAxisLocked = false
                         // 拖拽期间只动本地位置,松手才真 seek:每帧 seek 会让播放器不停丢
                         // 缓冲重新起播,表现为拖不动。和进度条的处理是同一套。
                         if (gesture is PlayerGesture.Seek && seekCancelArmed != true) {
                             progress.dragPositionMillis?.let { target ->
                                 commitSeek(player, progress, target)
                             }
+                        } else if (episodeSwipeActive && episodeSwipeArmed) {
+                            when (episodeSwipeDirection) {
+                                1 -> player.seekToNext()
+                                -1 -> player.seekToPrevious()
+                            }
                         }
                         gesture = null
+                        episodeSwipeActive = false
+                        episodeSwipeDirection = 0
+                        episodeSwipeArmed = false
                         progress.dragPositionMillis = null
                         seekCancelArmed = null
                         keepAwake()
                     },
                     onDragCancel = {
                         dragging = false
+                        dragAxisLocked = false
                         gesture = null
+                        episodeSwipeActive = false
+                        episodeSwipeDirection = 0
+                        episodeSwipeArmed = false
                         progress.dragPositionMillis = null
                         seekCancelArmed = null
                     },
@@ -1139,6 +1240,50 @@ fun PlayerShell(
             effectsSpec = effectsSpec,
             modifier = Modifier.align(Alignment.Center),
         )
+
+        var shownEpisodeDir by remember { mutableIntStateOf(1) }
+        var shownEpisodeArmed by remember { mutableStateOf(false) }
+        if (episodeSwipeActive && episodeSwipeDirection != 0) {
+            shownEpisodeDir = episodeSwipeDirection
+            shownEpisodeArmed = episodeSwipeArmed
+        }
+        AnimatedVisibility(
+            visible = episodeSwipeActive && episodeSwipeDirection != 0,
+            enter = fadeIn(effectsSpec),
+            exit = fadeOut(effectsSpec),
+            modifier = Modifier.align(Alignment.Center),
+        ) {
+            val isNext = shownEpisodeDir > 0
+            val available = if (isNext) scope.canNext else scope.canPrevious
+            val tint = if (shownEpisodeArmed) MaterialTheme.colorScheme.primary else FixedColors.OnMedia
+            val labelRes = when {
+                isNext && !available -> Res.string.player_gesture_episode_no_next
+                isNext && shownEpisodeArmed -> Res.string.player_gesture_episode_release_next
+                isNext -> Res.string.player_gesture_episode_swipe_up
+                !available -> Res.string.player_gesture_episode_no_previous
+                shownEpisodeArmed -> Res.string.player_gesture_episode_release_previous
+                else -> Res.string.player_gesture_episode_swipe_down
+            }
+            Overlay {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
+                ) {
+                    Icon(
+                        imageVector = if (isNext) Icons.Filled.SkipNext else Icons.Filled.SkipPrevious,
+                        contentDescription = null,
+                        tint = tint,
+                        modifier = Modifier.size(20.dp),
+                    )
+                    Text(
+                        text = stringResource(labelRes),
+                        style = MaterialTheme.typography.labelLarge,
+                        color = tint,
+                        maxLines = 1,
+                    )
+                }
+            }
+        }
 
         val levelHud: PlayerHud.Level? = when ((currentGesture as? PlayerGesture.Adjust)?.kind) {
             VerticalAdjust.Brightness -> {
@@ -1495,6 +1640,7 @@ fun PlayerShell(
         AnimatedVisibility(
             // Android 小窗里不画:那里的播放键是系统给的。桌面小窗在触屏模式下照画，键鼠模式走底栏左端播放键。
             visible = (!pip || pipWindow != null) && currentGesture !is PlayerGesture.Seek &&
+                !episodeSwipeActive &&
                 speedController?.active != true &&
                 (showCenterControls || loadingVisible || (centerConfig.showCenterPlay && flashVisible)),
             enter = scaleIn(scaleSpec, initialScale = CenterButtonEnterScale) + fadeIn(effectsSpec),
@@ -1907,3 +2053,4 @@ private fun inSeekCancelZone(point: Offset, width: Float, height: Float): Boolea
 }
 
 private const val SeekCancelZoneFraction = 0.15f
+private const val EPISODE_SWIPE_THRESHOLD_FRACTION = 0.14f

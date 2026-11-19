@@ -678,9 +678,10 @@ private fun PlayerControlBar(
         modifier = container.onSizeChanged { barWidth = with(density) { it.width.toDp() } },
     ) {
         // 堆叠:全屏或双栏里占满整列的内嵌画面,进度条才值得独占一行。宽一档(≥480)再摆 chip。
+        // 宽排同时展示清晰度/音质/字幕等 chip 时,需更宽(≥820dp)才常驻内联弹幕输入框,避免挤压右端全屏键。
         val stacked = largePlayer && !pip
         val wide = stacked && barWidth >= Breakpoints.StackedControlBar
-        val roomy = barWidth >= InlineDanmakuBarMinWidth
+        val roomy = barWidth >= if (wide) WideInlineDanmakuBarMinWidth else InlineDanmakuBarMinWidth
         var composing by remember { mutableStateOf(false) }
         LaunchedEffect(danmakuFocusNonce) {
             if (danmakuFocusNonce > 0 && danmakuField != null) composing = true
@@ -869,11 +870,17 @@ private fun PlayerControlBar(
                 seekBar(Modifier.fillMaxWidth())
                 val showField = danmakuField != null && (roomy || composing)
                 val hasBottomSpacer = activeLayout.bottomBar.any { it == PlayerPanelItem.Spacer }
+                val danmakuIdx = activeLayout.bottomBar.indexOfFirst {
+                    it is PlayerPanelItem.Control && it.id == PlayerControlId.DanmakuInput
+                }
+                val spacerIdx = activeLayout.bottomBar.indexOfFirst { it == PlayerPanelItem.Spacer }
+                val danmakuAbsorbsSpacer = showField && danmakuIdx >= 0
+                val danmakuAfterSpacer = danmakuIdx >= 0 && spacerIdx >= 0 && danmakuIdx > spacerIdx
                 Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
                     for (item in activeLayout.bottomBar) {
                         when (item) {
                             PlayerPanelItem.Spacer -> {
-                                if (!composing || roomy) {
+                                if ((!composing || roomy) && !danmakuAbsorbsSpacer) {
                                     Spacer(Modifier.weight(1f))
                                 }
                             }
@@ -949,30 +956,37 @@ private fun PlayerControlBar(
                                     }
                                     PlayerControlId.DanmakuInput -> if (danmakuField != null) {
                                         if (showField) {
-                                            ControlBarDanmakuField(
-                                                draft = danmakuField.draft,
-                                                onDraftChange = danmakuField.onDraftChange,
-                                                maxLength = danmakuField.maxLength,
-                                                sending = danmakuField.sending,
-                                                error = danmakuField.error,
-                                                onSend = danmakuField.onSend,
-                                                onFocusChange = { focused ->
-                                                    composing = focused
-                                                    onDanmakuFieldFocusChange(focused)
-                                                    danmakuField.onComposingChange(focused)
-                                                },
-                                                autoFocus = !roomy,
-                                                focusRequestNonce = danmakuFocusNonce,
-                                                modifier = Modifier
-                                                    .then(
-                                                        if (composing || !hasBottomSpacer) {
-                                                            Modifier.weight(1f)
-                                                        } else {
-                                                            Modifier.widthIn(min = 160.dp, max = 320.dp)
-                                                        },
-                                                    )
-                                                    .padding(horizontal = Spacing.Cozy),
-                                            )
+                                            // 用 weight(1f) 占位确保所有固定宽度图标按钮优先完整测量，绝不挤压右端全屏键；
+                                            // 输入框在未聚焦时按最大 260.dp 贴齐对应一侧，窄宽时平滑收缩。
+                                            Box(
+                                                contentAlignment = if (danmakuAfterSpacer) Alignment.CenterEnd else Alignment.CenterStart,
+                                                modifier = Modifier.weight(1f),
+                                            ) {
+                                                ControlBarDanmakuField(
+                                                    draft = danmakuField.draft,
+                                                    onDraftChange = danmakuField.onDraftChange,
+                                                    maxLength = danmakuField.maxLength,
+                                                    sending = danmakuField.sending,
+                                                    error = danmakuField.error,
+                                                    onSend = danmakuField.onSend,
+                                                    onFocusChange = { focused ->
+                                                        composing = focused
+                                                        onDanmakuFieldFocusChange(focused)
+                                                        danmakuField.onComposingChange(focused)
+                                                    },
+                                                    autoFocus = !roomy,
+                                                    focusRequestNonce = danmakuFocusNonce,
+                                                    modifier = Modifier
+                                                        .then(
+                                                            if (composing) {
+                                                                Modifier.fillMaxWidth()
+                                                            } else {
+                                                                Modifier.widthIn(min = 96.dp, max = 260.dp).fillMaxWidth()
+                                                            },
+                                                        )
+                                                        .padding(horizontal = Spacing.Tight),
+                                                )
+                                            }
                                         } else {
                                             val label = stringResource(Res.string.danmaku_send)
                                             PlayerTooltip(label, shortcut = "Enter") {
@@ -1077,7 +1091,7 @@ private fun PlayerControlBar(
                             }
                         }
                     }
-                    if (!hasBottomSpacer && !composing) {
+                    if (!hasBottomSpacer && !composing && !danmakuAbsorbsSpacer) {
                         Spacer(Modifier.weight(1f))
                     }
                 }
@@ -1165,3 +1179,4 @@ private fun BoundActiveSleepTimerChip(
 }
 
 private val ChipIconSize = 18.dp
+private val WideInlineDanmakuBarMinWidth = 820.dp

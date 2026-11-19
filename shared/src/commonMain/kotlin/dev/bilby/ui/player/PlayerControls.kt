@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.requiredWidthIn
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
@@ -579,7 +580,9 @@ internal fun PlayerIconButton(
                 MaterialTheme.colorScheme.onSurface
             },
         ),
-        modifier = modifier.then(if (enabled) Modifier.pointerHoverIcon(PointerIcon.Hand) else Modifier),
+        modifier = modifier
+            .requiredWidthIn(min = 40.dp)
+            .then(if (enabled) Modifier.pointerHoverIcon(PointerIcon.Hand) else Modifier),
     ) {
         Icon(icon, contentDescription = contentDescription, modifier = Modifier.size(iconSize))
     }

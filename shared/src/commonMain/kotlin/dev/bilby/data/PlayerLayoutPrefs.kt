@@ -12,6 +12,13 @@ const val DEFAULT_SEEK_SECONDS = 15
 const val DEFAULT_DOUBLE_TAP_SEEK_SECONDS = 10
 val SEEK_SECONDS_PRESETS = listOf(5, 10, 15, 30)
 
+const val MIN_VERTICAL_ZONE_FRACTION = 0.20f
+const val MAX_VERTICAL_ZONE_FRACTION = 0.50f
+const val DEFAULT_VERTICAL_ZONE_FRACTION = 0.40f
+const val MIN_DOUBLE_TAP_ZONE_FRACTION = 0.15f
+const val MAX_DOUBLE_TAP_ZONE_FRACTION = 0.40f
+const val DEFAULT_DOUBLE_TAP_ZONE_FRACTION = 0.25f
+
 enum class PlayerLayoutMode(val isFullscreen: Boolean) {
     Embedded(isFullscreen = false),
     Fullscreen(isFullscreen = true),
@@ -299,6 +306,89 @@ data class PlayerFormFactorLayout(
         val updated = when (bar) {
             PlayerBarSlot.Top -> base.copy(topBar = base.topBar + item)
             PlayerBarSlot.Bottom -> base.copy(bottomBar = base.bottomBar + item)
+        }
+        return updated.sanitize(isFullscreen)
+    }
+
+    fun insertIntoBar(
+        bar: PlayerBarSlot,
+        index: Int,
+        item: PlayerPanelItem,
+        isFullscreen: Boolean,
+    ): PlayerFormFactorLayout {
+        if (item is PlayerPanelItem.Control && item.id == PlayerControlId.Back) return this
+        val existingIndexInTarget = if (item is PlayerPanelItem.Control) {
+            itemsFor(bar).indexOfFirst { it is PlayerPanelItem.Control && it.id == item.id }
+        } else {
+            -1
+        }
+        val base = if (item is PlayerPanelItem.Control) removeFromBars(item.id) else this
+        val targetList = base.itemsFor(bar).toMutableList()
+        val adjusted = if (existingIndexInTarget in 0 until index) index - 1 else index
+        val minIndex = if (
+            isFullscreen &&
+            bar == PlayerBarSlot.Top &&
+            targetList.firstOrNull().let { it is PlayerPanelItem.Control && it.id == PlayerControlId.Back }
+        ) {
+            1
+        } else {
+            0
+        }
+        val clampedIndex = adjusted.coerceIn(minIndex, targetList.size)
+        targetList.add(clampedIndex, item)
+        val updated = when (bar) {
+            PlayerBarSlot.Top -> base.copy(topBar = targetList)
+            PlayerBarSlot.Bottom -> base.copy(bottomBar = targetList)
+        }
+        return updated.sanitize(isFullscreen)
+    }
+
+    fun moveBarItemToBarAt(
+        fromBar: PlayerBarSlot,
+        fromIndex: Int,
+        toBar: PlayerBarSlot,
+        toIndex: Int,
+        isFullscreen: Boolean,
+    ): PlayerFormFactorLayout {
+        val sourceList = itemsFor(fromBar)
+        val item = sourceList.getOrNull(fromIndex) ?: return this
+        if (item is PlayerPanelItem.Control && item.id == PlayerControlId.Back) return this
+        if (fromBar == toBar) {
+            val mutable = sourceList.toMutableList()
+            val moved = mutable.removeAt(fromIndex)
+            val adjusted = if (fromIndex < toIndex) toIndex - 1 else toIndex
+            val minIndex = if (
+                isFullscreen &&
+                toBar == PlayerBarSlot.Top &&
+                mutable.firstOrNull().let { it is PlayerPanelItem.Control && it.id == PlayerControlId.Back }
+            ) {
+                1
+            } else {
+                0
+            }
+            val clamped = adjusted.coerceIn(minIndex, mutable.size)
+            mutable.add(clamped, moved)
+            return when (toBar) {
+                PlayerBarSlot.Top -> copy(topBar = mutable)
+                PlayerBarSlot.Bottom -> copy(bottomBar = mutable)
+            }.sanitize(isFullscreen)
+        }
+        val removedSource = sourceList.toMutableList().apply { removeAt(fromIndex) }
+        val targetList = itemsFor(toBar).toMutableList()
+        val minIndex = if (
+            isFullscreen &&
+            toBar == PlayerBarSlot.Top &&
+            targetList.firstOrNull().let { it is PlayerPanelItem.Control && it.id == PlayerControlId.Back }
+        ) {
+            1
+        } else {
+            0
+        }
+        val clamped = toIndex.coerceIn(minIndex, targetList.size)
+        targetList.add(clamped, item)
+        val updated = when (fromBar) {
+            PlayerBarSlot.Top -> copy(topBar = removedSource, bottomBar = targetList)
+            PlayerBarSlot.Bottom -> copy(bottomBar = removedSource, topBar = targetList)
         }
         return updated.sanitize(isFullscreen)
     }
@@ -601,6 +691,49 @@ data class ListenLayoutConfig(
     }
 }
 
+@Serializable
+enum class VerticalSwipeAction {
+    Brightness,
+    Volume,
+    Episode,
+    None,
+}
+
+@Serializable
+enum class SwipeSeekSensitivity(val spanMultiplier: Float) {
+    Low(0.6f),
+    Standard(1.0f),
+    High(1.6f),
+}
+
+@Immutable
+@Serializable
+data class PlayerGestureConfig(
+    val leftVerticalSwipe: VerticalSwipeAction = VerticalSwipeAction.Brightness,
+    val rightVerticalSwipe: VerticalSwipeAction = VerticalSwipeAction.Volume,
+    val verticalZoneFraction: Float = DEFAULT_VERTICAL_ZONE_FRACTION,
+    val swipeSeekSensitivity: SwipeSeekSensitivity = SwipeSeekSensitivity.Standard,
+    val swipeSeekCancelZone: Boolean = true,
+    val doubleTapZoneFraction: Float = DEFAULT_DOUBLE_TAP_ZONE_FRACTION,
+) {
+    fun sanitize(): PlayerGestureConfig = copy(
+        verticalZoneFraction = if (verticalZoneFraction.isFinite()) {
+            verticalZoneFraction.coerceIn(MIN_VERTICAL_ZONE_FRACTION, MAX_VERTICAL_ZONE_FRACTION)
+        } else {
+            DEFAULT_VERTICAL_ZONE_FRACTION
+        },
+        doubleTapZoneFraction = if (doubleTapZoneFraction.isFinite()) {
+            doubleTapZoneFraction.coerceIn(MIN_DOUBLE_TAP_ZONE_FRACTION, MAX_DOUBLE_TAP_ZONE_FRACTION)
+        } else {
+            DEFAULT_DOUBLE_TAP_ZONE_FRACTION
+        },
+    )
+
+    companion object {
+        val Default = PlayerGestureConfig()
+    }
+}
+
 enum class PlayerLayoutPreset {
     Default,
     Minimal,
@@ -618,6 +751,7 @@ data class PlayerLayoutPrefs(
     val doubleTapSeekSeconds: Int = DEFAULT_DOUBLE_TAP_SEEK_SECONDS,
     val syncDoubleTapWithSeekButton: Boolean = true,
     val listen: ListenLayoutConfig = ListenLayoutConfig.Default,
+    val gestures: PlayerGestureConfig = PlayerGestureConfig.Default,
 ) {
     val effectiveDoubleTapSeekSeconds: Int
         get() = (if (syncDoubleTapWithSeekButton) seekButtonSeconds else doubleTapSeekSeconds)
@@ -648,6 +782,10 @@ data class PlayerLayoutPrefs(
         transform: (ListenLayoutConfig) -> ListenLayoutConfig,
     ): PlayerLayoutPrefs = copy(listen = transform(listen)).sanitize()
 
+    fun updateGestures(
+        transform: (PlayerGestureConfig) -> PlayerGestureConfig,
+    ): PlayerLayoutPrefs = copy(gestures = transform(gestures)).sanitize()
+
     fun sanitize(): PlayerLayoutPrefs {
         val clampedSeek = seekButtonSeconds.coerceIn(MIN_SEEK_SECONDS, MAX_SEEK_SECONDS)
         val clampedDoubleTap = doubleTapSeekSeconds.coerceIn(MIN_SEEK_SECONDS, MAX_SEEK_SECONDS)
@@ -658,6 +796,7 @@ data class PlayerLayoutPrefs(
             seekButtonSeconds = clampedSeek,
             doubleTapSeekSeconds = clampedDoubleTap,
             listen = listen.sanitize(fallbackSeekSeconds = clampedSeek),
+            gestures = gestures.sanitize(),
         )
     }
 

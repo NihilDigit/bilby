@@ -377,5 +377,79 @@ class PlayerLayoutPrefsTest {
         val statusItem = decodedNoBg.fullscreen.topBar.filterIsInstance<PlayerPanelItem.Control>()
             .first { it.id == PlayerControlId.SystemStatus }
         assertTrue(statusItem.showBackground)
+        assertEquals(PlayerGestureConfig.Default, decodedNoBg.gestures)
+    }
+
+    @Test
+    fun gestureConfigDefaultsClampAndRoundTrip() {
+        val defaults = PlayerLayoutPrefs.Default.gestures
+        assertEquals(VerticalSwipeAction.Brightness, defaults.leftVerticalSwipe)
+        assertEquals(VerticalSwipeAction.Volume, defaults.rightVerticalSwipe)
+        assertEquals(DEFAULT_VERTICAL_ZONE_FRACTION, defaults.verticalZoneFraction, 1e-5f)
+        assertEquals(SwipeSeekSensitivity.Standard, defaults.swipeSeekSensitivity)
+        assertTrue(defaults.swipeSeekCancelZone)
+        assertEquals(DEFAULT_DOUBLE_TAP_ZONE_FRACTION, defaults.doubleTapZoneFraction, 1e-5f)
+
+        val outOfRange = PlayerLayoutPrefs.Default.updateGestures {
+            it.copy(
+                leftVerticalSwipe = VerticalSwipeAction.Episode,
+                rightVerticalSwipe = VerticalSwipeAction.None,
+                verticalZoneFraction = 0.99f,
+                swipeSeekSensitivity = SwipeSeekSensitivity.High,
+                swipeSeekCancelZone = false,
+                doubleTapZoneFraction = 0.01f,
+            )
+        }
+        assertEquals(VerticalSwipeAction.Episode, outOfRange.gestures.leftVerticalSwipe)
+        assertEquals(VerticalSwipeAction.None, outOfRange.gestures.rightVerticalSwipe)
+        assertEquals(MAX_VERTICAL_ZONE_FRACTION, outOfRange.gestures.verticalZoneFraction, 1e-5f)
+        assertEquals(SwipeSeekSensitivity.High, outOfRange.gestures.swipeSeekSensitivity)
+        assertFalse(outOfRange.gestures.swipeSeekCancelZone)
+        assertEquals(MIN_DOUBLE_TAP_ZONE_FRACTION, outOfRange.gestures.doubleTapZoneFraction, 1e-5f)
+
+        val lowAndNonFinite = PlayerGestureConfig(
+            verticalZoneFraction = 0.05f,
+            doubleTapZoneFraction = Float.NaN,
+        ).sanitize()
+        assertEquals(MIN_VERTICAL_ZONE_FRACTION, lowAndNonFinite.verticalZoneFraction, 1e-5f)
+        assertEquals(DEFAULT_DOUBLE_TAP_ZONE_FRACTION, lowAndNonFinite.doubleTapZoneFraction, 1e-5f)
+
+        val decoded = decodePlayerLayoutPrefs(encodePlayerLayoutPrefs(outOfRange))
+        assertEquals(outOfRange.gestures, decoded.gestures)
+    }
+
+    @Test
+    fun dragAndDropInsertAndMoveMaintainGuardrails() {
+        val base = PlayerLayoutPrefs.DefaultFullscreen
+        // Inserting at index 0 in fullscreen topBar keeps Back pinned at index 0.
+        val inserted = base.insertIntoBar(
+            bar = PlayerBarSlot.Top,
+            index = 0,
+            item = PlayerPanelItem.Control(PlayerControlId.Share),
+            isFullscreen = true,
+        )
+        assertEquals(PlayerControlId.Back, (inserted.topBar[0] as PlayerPanelItem.Control).id)
+        assertEquals(PlayerControlId.Share, (inserted.topBar[1] as PlayerPanelItem.Control).id)
+
+        // Moving Share from topBar to bottomBar at index 1 removes it from topBar and places it at bottomBar[1].
+        val movedCross = inserted.moveBarItemToBarAt(
+            fromBar = PlayerBarSlot.Top,
+            fromIndex = 1,
+            toBar = PlayerBarSlot.Bottom,
+            toIndex = 1,
+            isFullscreen = true,
+        )
+        assertFalse(movedCross.hasInTopBar(PlayerControlId.Share))
+        assertEquals(PlayerControlId.Share, (movedCross.bottomBar[1] as PlayerPanelItem.Control).id)
+
+        // Same-bar reorder moves Share to index 0 in bottomBar.
+        val reordered = movedCross.moveBarItemToBarAt(
+            fromBar = PlayerBarSlot.Bottom,
+            fromIndex = 1,
+            toBar = PlayerBarSlot.Bottom,
+            toIndex = 0,
+            isFullscreen = true,
+        )
+        assertEquals(PlayerControlId.Share, (reordered.bottomBar[0] as PlayerPanelItem.Control).id)
     }
 }
