@@ -5,10 +5,10 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
@@ -16,11 +16,10 @@ import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.Icon
-import androidx.compose.material3.ListItemColors
 import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.LocalContentColor
+import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.SegmentedListItem
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
@@ -30,9 +29,12 @@ import androidx.compose.runtime.Immutable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import dev.bilby.ui.components.LoadingSpinner
@@ -119,28 +121,222 @@ private fun GroupTitle(text: String) {
 }
 
 /**
- * 选中色与底色取同一值。开关行用的是 SegmentedListItem 的 checked 重载,它把 checked 当作
- * 选中,开着的行会换上选中底色,一组设置里亮一块暗一块;开关状态已经由行尾的 Switch 表达。
- *
  * 底色取 surfaceContainer 不取 surfaceContainerLow:后者在浅色主题下和页面的 surface 只差
  * 一点,真机上分段的边界几乎看不出来(风格指南 §2.3c 同一条,踩过两次)。
+ *
+ * 所有设置分段行都走自建 [SettingsSegmentedRow](Surface + Row/Column),不直接调用 Material3
+ * 1.5.0-rc01 的 SegmentedListItem / 交互式 ListItem:后者依赖 InteractiveListItemMeasurePolicy,
+ * 在 NavDisplay 的 AnimatedContent lookahead 阶段会触发 LookaheadDelegate.getAlignmentLinesOwner NPE。
  */
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
-private fun settingsRowColors(): ListItemColors =
-    ListItemDefaults.segmentedColors(
-        containerColor = MaterialTheme.colorScheme.surfaceContainer,
-        selectedContainerColor = MaterialTheme.colorScheme.surfaceContainer,
-    )
+internal fun segmentedRowShape(position: RowPosition): Shape =
+    ListItemDefaults.segmentedShapes(index = position.index, count = position.count).shape
 
-/** 两栏里正开在右栏的那一行。secondaryContainer 同导航选中指示,见 [SettingRow] 的 selected。 */
+private val SingleLineRowMinHeight = 56.dp
+private val TwoLineRowMinHeight = 64.dp
+
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
-private fun selectedRowColors(): ListItemColors =
-    ListItemDefaults.segmentedColors(
-        containerColor = MaterialTheme.colorScheme.secondaryContainer,
-        selectedContainerColor = MaterialTheme.colorScheme.secondaryContainer,
-    )
+private fun SegmentedRowContent(
+    headlineContent: @Composable () -> Unit,
+    leadingContent: (@Composable () -> Unit)? = null,
+    trailingContent: (@Composable () -> Unit)? = null,
+    supportingContent: (@Composable () -> Unit)? = null,
+    contentColor: Color = MaterialTheme.colorScheme.onSurface,
+    leadingContentColor: Color = MaterialTheme.colorScheme.onSurfaceVariant,
+    supportingContentColor: Color = MaterialTheme.colorScheme.onSurfaceVariant,
+    trailingContentColor: Color = MaterialTheme.colorScheme.onSurfaceVariant,
+) {
+    val minHeight = if (supportingContent != null) TwoLineRowMinHeight else SingleLineRowMinHeight
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier
+            .fillMaxWidth()
+            .defaultMinSize(minHeight = minHeight)
+            .padding(ListItemDefaults.ContentPadding),
+    ) {
+        if (leadingContent != null) {
+            CompositionLocalProvider(LocalContentColor provides leadingContentColor) {
+                leadingContent()
+            }
+            Spacer(modifier = Modifier.width(Spacing.Cozy))
+        }
+        Column(modifier = Modifier.weight(1f)) {
+            CompositionLocalProvider(
+                LocalContentColor provides contentColor,
+                LocalTextStyle provides MaterialTheme.typography.bodyLarge,
+            ) {
+                headlineContent()
+            }
+            if (supportingContent != null) {
+                CompositionLocalProvider(
+                    LocalContentColor provides supportingContentColor,
+                    LocalTextStyle provides MaterialTheme.typography.bodyMedium,
+                ) {
+                    supportingContent()
+                }
+            }
+        }
+        if (trailingContent != null) {
+            Spacer(modifier = Modifier.width(Spacing.Cozy))
+            CompositionLocalProvider(
+                LocalContentColor provides trailingContentColor,
+                LocalTextStyle provides MaterialTheme.typography.labelSmall,
+            ) {
+                trailingContent()
+            }
+        }
+    }
+}
+
+@Composable
+internal fun SettingsSegmentedRow(
+    shape: Shape,
+    modifier: Modifier = Modifier,
+    containerColor: Color = MaterialTheme.colorScheme.surfaceContainer,
+    contentColor: Color = MaterialTheme.colorScheme.onSurface,
+    leadingContentColor: Color = MaterialTheme.colorScheme.onSurfaceVariant,
+    supportingContentColor: Color = MaterialTheme.colorScheme.onSurfaceVariant,
+    trailingContentColor: Color = MaterialTheme.colorScheme.onSurfaceVariant,
+    leadingContent: (@Composable () -> Unit)? = null,
+    trailingContent: (@Composable () -> Unit)? = null,
+    supportingContent: (@Composable () -> Unit)? = null,
+    content: @Composable () -> Unit,
+) {
+    Surface(
+        shape = shape,
+        color = containerColor,
+        contentColor = contentColor,
+        modifier = modifier.fillMaxWidth(),
+    ) {
+        SegmentedRowContent(
+            headlineContent = content,
+            leadingContent = leadingContent,
+            trailingContent = trailingContent,
+            supportingContent = supportingContent,
+            contentColor = contentColor,
+            leadingContentColor = leadingContentColor,
+            supportingContentColor = supportingContentColor,
+            trailingContentColor = trailingContentColor,
+        )
+    }
+}
+
+@Composable
+internal fun SettingsSegmentedRow(
+    onClick: () -> Unit,
+    shape: Shape,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+    containerColor: Color = MaterialTheme.colorScheme.surfaceContainer,
+    contentColor: Color = MaterialTheme.colorScheme.onSurface,
+    leadingContentColor: Color = MaterialTheme.colorScheme.onSurfaceVariant,
+    supportingContentColor: Color = MaterialTheme.colorScheme.onSurfaceVariant,
+    trailingContentColor: Color = MaterialTheme.colorScheme.onSurfaceVariant,
+    leadingContent: (@Composable () -> Unit)? = null,
+    trailingContent: (@Composable () -> Unit)? = null,
+    supportingContent: (@Composable () -> Unit)? = null,
+    content: @Composable () -> Unit,
+) {
+    Surface(
+        onClick = onClick,
+        enabled = enabled,
+        shape = shape,
+        color = containerColor,
+        contentColor = contentColor,
+        modifier = modifier.fillMaxWidth(),
+    ) {
+        SegmentedRowContent(
+            headlineContent = content,
+            leadingContent = leadingContent,
+            trailingContent = trailingContent,
+            supportingContent = supportingContent,
+            contentColor = contentColor,
+            leadingContentColor = leadingContentColor,
+            supportingContentColor = supportingContentColor,
+            trailingContentColor = trailingContentColor,
+        )
+    }
+}
+
+@Composable
+internal fun SettingsSegmentedRow(
+    selected: Boolean,
+    onClick: () -> Unit,
+    shape: Shape,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+    containerColor: Color = MaterialTheme.colorScheme.surfaceContainer,
+    contentColor: Color = MaterialTheme.colorScheme.onSurface,
+    leadingContentColor: Color = MaterialTheme.colorScheme.onSurfaceVariant,
+    supportingContentColor: Color = MaterialTheme.colorScheme.onSurfaceVariant,
+    trailingContentColor: Color = MaterialTheme.colorScheme.onSurfaceVariant,
+    leadingContent: (@Composable () -> Unit)? = null,
+    trailingContent: (@Composable () -> Unit)? = null,
+    supportingContent: (@Composable () -> Unit)? = null,
+    content: @Composable () -> Unit,
+) {
+    Surface(
+        selected = selected,
+        onClick = onClick,
+        enabled = enabled,
+        shape = shape,
+        color = containerColor,
+        contentColor = contentColor,
+        modifier = modifier.fillMaxWidth(),
+    ) {
+        SegmentedRowContent(
+            headlineContent = content,
+            leadingContent = leadingContent,
+            trailingContent = trailingContent,
+            supportingContent = supportingContent,
+            contentColor = contentColor,
+            leadingContentColor = leadingContentColor,
+            supportingContentColor = supportingContentColor,
+            trailingContentColor = trailingContentColor,
+        )
+    }
+}
+
+@Composable
+internal fun SettingsSegmentedRow(
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+    shape: Shape,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+    containerColor: Color = MaterialTheme.colorScheme.surfaceContainer,
+    contentColor: Color = MaterialTheme.colorScheme.onSurface,
+    leadingContentColor: Color = MaterialTheme.colorScheme.onSurfaceVariant,
+    supportingContentColor: Color = MaterialTheme.colorScheme.onSurfaceVariant,
+    trailingContentColor: Color = MaterialTheme.colorScheme.onSurfaceVariant,
+    leadingContent: (@Composable () -> Unit)? = null,
+    trailingContent: (@Composable () -> Unit)? = null,
+    supportingContent: (@Composable () -> Unit)? = null,
+    content: @Composable () -> Unit,
+) {
+    Surface(
+        checked = checked,
+        onCheckedChange = onCheckedChange,
+        enabled = enabled,
+        shape = shape,
+        color = containerColor,
+        contentColor = contentColor,
+        modifier = modifier.fillMaxWidth(),
+    ) {
+        SegmentedRowContent(
+            headlineContent = content,
+            leadingContent = leadingContent,
+            trailingContent = trailingContent,
+            supportingContent = supportingContent,
+            contentColor = contentColor,
+            leadingContentColor = leadingContentColor,
+            supportingContentColor = supportingContentColor,
+            trailingContentColor = trailingContentColor,
+        )
+    }
+}
 
 /**
  * 点这一行之后人会到哪里。行尾图标据此分开:去下一页给箭头,离开应用给外链图标,
@@ -160,7 +356,6 @@ internal enum class RowTarget { Page, External, Here }
  *   行尾的值与标题争同一行的宽度,窄屏上先被截断的是标题,而服务器地址这类长值在行尾本来就
  *   放不下。行尾只留 [RowTarget] 的图标。
  */
-@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 internal fun SettingRow(
     position: RowPosition,
@@ -184,6 +379,8 @@ internal fun SettingRow(
      */
     selected: Boolean? = null,
 ) {
+    val colors = MaterialTheme.colorScheme
+    val isSelected = selected == true
     val trailingIcon = when (target) {
         RowTarget.Page -> Icons.AutoMirrored.Filled.KeyboardArrowRight.takeIf { selected == null }
         RowTarget.External -> Icons.AutoMirrored.Filled.OpenInNew
@@ -200,12 +397,20 @@ internal fun SettingRow(
         StaticSettingRow(position = position, icon = icon, title = title, subtitle = supporting, trailing = trailing)
         return
     }
-    SegmentedListItem(
+    SettingsSegmentedRow(
         onClick = onClick,
-        shapes = ListItemDefaults.segmentedShapes(index = position.index, count = position.count),
-        colors = if (selected == true) selectedRowColors() else settingsRowColors(),
-        // onClick 重载不报 role,补上 Button,与改版前 clickable(role = Button) 一致。
-        modifier = Modifier.semantics { role = Role.Button },
+        shape = segmentedRowShape(position),
+        containerColor = if (isSelected) colors.secondaryContainer else colors.surfaceContainer,
+        contentColor = if (isSelected) colors.onSecondaryContainer else colors.onSurface,
+        leadingContentColor = if (isSelected) colors.onSecondaryContainer else colors.onSurfaceVariant,
+        supportingContentColor = if (isSelected) colors.onSecondaryContainer else colors.onSurfaceVariant,
+        trailingContentColor = if (isSelected) colors.onSecondaryContainer else colors.onSurfaceVariant,
+        modifier = Modifier.semantics {
+            role = Role.Button
+            if (selected != null) {
+                this.selected = isSelected
+            }
+        },
         leadingContent = { Icon(imageVector = icon, contentDescription = null) },
         trailingContent = trailing,
         supportingContent = supporting?.let { { Text(it) } },
@@ -217,12 +422,9 @@ internal fun SettingRow(
 /**
  * 整行可切换,行尾的 Switch 或 Checkbox 只作指示(onCheckedChange = null)。
  *
- * 走 SegmentedListItem 的 checked 重载,整行是一个语义节点,读屏念出开关状态,不必再单独
- * 聚焦到行尾那个小控件上。它把 role 写死为 Checkbox,开关行因此在外面补一层 Role.Switch:
- * 同一个 LayoutNode 上的 semantics 从尾到头依次写入,modifier 链最外层的这一层最后写,
- * 盖掉组件里面那一个(compose ui 的 LayoutNode.calculateSemanticsConfiguration)。
+ * 整行是一个语义节点,读屏念出开关状态,不必再单独聚焦到行尾那个小控件上。
+ * 底色不随开关状态变化:开关状态已经由行尾的 Switch/Checkbox 表达。
  */
-@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 internal fun ToggleSettingRow(
     position: RowPosition,
@@ -239,14 +441,11 @@ internal fun ToggleSettingRow(
      */
     loading: Boolean = false,
 ) {
-    val shapes = ListItemDefaults.segmentedShapes(index = position.index, count = position.count)
-    SegmentedListItem(
+    SettingsSegmentedRow(
         checked = checked,
         onCheckedChange = { if (!loading) onCheckedChange(it) },
-        // 选中形状同上面的选中色:开着的行不换形状,否则一组里圆角忽大忽小。
-        shapes = shapes.copy(selectedShape = shapes.shape),
-        colors = settingsRowColors(),
-        modifier = if (useCheckbox) Modifier else Modifier.semantics { role = Role.Switch },
+        shape = segmentedRowShape(position),
+        modifier = Modifier.semantics { role = if (useCheckbox) Role.Checkbox else Role.Switch },
         leadingContent = { Icon(imageVector = icon, contentDescription = null) },
         supportingContent = subtitle?.let { { Text(it) } },
         trailingContent = {
@@ -272,16 +471,12 @@ internal fun ToggleSettingRow(
 }
 
 /**
- * 不可点的一块分段,里面放什么由调用方排。[StaticSettingRow] 与 [ControlSettingRow] 都画在它上面。
- *
- * 不直接用 SegmentedListItem 的无点击重载:桌面端的 material3 停在 1.12.0-alpha03(原因见
- * libs.versions.toml),那一版只有带 onClick、带 selected、带 checked 的三种。
+ * 不可点的一块分段,里面放什么由调用方排。[ControlSettingRow] 画在它上面。
  */
-@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 private fun SegmentedTile(position: RowPosition, content: @Composable () -> Unit) {
     Surface(
-        shape = ListItemDefaults.segmentedShapes(index = position.index, count = position.count).shape,
+        shape = segmentedRowShape(position),
         color = MaterialTheme.colorScheme.surfaceContainer,
         modifier = Modifier.fillMaxWidth(),
         content = content,
@@ -289,9 +484,8 @@ private fun SegmentedTile(position: RowPosition, content: @Composable () -> Unit
 }
 
 /**
- * 不可点的一行，直接使用静态 `SegmentedListItem` 重载与相邻可点行对齐圆角、内边距和行高。
+ * 不可点的一行,与相邻可点行对齐圆角、内边距和行高。
  */
-@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 internal fun StaticSettingRow(
     position: RowPosition,
@@ -300,13 +494,11 @@ internal fun StaticSettingRow(
     subtitle: String? = null,
     trailing: (@Composable () -> Unit)? = null,
 ) {
-    SegmentedListItem(
-        shapes = ListItemDefaults.segmentedShapes(index = position.index, count = position.count),
-        colors = settingsRowColors(),
+    SettingsSegmentedRow(
+        shape = segmentedRowShape(position),
         leadingContent = { Icon(imageVector = icon, contentDescription = null) },
         supportingContent = subtitle?.let { { Text(it) } },
         trailingContent = trailing,
-        modifier = Modifier.fillMaxWidth(),
     ) {
         Text(title)
     }

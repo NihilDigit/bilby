@@ -47,14 +47,12 @@ import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearWavyProgressIndicator
-import androidx.compose.material3.ListItem
 import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.MaterialExpressiveTheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.SegmentedListItem
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBarDefaults
@@ -437,13 +435,13 @@ private fun CategoryRow(
         RowTarget.Page -> Icons.AutoMirrored.Filled.KeyboardArrowRight.takeIf { selected == null }
         RowTarget.External, RowTarget.Here -> null
     }
-    SegmentedListItem(
+    SettingsSegmentedRow(
         onClick = onClick,
-        shapes = ListItemDefaults.segmentedShapes(index = position.index, count = position.count),
-        colors = ListItemDefaults.segmentedColors(
-            containerColor = if (isSelected) colors.secondaryContainer else colors.surfaceContainer,
-            selectedContainerColor = if (isSelected) colors.secondaryContainer else colors.surfaceContainer,
-        ),
+        shape = segmentedRowShape(position),
+        containerColor = if (isSelected) colors.secondaryContainer else colors.surfaceContainer,
+        contentColor = if (isSelected) colors.onSecondaryContainer else colors.onSurface,
+        supportingContentColor = if (isSelected) colors.onSecondaryContainer else colors.onSurfaceVariant,
+        trailingContentColor = if (isSelected) colors.onSecondaryContainer else colors.onSurfaceVariant,
         modifier = Modifier.semantics {
             role = Role.Button
             if (selected != null) {
@@ -572,19 +570,16 @@ internal fun <T> ChoiceRow(
             // selectableGroup:读屏把这几行念成一组单选,而不是几个互不相干的按钮。
             Column(modifier = Modifier.selectableGroup().verticalScroll(rememberScrollState())) {
                 options.forEach { option ->
-                    @OptIn(ExperimentalMaterial3ExpressiveApi::class)
-                    ListItem(
+                    SettingsSegmentedRow(
                         selected = option == selected,
                         onClick = {
                             open = false
                             onChange(option)
                         },
+                        shape = MaterialTheme.shapes.medium,
+                        containerColor = Color.Transparent,
                         leadingContent = { RadioButton(selected = option == selected, onClick = null) },
-                        colors = ListItemDefaults.colors(
-                            containerColor = Color.Transparent,
-                            selectedContainerColor = Color.Transparent,
-                        ),
-                        modifier = Modifier.fillMaxWidth(),
+                        modifier = Modifier.semantics { role = Role.RadioButton },
                     ) {
                         Text(label(option))
                     }
@@ -957,18 +952,15 @@ private fun LlmModelOptionRow(
 ) {
     val colors = MaterialTheme.colorScheme
     val subtitle = info.displayName?.takeIf { it.isNotBlank() && it != info.id }
-    val shapes = ListItemDefaults.segmentedShapes(index = index, count = count)
-    SegmentedListItem(
+    SettingsSegmentedRow(
         selected = selected,
         onClick = onClick,
-        shapes = shapes.copy(selectedShape = shapes.shape),
-        colors = ListItemDefaults.segmentedColors(
-            containerColor = colors.surfaceContainerHigh,
-            selectedContainerColor = colors.secondaryContainer,
-            selectedContentColor = colors.onSecondaryContainer,
-            selectedLeadingContentColor = colors.onSecondaryContainer,
-            selectedTrailingContentColor = colors.onSecondaryContainer,
-        ),
+        shape = segmentedRowShape(RowPosition(index, count)),
+        containerColor = if (selected) colors.secondaryContainer else colors.surfaceContainerHigh,
+        contentColor = if (selected) colors.onSecondaryContainer else colors.onSurface,
+        leadingContentColor = if (selected) colors.onSecondaryContainer else colors.onSurfaceVariant,
+        supportingContentColor = if (selected) colors.onSecondaryContainer else colors.onSurfaceVariant,
+        trailingContentColor = if (selected) colors.onSecondaryContainer else colors.onSurfaceVariant,
         supportingContent = subtitle?.let {
             {
                 Text(

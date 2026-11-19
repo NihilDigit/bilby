@@ -84,7 +84,6 @@ import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.SegmentedListItem
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
@@ -1654,13 +1653,10 @@ private fun ScheduleRuleRow(
         add(daysSummary)
         add(upCountLabel)
     }
-    SegmentedListItem(
+    SettingsSegmentedRow(
         onClick = onClick,
-        shapes = ListItemDefaults.segmentedShapes(index = position.index, count = position.count),
-        colors = ListItemDefaults.segmentedColors(
-            containerColor = colors.surfaceContainer,
-            selectedContainerColor = colors.surfaceContainer,
-        ),
+        shape = segmentedRowShape(position),
+        containerColor = colors.surfaceContainer,
         supportingContent = {
             Text(
                 text = subtitleParts.joinToString(MetaSeparator),
@@ -1676,7 +1672,7 @@ private fun ScheduleRuleRow(
                 onCheckedChange = onEnabledChange,
             )
         },
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier.semantics { role = Role.Button },
     ) {
         Text(
             text = titleText,
@@ -1956,13 +1952,10 @@ fun ScheduleRulePickerSheet(
                     if (rule.name.isNotBlank()) add(range)
                     add(upCount)
                 }.joinToString(MetaSeparator)
-                SegmentedListItem(
+                SettingsSegmentedRow(
                     onClick = { onSelect(rule) },
-                    shapes = ListItemDefaults.segmentedShapes(index = index, count = rules.size),
-                    colors = ListItemDefaults.segmentedColors(
-                        containerColor = colors.surfaceContainer,
-                        selectedContainerColor = colors.surfaceContainer,
-                    ),
+                    shape = segmentedRowShape(RowPosition(index, rules.size)),
+                    containerColor = colors.surfaceContainer,
                     leadingContent = {
                         Icon(
                             imageVector = Icons.Outlined.Schedule,
@@ -1979,7 +1972,7 @@ fun ScheduleRulePickerSheet(
                             overflow = TextOverflow.Ellipsis,
                         )
                     },
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier.semantics { role = Role.Button },
                 ) {
                     Text(
                         text = title,
@@ -2024,12 +2017,9 @@ private fun AllowedUpRow(
     onRemove: () -> Unit,
 ) {
     val colors = MaterialTheme.colorScheme
-    SegmentedListItem(
-        shapes = ListItemDefaults.segmentedShapes(index = position.index, count = position.count),
-        colors = ListItemDefaults.segmentedColors(
-            containerColor = colors.surfaceContainer,
-            selectedContainerColor = colors.surfaceContainer,
-        ),
+    SettingsSegmentedRow(
+        shape = segmentedRowShape(position),
+        containerColor = colors.surfaceContainer,
         leadingContent = {
             if (up.faceUrl.isNotEmpty()) {
                 Avatar(url = up.faceUrl, size = Dimens.AvatarRow)
@@ -2051,7 +2041,6 @@ private fun AllowedUpRow(
                 Text(stringResource(Res.string.night_mode_remove_up))
             }
         },
-        modifier = Modifier.fillMaxWidth(),
     ) {
         Text(
             text = up.name,
@@ -2229,8 +2218,7 @@ private fun NightFollowPickerSheet(
                     val count = followPicker.items.size
                     itemsIndexed(followPicker.items, key = { _, up -> up.mid }) { index, up ->
                         val checked = up.mid in selectedMids
-                        val shapes = ListItemDefaults.segmentedShapes(index = index, count = count)
-                        SegmentedListItem(
+                        SettingsSegmentedRow(
                             checked = checked,
                             onCheckedChange = { nextChecked ->
                                 draftSelected = if (nextChecked) {
@@ -2247,17 +2235,14 @@ private fun NightFollowPickerSheet(
                                     draftSelected.filterNot { it.mid == up.mid }
                                 }
                             },
-                            shapes = shapes.copy(selectedShape = shapes.shape),
-                            colors = ListItemDefaults.segmentedColors(
-                                containerColor = colors.surfaceContainer,
-                                selectedContainerColor = colors.secondaryContainer,
-                                selectedContentColor = colors.onSecondaryContainer,
-                                selectedLeadingContentColor = colors.onSecondaryContainer,
-                                selectedTrailingContentColor = colors.onSecondaryContainer,
-                            ),
+                            shape = segmentedRowShape(RowPosition(index, count)),
+                            containerColor = if (checked) colors.secondaryContainer else colors.surfaceContainer,
+                            contentColor = if (checked) colors.onSecondaryContainer else colors.onSurface,
+                            leadingContentColor = if (checked) colors.onSecondaryContainer else colors.onSurfaceVariant,
+                            trailingContentColor = if (checked) colors.onSecondaryContainer else colors.onSurfaceVariant,
                             leadingContent = { Avatar(url = up.faceUrl, size = Dimens.AvatarRow) },
                             trailingContent = { Checkbox(checked = checked, onCheckedChange = null) },
-                            modifier = Modifier.fillMaxWidth(),
+                            modifier = Modifier.semantics { role = Role.Checkbox },
                         ) {
                             Text(
                                 text = up.name,
