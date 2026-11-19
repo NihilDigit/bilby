@@ -16,30 +16,28 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.contentColorFor
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
+import dev.bilby.elapsedRealtimeMillis
 import dev.bilby.formatDurationMillis
+import dev.bilby.ui.LocalWindowVisible
 import dev.bilby.ui.theme.Spacing
 import dev.bilby.ui.theme.rememberClockFont
-import kotlin.math.roundToInt
 import kotlin.math.PI
+import kotlin.math.roundToInt
 import kotlin.math.sin
-import androidx.compose.animation.core.LinearEasing
-import androidx.compose.animation.core.animateFloat
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
-import androidx.compose.animation.core.tween
+import kotlinx.coroutines.delay
 import androidx.compose.ui.graphics.Path
-import androidx.compose.runtime.State
-import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
@@ -190,6 +188,7 @@ fun SeekBar(
     onTapSeek: ((Long) -> Unit)? = null,
 ) {
     val reducedMotion = rememberReducedMotion()
+    val windowVisible = LocalWindowVisible.current
     var dragging by remember { mutableStateOf(false) }
     var hoverX by remember { mutableStateOf<Float?>(null) }
     // 两个量走同一个 spatial 弹簧:它们是"按住了"这一个反馈的两面,节奏对不上会看出来。
@@ -212,20 +211,22 @@ fun SeekBar(
         animationSpec = MaterialTheme.motionScheme.defaultEffectsSpec(),
         label = "seek-wave",
     )
-    // 相位只在波浪实际在动(播放中或振幅尚未收回到平直)时才挂入组合:无限动画只要在组合里就会每帧唤醒
-    // 主线程,暂停落稳后不该继续空转。**只在画的时候读**(下面 Canvas 里),读在这里的话整条进度条
-    // 每一帧都要重组一遍。
-    val wavePhase: State<Float> = if (wavy && !reducedMotion && ((playing && !dragging) || waveAmplitude > 0.1.dp)) {
-        rememberInfiniteTransition(label = "seek-wave-phase").animateFloat(
-            initialValue = 0f,
-            targetValue = (2 * PI).toFloat(),
-            animationSpec = infiniteRepeatable(
-                tween((WavePeriodMillis / speed.coerceAtLeast(MinWaveSpeed)).toInt(), easing = LinearEasing),
-            ),
-            label = "seek-wave-phase",
-        )
-    } else {
-        NoWavePhase
+    // 相位以 ~30fps 节流推进（按真实耗时差步进，保证任意帧率下波速准确且平滑），窗口不可见、暂停、
+    // 拖动或减弱动效开启时立即停住，不在 120-240Hz 屏上每 vsync 唤醒渲染管线。
+    // **只在画的时候读**（下面 Canvas 里），读在这里的话整条进度条每一帧都要重组一遍。
+    val wavePhase = remember { mutableFloatStateOf(0f) }
+    LaunchedEffect(wavy, playing, dragging, reducedMotion, speed, windowVisible) {
+        if (!wavy || !playing || dragging || reducedMotion || !windowVisible) return@LaunchedEffect
+        val periodMillis = WavePeriodMillis / speed.coerceAtLeast(MinWaveSpeed)
+        val radiansPerMillis = TwoPi / periodMillis
+        var lastMillis = elapsedRealtimeMillis()
+        while (true) {
+            delay(WaveFrameDelayMillis)
+            val now = elapsedRealtimeMillis()
+            val delta = (now - lastMillis).coerceIn(0L, MaxWaveFrameDeltaMillis)
+            lastMillis = now
+            wavePhase.floatValue = (wavePhase.floatValue + delta * radiansPerMillis) % TwoPi
+        }
     }
     var widthPx by remember { mutableIntStateOf(0) }
     val density = LocalDensity.current
@@ -413,7 +414,7 @@ fun SeekBar(
                         px = (px + WaveStepPx).coerceAtMost(endX)
                         val ramp = ((px - x(0f)) / wavelength).coerceIn(0f, 1f)
                         val y = trackY + amp * ramp *
-                            sin((px / wavelength) * 2f * PI.toFloat() - wavePhase.value)
+                            sin((px / wavelength) * TwoPi - wavePhase.floatValue)
                         wavePath.lineTo(px, y)
                     }
                     drawPath(wavePath, activeColor, style = Stroke(width = trackPx, cap = StrokeCap.Round))
@@ -515,7 +516,10 @@ private val WaveGap = 4.dp
 /** 倍速的下限,只为算波浪周期时不除以 0。 */
 private const val MinWaveSpeed = 0.1f
 
-private val NoWavePhase: State<Float> = mutableFloatStateOf(0f)
+/** 波浪相位节流间隔（~30fps）与单帧最大耗时钳制，避免 120-240Hz 屏高频提交 GPU 帧。 */
+private const val WaveFrameDelayMillis = 33L
+private const val MaxWaveFrameDeltaMillis = 100L
+private val TwoPi = (2.0 * PI).toFloat()
 
 /** 画波浪时每一小段的步长。2px 在任何密度下都看不出折线。 */
 private const val WaveStepPx = 2f

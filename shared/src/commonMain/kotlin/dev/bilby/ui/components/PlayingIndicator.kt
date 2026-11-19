@@ -1,17 +1,15 @@
 package dev.bilby.ui.components
 
-import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
@@ -20,8 +18,12 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.util.lerp
+import dev.bilby.elapsedRealtimeMillis
 import dev.bilby.ui.LocalWindowVisible
 import dev.bilby.ui.theme.rememberReducedMotion
+import kotlin.math.PI
+import kotlin.math.cos
+import kotlinx.coroutines.delay
 
 /**
  * 「在放」的符号:队列里正在播的那一条、以及全应用的「正在直播」。**静止时就是 Material 的
@@ -51,28 +53,25 @@ fun PlayingIndicator(
     val reducedMotion = rememberReducedMotion()
     val windowVisible = LocalWindowVisible.current
     // 在原高与跳动高度之间按活跃度插值,不让弹簧去追一个每帧都在变的目标 —— 那样起伏会被抹平。
-    // 静止落稳、减弱动效开启或窗口不可见时撤掉无限动画:rememberInfiniteTransition 只要还在组合里就会每个 vsync 挂一次
-    // withFrameNanos,暂停、播完或退到后台时会持续驱动桌面端渲染链路按屏幕刷新率空转。
+    // 以 ~30fps 节流推进单一计时状态并在 Canvas 绘制阶段直接计算五根竖条的余弦往返,
+    // 零帧级重组,静止落稳、减弱动效开启或窗口不可见时立即停住,不在 120-240Hz 屏上每 vsync 空转。
     val activeness by animateFloatAsState(
         targetValue = if (active && !reducedMotion && windowVisible) 1f else 0f,
         animationSpec = MaterialTheme.motionScheme.fastSpatialSpec(),
         label = "playingActive",
     )
     val animating = !reducedMotion && windowVisible && (active || activeness > 0.001f)
-    val bouncing = if (animating) {
-        val transition = rememberInfiniteTransition(label = "playing")
-        // 每根在图标原本的高度和另一个高度之间往返,**从原高起跳**:五根各自从同一个最矮值起跳的话,
-        // 第一帧是一条扁线,看起来像卡了一下。
-        IconBarHeights.indices.map { index ->
-            transition.animateFloat(
-                initialValue = IconBarHeights[index],
-                targetValue = PartnerBarHeights[index],
-                animationSpec = infiniteRepeatable(tween(BarPeriodsMillis[index]), RepeatMode.Reverse),
-                label = "bar$index",
-            )
+    val elapsedMillis = remember { mutableLongStateOf(0L) }
+    LaunchedEffect(animating) {
+        if (!animating) return@LaunchedEffect
+        var lastMillis = elapsedRealtimeMillis()
+        while (true) {
+            delay(IndicatorFrameDelayMillis)
+            val now = elapsedRealtimeMillis()
+            val delta = (now - lastMillis).coerceIn(0L, MaxIndicatorFrameDeltaMillis)
+            lastMillis = now
+            elapsedMillis.longValue += delta
         }
-    } else {
-        null
     }
     val semantics = if (contentDescription == null) {
         Modifier
@@ -83,9 +82,17 @@ fun PlayingIndicator(
         val unit = size.width / IconViewport
         val barWidth = IconBarWidth * unit
         val radius = CornerRadius(barWidth / 2f, barWidth / 2f)
+        // 只在 Canvas 绘制阶段读取 elapsedMillis,避免每帧触发重组。
+        val elapsed = if (animating) elapsedMillis.longValue else 0L
         IconBarHeights.forEachIndexed { index, restHeight ->
-            val height = if (bouncing != null) {
-                lerp(restHeight, bouncing[index].value, activeness) * unit
+            val height = if (animating) {
+                val period = BarPeriodsMillis[index]
+                val cycle = period * 2L
+                // 每根从原高起跳,按半周期余弦在 restHeight 与 PartnerBarHeights 之间平滑往返。
+                val phase = (elapsed % cycle).toFloat() / period * PiFloat
+                val fraction = 0.5f * (1f - cos(phase))
+                val targetHeight = lerp(restHeight, PartnerBarHeights[index], fraction)
+                lerp(restHeight, targetHeight, activeness) * unit
             } else {
                 restHeight * unit
             }
@@ -111,3 +118,8 @@ private val PartnerBarHeights = listOf(14f, 4f, 8f, 20f, 12f)
 
 /** 五根的周期互不相同且不成整数比,合起来不会一眼看出在循环。 */
 private val BarPeriodsMillis = listOf(410, 530, 370, 470, 590)
+
+/** 跳动节流间隔（~30fps）与单帧最大耗时钳制。 */
+private const val IndicatorFrameDelayMillis = 33L
+private const val MaxIndicatorFrameDeltaMillis = 100L
+private val PiFloat = PI.toFloat()

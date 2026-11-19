@@ -47,11 +47,13 @@ import androidx.compose.ui.input.key.isShiftPressed
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onKeyEvent
 import androidx.compose.ui.input.key.type
+import androidx.compose.ui.input.pointer.PointerEvent
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.isSecondaryPressed
-import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.node.ModifierNodeElement
+import androidx.compose.ui.node.PointerInputModifierNode
 import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalHapticFeedback
@@ -149,40 +151,37 @@ fun ContextMenuBox(
     content: @Composable (openMenu: () -> Unit) -> Unit,
 ) {
     val haptics = LocalHapticFeedback.current
+    val latestHaptics by rememberUpdatedState(haptics)
     val lastPress = remember { PressPosition() }
-    var boxSize by remember { mutableStateOf(IntSize.Zero) }
+    val boxSize = remember { BoxSizeHolder() }
     var menuAt by remember { mutableStateOf<Offset?>(null) }
-    val openMenu = {
-        haptics.performHapticFeedback(HapticFeedbackType.LongPress)
-        menuAt = lastPress.value
+    val openMenu = remember {
+        {
+            latestHaptics.performHapticFeedback(HapticFeedbackType.LongPress)
+            menuAt = lastPress.value
+        }
+    }
+    val onSecondaryPress = remember {
+        { position: Offset ->
+            menuAt = position
+        }
     }
     Box(
         modifier = modifier
-            .onSizeChanged { boxSize = it }
+            .onSizeChanged { boxSize.value = it }
             .onKeyEvent { event ->
                 if (event.type == KeyEventType.KeyDown &&
                     (event.key == Key.Menu || (event.isShiftPressed && event.key == Key.F10))
                 ) {
-                    menuAt = Offset(boxSize.width / 2f, boxSize.height / 2f)
+                    menuAt = Offset(boxSize.value.width / 2f, boxSize.value.height / 2f)
                     true
                 } else {
                     false
                 }
             }
-            .pointerInput(Unit) {
-                awaitPointerEventScope {
-                    while (true) {
-                        val event = awaitPointerEvent(PointerEventPass.Initial)
-                        if (event.type != PointerEventType.Press) continue
-                        val position = event.changes.first().position
-                        lastPress.value = position
-                        if (event.buttons.isSecondaryPressed) {
-                            event.changes.forEach { it.consume() }
-                            menuAt = position
-                        }
-                    }
-                }
-            }
+            // 使用无协程的 PointerInputModifierNode 替代 suspending pointerInput:
+            // 列表滚动时鼠标掠过卡片不会起协程,滑出视口卸载节点时也不会产生 PointerInputResetException。
+            .then(ContextMenuPressElement(lastPress, onSecondaryPress))
             .then(
                 if (onClick != null) {
                     Modifier.combinedClickable(
@@ -435,4 +434,43 @@ fun VideoCommonMenuItems(
 /** 只给手势回调读写,不参与组合,所以不用 State。 */
 private class PressPosition {
     var value: Offset = Offset.Zero
+}
+
+/** 只给键盘菜单快捷键读尺寸,不参与组合,避免首帧 onSizeChanged 触发列表项重组。 */
+private class BoxSizeHolder {
+    var value: IntSize = IntSize.Zero
+}
+
+private data class ContextMenuPressElement(
+    val lastPress: PressPosition,
+    val onSecondaryPress: (Offset) -> Unit,
+) : ModifierNodeElement<ContextMenuPressNode>() {
+    override fun create(): ContextMenuPressNode =
+        ContextMenuPressNode(lastPress, onSecondaryPress)
+
+    override fun update(node: ContextMenuPressNode) {
+        node.lastPress = lastPress
+        node.onSecondaryPress = onSecondaryPress
+    }
+}
+
+private class ContextMenuPressNode(
+    var lastPress: PressPosition,
+    var onSecondaryPress: (Offset) -> Unit,
+) : Modifier.Node(), PointerInputModifierNode {
+    override fun onPointerEvent(
+        pointerEvent: PointerEvent,
+        pass: PointerEventPass,
+        bounds: IntSize,
+    ) {
+        if (pass != PointerEventPass.Initial || pointerEvent.type != PointerEventType.Press) return
+        val position = pointerEvent.changes.firstOrNull()?.position ?: return
+        lastPress.value = position
+        if (pointerEvent.buttons.isSecondaryPressed) {
+            pointerEvent.changes.forEach { it.consume() }
+            onSecondaryPress(position)
+        }
+    }
+
+    override fun onCancelPointerInput() = Unit
 }
