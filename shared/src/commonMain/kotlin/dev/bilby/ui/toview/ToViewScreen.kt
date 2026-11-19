@@ -1,6 +1,5 @@
 package dev.bilby.ui.toview
 
-import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -20,9 +19,6 @@ import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.Headphones as OutlinedHeadphones
 import androidx.compose.material.icons.outlined.KeyboardArrowDown
-import androidx.compose.material.icons.outlined.MoreHoriz
-import androidx.compose.material3.ButtonGroup
-import androidx.compose.material3.ButtonGroupDefaults
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
@@ -35,8 +31,6 @@ import androidx.compose.material3.SplitButtonDefaults
 import androidx.compose.material3.SplitButtonLayout
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.ToggleButton
-import androidx.compose.material3.ToggleButtonDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.getValue
@@ -46,9 +40,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalLayoutDirection
-import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
@@ -67,12 +59,14 @@ import dev.bilby.ui.components.ContextMenuBox
 import dev.bilby.ui.components.PagedColumn
 import dev.bilby.ui.components.PagedLayout
 import dev.bilby.ui.components.RefreshBox
+import dev.bilby.ui.components.SortMenu
 import dev.bilby.ui.components.VideoCommonMenuItems
 import dev.bilby.ui.components.VideoGridCard
 import dev.bilby.ui.components.VideoRow
 import dev.bilby.ui.components.VideoRowUi
 import dev.bilby.ui.components.chargingBadgeText
 import dev.bilby.ui.components.formatCount
+import dev.bilby.ui.components.matchesLibraryQuery
 import dev.bilby.ui.components.menuItemShape
 import dev.bilby.ui.components.rememberCopyAction
 import dev.bilby.ui.components.videoCommonMenuItemCount
@@ -270,9 +264,18 @@ fun ToViewScreen(
     onListenItem: ((ToViewItem) -> Unit)? = null,
     onUpClick: (Long) -> Unit = {},
     onRefresh: () -> Unit = {},
+    searchQuery: String = "",
     modifier: Modifier = Modifier,
     contentPadding: PaddingValues = PaddingValues(),
 ) {
+    val trimmedQuery = searchQuery.trim()
+    val visibleItems = remember(state.items, trimmedQuery) {
+        if (trimmedQuery.isEmpty()) {
+            state.items
+        } else {
+            state.items.filter { matchesLibraryQuery(trimmedQuery, it.title, it.upName, it.bvid) }
+        }
+    }
     val firstPlayable = remember(state.items) { state.items.firstOrNull { it.playable } }
     val playableItems = remember(state.items) { state.items.filter { it.playable } }
     val layoutDirection = LocalLayoutDirection.current
@@ -298,7 +301,7 @@ fun ToViewScreen(
         ) {
                 PagedColumn(
                     layout = PagedLayout.Grid(effectiveColumns),
-                    items = state.items,
+                    items = visibleItems,
                     // 这一页的条目会被单条移出(下面那个 Close 按钮),动画认 aid。
                     key = { it.aid },
                     loading = state.loading,
@@ -306,7 +309,13 @@ fun ToViewScreen(
                     // 一次拉满,没有下一页(见 ToViewRepository.CAPACITY)。
                     hasMore = false,
                     error = state.error?.let { stringResource(it) },
-                    emptyText = stringResource(Res.string.toview_empty),
+                    emptyText = stringResource(
+                        if (trimmedQuery.isEmpty() || state.items.isEmpty()) {
+                            Res.string.toview_empty
+                        } else {
+                            Res.string.toview_search_empty
+                        },
+                    ),
                     onLoadMore = {},
                     onRetry = onRetry,
                     contentPadding = gridPadding,
@@ -543,60 +552,12 @@ private fun ToViewSummaryCard(
                     }
                 }
 
-                val sortColors = ToggleButtonDefaults.colors(
-                    containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
-                    contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                    checkedContainerColor = MaterialTheme.colorScheme.secondaryContainer,
-                    checkedContentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+                SortMenu(
+                    options = AscOptions,
+                    selected = asc,
+                    onSelect = onAscChanged,
+                    preferButtonGroup = false,
                 )
-                val interactionSources = remember { List(AscOptions.size) { MutableInteractionSource() } }
-                val labels = AscOptions.map { (_, labelRes) -> stringResource(labelRes) }
-                ButtonGroup(
-                    overflowIndicator = { menuState ->
-                        IconButton(onClick = { menuState.show() }) {
-                            Icon(
-                                Icons.Outlined.MoreHoriz,
-                                contentDescription = stringResource(Res.string.menu_item_actions),
-                            )
-                        }
-                    },
-                    horizontalArrangement = Arrangement.spacedBy(ButtonGroupDefaults.ConnectedSpaceBetween),
-                ) {
-                    AscOptions.forEachIndexed { index, (optionAsc, _) ->
-                        val label = labels[index]
-                        val interactionSource = interactionSources[index]
-                        customItem(
-                            buttonGroupContent = {
-                                ToggleButton(
-                                    checked = asc == optionAsc,
-                                    onCheckedChange = { if (it) onAscChanged(optionAsc) },
-                                    shapes = when (index) {
-                                        0 -> ButtonGroupDefaults.connectedLeadingButtonShapes()
-                                        else -> ButtonGroupDefaults.connectedTrailingButtonShapes()
-                                    },
-                                    colors = sortColors,
-                                    contentPadding = PaddingValues(horizontal = Spacing.Cozy),
-                                    interactionSource = interactionSource,
-                                    modifier = Modifier
-                                        .animateWidth(interactionSource)
-                                        .semantics { role = Role.RadioButton },
-                                ) {
-                                    Text(label, maxLines = 1, softWrap = false)
-                                }
-                            },
-                            menuContent = { menuState ->
-                                DropdownMenuItem(
-                                    onClick = {
-                                        menuState.dismiss()
-                                        onAscChanged(optionAsc)
-                                    },
-                                    text = { Text(label) },
-                                    shape = menuItemShape(index, AscOptions.size),
-                                )
-                            },
-                        )
-                    }
-                }
             }
         }
     }

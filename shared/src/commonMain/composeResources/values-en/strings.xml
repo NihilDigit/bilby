@@ -969,4 +969,13 @@
     <string name="night_mode_sanctuary_manual">Night mode active  Until %1$s</string>
     <string name="collection_total_count">%1$d videos</string>
     <string name="agent_steps_count">%1$d steps searched</string>
+
+    <!-- Library in-page search -->
+    <string name="history_search_hint">Search watch history</string>
+    <string name="history_search_empty">No matching watch history</string>
+    <string name="toview_search_hint">Search Watch Later</string>
+    <string name="toview_search_empty">No matching videos</string>
+    <string name="fav_all_search_hint">Search all favorites</string>
+    <string name="offline_search_hint">Search offline cache</string>
+    <string name="offline_search_empty">No matching cached videos</string>
 </resources>

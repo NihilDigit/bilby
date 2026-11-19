@@ -36,6 +36,7 @@ import androidx.compose.material3.TopAppBarScrollBehavior
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -43,15 +44,22 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.text.style.TextOverflow
 import dev.bilby.data.FavFolderDetail
 import dev.bilby.resources.*
 import dev.bilby.stringResource
+import dev.bilby.ui.BackHandler
 import dev.bilby.ui.CaptionDragHeight
 import dev.bilby.ui.LocalWindowCaption
 import dev.bilby.ui.components.BilbyTooltip
 import dev.bilby.ui.components.LocalPointerSource
 import dev.bilby.ui.components.RefreshAction
+import dev.bilby.ui.components.RegisterPageSearch
 import dev.bilby.ui.components.SearchField
 import dev.bilby.ui.components.menuItemShape
 import dev.bilby.ui.rememberCaptionSlot
@@ -82,7 +90,19 @@ fun FavFolderTopBar(
     scrollBehavior: TopAppBarScrollBehavior? = null,
 ) {
     var searchOpen by rememberSaveable { mutableStateOf(false) }
+    var searchFocusNonce by remember { mutableIntStateOf(0) }
     val searching = searchOpen || appliedKeyword.isNotBlank()
+    val closeSearch: () -> Unit = {
+        searchOpen = false
+        onCloseSearch()
+    }
+    RegisterPageSearch(
+        onTrigger = {
+            searchOpen = true
+            searchFocusNonce++
+        },
+    )
+    BackHandler(enabled = searching, onBack = closeSearch)
     var confirmingClean by remember { mutableStateOf(false) }
     val focusRequester = remember { FocusRequester() }
     LocalWindowCaption.current?.Host()
@@ -122,13 +142,8 @@ fun FavFolderTopBar(
                 if (searching) {
                     customItem(
                         appbarContent = {
-                            BilbyTooltip(text = closeLabel) {
-                                IconButton(
-                                    onClick = {
-                                        searchOpen = false
-                                        onCloseSearch()
-                                    },
-                                ) {
+                            BilbyTooltip(text = closeLabel, shortcut = "Esc") {
+                                IconButton(onClick = closeSearch) {
                                     Icon(Icons.Outlined.Close, contentDescription = closeLabel)
                                 }
                             }
@@ -138,8 +153,7 @@ fun FavFolderTopBar(
                                 text = { Text(closeLabel) },
                                 onClick = {
                                     menuState.dismiss()
-                                    searchOpen = false
-                                    onCloseSearch()
+                                    closeSearch()
                                 },
                                 leadingIcon = { Icon(Icons.Outlined.Close, contentDescription = null) },
                             )
@@ -148,7 +162,7 @@ fun FavFolderTopBar(
                 } else {
                     customItem(
                         appbarContent = {
-                            BilbyTooltip(text = searchLabel) {
+                            BilbyTooltip(text = searchLabel, shortcut = "Ctrl+F") {
                                 IconButton(onClick = { searchOpen = true }) {
                                     Icon(Icons.Outlined.Search, contentDescription = searchLabel)
                                 }
@@ -252,7 +266,14 @@ fun FavFolderTopBar(
 
     if (searching) {
         TopAppBar(
-            modifier = captionSlot.modifier,
+            modifier = captionSlot.modifier.onPreviewKeyEvent { event ->
+                if (event.type == KeyEventType.KeyDown && event.key == Key.Escape) {
+                    closeSearch()
+                    true
+                } else {
+                    false
+                }
+            },
             title = {
                 SearchField(
                     value = keyword,
@@ -261,8 +282,10 @@ fun FavFolderTopBar(
                     onSearch = onSearch,
                     focusRequester = focusRequester,
                 )
-                LaunchedEffect(Unit) {
-                    if (keyword.isEmpty()) focusRequester.requestFocus()
+                LaunchedEffect(searching, searchFocusNonce) {
+                    if (searching && (keyword.isEmpty() || searchFocusNonce > 0)) {
+                        runCatching { focusRequester.requestFocus() }
+                    }
                 }
             },
             navigationIcon = navigationIcon,

@@ -82,6 +82,9 @@ data class HistoryUiState(
     val refreshing: Boolean = false,
     val hasMore: Boolean = true,
     val error: StringResource? = null,
+    /** 输入框中的搜索词，回车提交后写入 [appliedKeyword]。 */
+    val keyword: String = "",
+    val appliedKeyword: String = "",
     /** 删除或清空正在飞。顶栏的那几个入口据此禁用,避免同一批记录被删两次。 */
     val mutating: Boolean = false,
     /**
@@ -109,6 +112,7 @@ class HistoryViewModel(private val repository: HistoryRepository) : ViewModel() 
     private var generation = 0
     private var loadJob: Job? = null
     private var lastRequestWasReplace = false
+    private var searchPage = 0
 
     init {
         loadMore()
@@ -116,9 +120,56 @@ class HistoryViewModel(private val repository: HistoryRepository) : ViewModel() 
 
     fun retry() = loadMore(replace = lastRequestWasReplace)
 
+    fun onKeywordChange(keyword: String) = _state.update { it.copy(keyword = keyword) }
+
+    fun search() {
+        val keyword = _state.value.keyword.trim()
+        if (keyword == _state.value.appliedKeyword) return
+        generation++
+        loadJob?.cancel()
+        searchPage = 0
+        _state.update {
+            it.copy(
+                appliedKeyword = keyword,
+                items = emptyList(),
+                cursorMax = 0L,
+                cursorViewAt = 0L,
+                hasMore = true,
+                loading = false,
+                appending = false,
+                refreshing = false,
+                error = null,
+            )
+        }
+        loadMore(replace = true)
+    }
+
+    fun closeSearch() {
+        val wasFiltering = _state.value.appliedKeyword.isNotEmpty()
+        _state.update { it.copy(keyword = "", appliedKeyword = "") }
+        if (!wasFiltering) return
+        generation++
+        loadJob?.cancel()
+        searchPage = 0
+        _state.update {
+            it.copy(
+                items = emptyList(),
+                cursorMax = 0L,
+                cursorViewAt = 0L,
+                hasMore = true,
+                loading = false,
+                appending = false,
+                refreshing = false,
+                error = null,
+            )
+        }
+        loadMore(replace = true)
+    }
+
     fun refresh() {
         generation++
         loadJob?.cancel()
+        searchPage = 0
         _state.update {
             it.copy(
                 cursorMax = 0L,
@@ -139,32 +190,55 @@ class HistoryViewModel(private val repository: HistoryRepository) : ViewModel() 
         lastRequestWasReplace = replace
         val firstPage = replace || current.items.isEmpty()
         val gen = generation
+        val appliedKeyword = current.appliedKeyword
+        val nextSearchPage = if (replace) 1 else searchPage + 1
         _state.update { it.copy(loading = firstPage, appending = !firstPage, error = null) }
         loadJob = viewModelScope.launch {
             try {
-                when (val result = repository.loadPage(current.cursorMax, current.cursorViewAt)) {
-                    is BiliResult.Ok -> {
-                        if (gen != generation) return@launch
-                        _state.update {
-                            it.copy(
-                                // 读 it 而不是协程外那份 current 快照:并发刷新时不能把旧列表
-                                // 重新拼回去。
-                                //
-                                // 按 oid 去重是必需的:同一个视频重复观看在历史里本来就会再出现一条,
-                                // 游标翻页时上一页的条目会跟着漂到下一页。
-                                items = if (replace) {
-                                    result.value.items.distinctBy { item -> item.oid }
-                                } else {
-                                    it.items.appendDistinctBy(result.value.items) { item -> item.oid }
-                                },
-                                cursorMax = result.value.nextMax,
-                                cursorViewAt = result.value.nextViewAt,
-                                hasMore = !result.value.isEnd,
-                            )
+                if (appliedKeyword.isNotBlank()) {
+                    when (val result = repository.search(appliedKeyword, nextSearchPage)) {
+                        is BiliResult.Ok -> {
+                            if (gen != generation) return@launch
+                            searchPage = nextSearchPage
+                            _state.update {
+                                it.copy(
+                                    items = if (replace || nextSearchPage == 1) {
+                                        result.value.items.distinctBy { item -> item.oid }
+                                    } else {
+                                        it.items.appendDistinctBy(result.value.items) { item -> item.oid }
+                                    },
+                                    hasMore = result.value.hasMore,
+                                )
+                            }
                         }
-                    }
 
-                    else -> if (gen == generation) _state.update { it.copy(error = result.errorTextRes("历史记录列表")) }
+                        else -> if (gen == generation) _state.update { it.copy(error = result.errorTextRes("搜索历史记录")) }
+                    }
+                } else {
+                    when (val result = repository.loadPage(current.cursorMax, current.cursorViewAt)) {
+                        is BiliResult.Ok -> {
+                            if (gen != generation) return@launch
+                            _state.update {
+                                it.copy(
+                                    // 读 it 而不是协程外那份 current 快照:并发刷新时不能把旧列表
+                                    // 重新拼回去。
+                                    //
+                                    // 按 oid 去重是必需的:同一个视频重复观看在历史里本来就会再出现一条,
+                                    // 游标翻页时上一页的条目会跟着漂到下一页。
+                                    items = if (replace) {
+                                        result.value.items.distinctBy { item -> item.oid }
+                                    } else {
+                                        it.items.appendDistinctBy(result.value.items) { item -> item.oid }
+                                    },
+                                    cursorMax = result.value.nextMax,
+                                    cursorViewAt = result.value.nextViewAt,
+                                    hasMore = !result.value.isEnd,
+                                )
+                            }
+                        }
+
+                        else -> if (gen == generation) _state.update { it.copy(error = result.errorTextRes("历史记录列表")) }
+                    }
                 }
             } finally {
                 // 按当前 generation 释放:被 refresh 取消的旧一代不该把刷新刚置上的
@@ -308,7 +382,9 @@ fun HistoryScreen(
                     appending = state.appending,
                     hasMore = state.hasMore,
                     error = state.error?.let { stringResource(it) },
-                    emptyText = stringResource(Res.string.history_empty),
+                    emptyText = stringResource(
+                        if (state.appliedKeyword.isBlank()) Res.string.history_empty else Res.string.history_search_empty,
+                    ),
                     onLoadMore = onLoadMore,
                     onRetry = onRetry,
                     contentPadding = gridPadding,

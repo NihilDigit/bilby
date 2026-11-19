@@ -6,6 +6,7 @@ import dev.bilby.api.BiliConstants
 import dev.bilby.api.BiliResult
 import dev.bilby.api.dto.HistoryItemDto
 import dev.bilby.api.dto.HistoryResponseDto
+import dev.bilby.api.dto.HistorySearchResponseDto
 import dev.bilby.api.getData
 import dev.bilby.api.map
 import dev.bilby.api.postAction
@@ -44,6 +45,11 @@ data class HistoryPage(
     val isEnd: Boolean,
 )
 
+data class HistorySearchPage(
+    val items: List<HistoryItem>,
+    val hasMore: Boolean,
+)
+
 /**
  * 历史记录(DESIGN 2 节:历史只待在它自己这一页,不做"继续观看"一类推送式入口,
  * 不喂给别的界面)。
@@ -66,6 +72,24 @@ class HistoryRepository(private val client: BiliClient) {
             params,
         )
         return result.map { dto -> computeHistoryPage(dto.list, max, viewAt) }
+    }
+
+    /**
+     * 服务端历史记录搜索（`x/web-interface/history/search`，web cookie，不带 WBI）。
+     * 按页号分页（`pn` 从 1 起），固定 `business=archive` 并复用 UGC 过滤。
+     */
+    suspend fun search(keyword: String, page: Int): BiliResult<HistorySearchPage> {
+        val params = mapOf(
+            "keyword" to keyword,
+            "pn" to page.toString(),
+            "ps" to PAGE_SIZE.toString(),
+            "business" to ArchiveBusiness,
+        )
+        val result = client.getData<HistorySearchResponseDto>(
+            "${BiliConstants.WEB_HOST}/x/web-interface/history/search",
+            params,
+        )
+        return result.map(::computeHistorySearchPage)
     }
 
     /**
@@ -149,6 +173,21 @@ internal fun computeHistoryPage(raw: List<HistoryItemDto>, fallbackMax: Long, fa
         nextMax = last?.history?.oid ?: fallbackMax,
         nextViewAt = last?.viewAt ?: fallbackViewAt,
         isEnd = raw.isEmpty(),
+    )
+}
+
+/** 纯函数，把一页历史搜索响应折成 [HistorySearchPage]，复用 UGC 稿件过滤。 */
+internal fun computeHistorySearchPage(dto: HistorySearchResponseDto): HistorySearchPage {
+    val raw = dto.list.orEmpty()
+    val items = raw
+        .filter { it.history.business == ArchiveBusiness && it.history.bvid.isNotEmpty() }
+        .map { it.toDomain() }
+    if (items.size != raw.size) {
+        BiliLog.w("历史搜索丢弃 ${raw.size - items.size} 条非稿件条目")
+    }
+    return HistorySearchPage(
+        items = items,
+        hasMore = dto.hasMore && raw.isNotEmpty(),
     )
 }
 

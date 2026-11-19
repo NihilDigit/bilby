@@ -18,6 +18,16 @@ data class HistoryResponseDto(
     val list: List<HistoryItemDto> = emptyList(),
 )
 
+/**
+ * `x/web-interface/history/search` 的响应体（web cookie，不带 WBI）。
+ * 条目结构与游标列表 [HistoryItemDto] 一致；无结果时服务端可能返回 `list: null`。
+ */
+@Serializable
+data class HistorySearchResponseDto(
+    @SerialName("has_more") val hasMore: Boolean = false,
+    val list: List<HistoryItemDto>? = null,
+)
+
 @Serializable
 data class HistoryItemDto(
     val title: String = "",

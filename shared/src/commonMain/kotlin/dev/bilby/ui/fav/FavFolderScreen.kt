@@ -71,7 +71,6 @@ import dev.bilby.ui.errorTextRes
 import dev.bilby.ui.formatRelativeTime
 import dev.bilby.ui.theme.Dimens
 import dev.bilby.ui.theme.Spacing
-import dev.bilby.ui.theme.tabular
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -497,9 +496,9 @@ fun FavFolderScreen(
 }
 
 /**
- * 收藏夹概览卡片:条数与公开性(等宽数字)、可选简介、听收藏夹按钮与排序下拉。
+ * 收藏夹概览卡片：可选简介、听收藏夹按钮与排序下拉。
  *
- * 标题不在这里重复 —— 顶栏已经写着。简介为空时那一行不画,不给占位文案。
+ * 标题与条数/公开性均由顶栏呈现，不在此处重复；简介为空时那一行不画，不给占位文案。
  */
 @OptIn(ExperimentalMaterial3ExpressiveApi::class, ExperimentalLayoutApi::class)
 @Composable
@@ -524,21 +523,12 @@ private fun FolderHeader(
                 .padding(horizontal = Spacing.Comfortable, vertical = Spacing.Cozy),
             verticalArrangement = Arrangement.spacedBy(Spacing.Tight),
         ) {
-            if (info != null) {
-                Column(verticalArrangement = Arrangement.spacedBy(Spacing.Hair)) {
-                    Text(
-                        text = favFolderMeta(info),
-                        style = MaterialTheme.typography.titleSmallEmphasized.tabular,
-                        color = MaterialTheme.colorScheme.onSurface,
-                    )
-                    if (info.intro.isNotBlank()) {
-                        Text(
-                            text = info.intro,
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                }
+            if (info != null && info.intro.isNotBlank()) {
+                Text(
+                    text = info.intro,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
             FlowRow(
                 modifier = Modifier.fillMaxWidth(),
@@ -617,7 +607,7 @@ private fun FavNotice.text(): String {
 }
 
 @Composable
-private fun FavVideo.toRowUi(): VideoRowUi {
+internal fun FavVideo.toRowUi(): VideoRowUi {
     val kindLabel = when {
         isVideo -> null
         type == FavVideo.TYPE_AUDIO -> stringResource(Res.string.media_kind_audio)

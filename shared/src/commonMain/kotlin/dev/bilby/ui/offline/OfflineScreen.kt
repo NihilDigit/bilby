@@ -88,6 +88,7 @@ import dev.bilby.ui.components.VideoGridCard
 import dev.bilby.ui.components.VideoRow
 import dev.bilby.ui.components.VideoRowUi
 import dev.bilby.ui.components.chargingBadgeText
+import dev.bilby.ui.components.matchesLibraryQuery
 import dev.bilby.ui.components.menuItemShape
 import dev.bilby.ui.components.videoCommonMenuItemCount
 import dev.bilby.ui.formatRelativeTime
@@ -166,16 +167,32 @@ fun OfflineScreen(
      */
     selectedIds: Set<String>? = null,
     onToggleSelection: (OfflineItem) -> Unit = {},
+    searchQuery: String = "",
     modifier: Modifier = Modifier,
     contentPadding: PaddingValues = PaddingValues(),
 ) {
     var pendingDelete by remember { mutableStateOf<OfflineItem?>(null) }
     val layoutDirection = LocalLayoutDirection.current
+    val trimmedQuery = searchQuery.trim()
+    val visibleItems = remember(items, trimmedQuery) {
+        if (trimmedQuery.isEmpty()) {
+            items
+        } else {
+            items.filter { matchesLibraryQuery(trimmedQuery, it.title, it.partTitle, it.upName, it.bvid) }
+        }
+    }
 
     AdaptiveVideoGridContent(modifier = modifier) { columnCount ->
         if (items.isEmpty()) {
             EmptyState(
                 message = stringResource(Res.string.offline_empty),
+                modifier = Modifier.fillMaxSize().padding(contentPadding),
+            )
+            return@AdaptiveVideoGridContent
+        }
+        if (visibleItems.isEmpty()) {
+            EmptyState(
+                message = stringResource(Res.string.offline_search_empty),
                 modifier = Modifier.fillMaxSize().padding(contentPadding),
             )
             return@AdaptiveVideoGridContent
@@ -195,7 +212,7 @@ fun OfflineScreen(
         }
         val headerHorizontalPadding = if (multiColumn) Spacing.Tight + 2.dp else Spacing.Comfortable
 
-        val (completed, inFlight) = remember(items) { items.partition { it.status == OfflineStatus.Completed } }
+        val (completed, inFlight) = remember(visibleItems) { visibleItems.partition { it.status == OfflineStatus.Completed } }
         val rowScope = remember(selectedIds, onPlay, onRetry, onToggleSelection, onDelete) {
             OfflineRowScope(
                 selectedIds = selectedIds,
@@ -218,18 +235,19 @@ fun OfflineScreen(
                 modifier = Modifier.fillMaxSize(),
                 contentPadding = gridPadding,
             ) {
-                item(key = "summary-card", span = { GridItemSpan(maxLineSpan) }) {
-                    OfflineSummaryCard(
-                        completedCount = completed.size,
-                        inFlightCount = inFlight.size,
-                        usedBytes = usedBytes,
-                        canListenAll = completed.isNotEmpty() && selectedIds == null,
-                        onListenAll = { completed.firstOrNull()?.let(onListenAll) },
-                        onListenRandom = { completed.randomOrNull()?.let(onListenAll) },
-                        modifier = Modifier
-                            .padding(horizontal = headerHorizontalPadding, vertical = Spacing.Tight)
-                            .animateItem(),
-                    )
+                if (trimmedQuery.isEmpty()) {
+                    item(key = "summary-card", span = { GridItemSpan(maxLineSpan) }) {
+                        OfflineSummaryCard(
+                            completedCount = completed.size,
+                            usedBytes = usedBytes,
+                            canListenAll = completed.isNotEmpty() && selectedIds == null,
+                            onListenAll = { completed.firstOrNull()?.let(onListenAll) },
+                            onListenRandom = { completed.randomOrNull()?.let(onListenAll) },
+                            modifier = Modifier
+                                .padding(horizontal = headerHorizontalPadding, vertical = Spacing.Tight)
+                                .animateItem(),
+                        )
+                    }
                 }
                 if (inFlight.isNotEmpty()) {
                     item(key = "header-in-flight", span = { GridItemSpan(maxLineSpan) }) {
@@ -293,7 +311,6 @@ fun OfflineScreen(
 @Composable
 private fun OfflineSummaryCard(
     completedCount: Int,
-    inFlightCount: Int,
     usedBytes: Long,
     canListenAll: Boolean,
     onListenAll: () -> Unit,
@@ -303,12 +320,7 @@ private fun OfflineSummaryCard(
     val primarySummary = if (completedCount > 0) {
         stringResource(Res.string.offline_count, completedCount) + MetaSeparator + formatBytes(usedBytes)
     } else {
-        stringResource(Res.string.offline_section_in_flight, inFlightCount) + MetaSeparator + formatBytes(usedBytes)
-    }
-    val secondarySummary = if (completedCount > 0 && inFlightCount > 0) {
-        stringResource(Res.string.offline_section_in_flight, inFlightCount)
-    } else {
-        null
+        formatBytes(usedBytes)
     }
     var listenMenuOpen by remember { mutableStateOf(false) }
 
@@ -324,25 +336,13 @@ private fun OfflineSummaryCard(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(Spacing.Cozy),
         ) {
-            Column(
+            Text(
+                text = primarySummary,
+                style = MaterialTheme.typography.titleSmallEmphasized.tabular,
+                color = MaterialTheme.colorScheme.onSurface,
+                maxLines = 1,
                 modifier = Modifier.weight(1f),
-                verticalArrangement = Arrangement.spacedBy(2.dp),
-            ) {
-                Text(
-                    text = primarySummary,
-                    style = MaterialTheme.typography.titleSmallEmphasized.tabular,
-                    color = MaterialTheme.colorScheme.onSurface,
-                    maxLines = 1,
-                )
-                secondarySummary?.let {
-                    Text(
-                        text = it,
-                        style = MaterialTheme.typography.labelSmall.tabular,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                    )
-                }
-            }
+            )
             if (completedCount > 0) {
                 Box {
                     val moreOptionsLabel = stringResource(Res.string.listen_more_options)

@@ -1032,4 +1032,13 @@
     <string name="night_mode_sanctuary_manual">手动夜间模式生效中  至 %1$s</string>
     <string name="collection_total_count">共 %1$d 个视频</string>
     <string name="agent_steps_count">已检索 %1$d 步</string>
+
+    <!-- 媒体库页内搜索 -->
+    <string name="history_search_hint">搜索历史记录</string>
+    <string name="history_search_empty">没有找到相关历史记录</string>
+    <string name="toview_search_hint">搜索稍后再看</string>
+    <string name="toview_search_empty">没有找到相关视频</string>
+    <string name="fav_all_search_hint">在全部收藏夹中搜索</string>
+    <string name="offline_search_hint">搜索离线缓存</string>
+    <string name="offline_search_empty">没有找到相关缓存</string>
 </resources>

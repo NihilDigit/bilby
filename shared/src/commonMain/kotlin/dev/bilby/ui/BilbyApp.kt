@@ -1,15 +1,20 @@
 package dev.bilby.ui
 
+import dev.bilby.ui.components.BilbySearchTopBar
 import dev.bilby.ui.components.EditableFocusTracker
 import dev.bilby.ui.components.LocalCopyNotice
 import dev.bilby.ui.components.LocalEditableFocusTracker
 import dev.bilby.ui.components.LocalPageRefreshRegistry
+import dev.bilby.ui.components.LocalPageSearchRegistry
 import dev.bilby.ui.components.LocalPointerSource
 import dev.bilby.ui.components.NeedsCopyNotice
 import dev.bilby.ui.components.PageRefreshRegistry
+import dev.bilby.ui.components.PageSearchRegistry
 import dev.bilby.ui.components.PointerSource
 import dev.bilby.ui.components.RegisterPageRefresh
+import dev.bilby.ui.components.RegisterPageSearch
 import dev.bilby.ui.components.ShortcutsSheet
+import dev.bilby.ui.components.matchesLibraryQuery
 import dev.bilby.ui.components.readClipboardText
 import dev.bilby.ui.components.trackPointerSource
 import dev.bilby.data.HistoryItem
@@ -102,7 +107,7 @@ import androidx.compose.material3.ShortNavigationBar
 import androidx.compose.material3.ShortNavigationBarItem
 import androidx.compose.material3.ToggleButton
 import androidx.compose.material3.ToggleButtonDefaults
-import androidx.compose.material3.WideNavigationRailItem
+import androidx.compose.material3.NavigationRailItem
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalWindowInfo
 import dev.bilby.data.AccountInfo
@@ -350,6 +355,7 @@ fun BilbyRoot(
         val pointerSource = remember { PointerSource() }
         val editableFocusTracker = remember { EditableFocusTracker() }
         val pageRefreshRegistry = remember { PageRefreshRegistry() }
+        val pageSearchRegistry = remember { PageSearchRegistry() }
         val triggerBack = rememberBackTrigger()
         // 分享在桌面上是复制链接,按下去界面上看不出变化;报一句,见 SystemActions.shareCopiesLink。
         val scope = rememberCoroutineScope()
@@ -377,6 +383,7 @@ fun BilbyRoot(
                 LocalPointerSource provides pointerSource,
                 LocalEditableFocusTracker provides editableFocusTracker,
                 LocalPageRefreshRegistry provides pageRefreshRegistry,
+                LocalPageSearchRegistry provides pageSearchRegistry,
                 LocalCopyNotice provides copyNotice,
                 LocalSystemActions provides systemActions,
                 LocalEmoteRepository provides container.emoteRepository,
@@ -1043,6 +1050,7 @@ private fun BilbyApp(
 
     val editableFocus = LocalEditableFocusTracker.current
     val pageRefresh = LocalPageRefreshRegistry.current
+    val pageSearch = LocalPageSearchRegistry.current
     val appFullscreen = LocalAppFullscreen.current
     val triggerBack = rememberBackTrigger()
     val clipboard = LocalClipboard.current
@@ -1114,10 +1122,14 @@ private fun BilbyApp(
                         return@onPreviewKeyEvent switchRootTab(targetTab)
                     }
                 }
-                // Ctrl+F 或首页下的单键 / 聚焦主搜索框
-                if ((ctrl && !event.isShiftPressed && event.key == Key.F) ||
-                    (bare && !editableFocus.isEditableFocused && backStack.lastOrNull() is Home && event.key == Key.Slash)
-                ) {
+                // Ctrl+F 优先唤起当前页内搜索，未注册时回退至主搜索框；首页下的单键 / 聚焦主搜索框
+                val isCtrlF = ctrl && !event.isShiftPressed && event.key == Key.F
+                val isHomeSlash =
+                    bare && !editableFocus.isEditableFocused && backStack.lastOrNull() is Home && event.key == Key.Slash
+                if (isCtrlF || isHomeSlash) {
+                    if (isCtrlF && pageSearch.trigger()) {
+                        return@onPreviewKeyEvent true
+                    }
                     if (currentNightEngaged) {
                         showNightBlocked(blockedUnavailableText)
                         return@onPreviewKeyEvent true
@@ -1675,6 +1687,8 @@ private fun BilbyApp(
                         FavFoldersRoute(
                             container = container,
                             onOpenFolder = { push(FavFolderContents(it.id, it.title)) },
+                            onVideoClick = { push(Video(it)) },
+                            onUpClick = { push(Space(it)) },
                             onBack = { backStack.removeLastOrNull() },
                         )
                     }
@@ -2254,12 +2268,11 @@ private fun RootNavigationRail(
                 modifier = Modifier.fillMaxWidth(),
             ) {
                 RootTab.entries.forEach { tab ->
-                    WideNavigationRailItem(
+                    NavigationRailItem(
                         selected = selected == tab,
                         onClick = { onTabClick(tab) },
                         icon = { RootTabIcon(tab, selected == tab, sideRail = true) },
                         label = { RootTabLabel(tab, selected == tab, sideRail = true) },
-                        railExpanded = false,
                         modifier = Modifier.fillMaxWidth(),
                     )
                 }
@@ -3192,6 +3205,16 @@ private fun HistoryRoute(
     // null 表示不在多选态。空集合是多选态里的合法状态 —— 顶栏的「选择」要在一条都没选的
     // 时候就进得去。
     var selectedIds by remember { mutableStateOf<Set<Long>?>(null) }
+    var searchOpen by rememberSaveable { mutableStateOf(false) }
+    var searchFocusNonce by remember { mutableIntStateOf(0) }
+    val searching = searchOpen || state.appliedKeyword.isNotBlank()
+    RegisterPageSearch(
+        onTrigger = {
+            selectedIds = null
+            searchOpen = true
+            searchFocusNonce++
+        },
+    )
     var menuExpanded by remember { mutableStateOf(false) }
     var confirmingDeleteSelected by remember { mutableStateOf(false) }
     var confirmingDeleteSingle by remember { mutableStateOf<HistoryItem?>(null) }
@@ -3228,13 +3251,30 @@ private fun HistoryRoute(
                 label = "history-top-bar",
             ) { ids ->
                 if (ids == null) {
-                    BilbyTopBar(
+                    BilbySearchTopBar(
                         title = stringResource(Res.string.history_title),
+                        searching = searching,
+                        query = state.keyword,
+                        placeholder = stringResource(Res.string.history_search_hint),
+                        onQueryChange = vm::onKeywordChange,
+                        onSearch = vm::search,
+                        onOpenSearch = {
+                            selectedIds = null
+                            searchOpen = true
+                        },
+                        onCloseSearch = {
+                            searchOpen = false
+                            vm.closeSearch()
+                        },
                         onBack = onBack,
                         scrollBehavior = scrollBehavior,
+                        focusRequestNonce = searchFocusNonce,
                         actions = {
                             IconButton(
-                                onClick = { selectedIds = emptySet() },
+                                onClick = {
+                                    searchOpen = false
+                                    selectedIds = emptySet()
+                                },
                                 enabled = state.items.isNotEmpty() && !state.mutating,
                             ) {
                                 Icon(
@@ -3340,6 +3380,7 @@ private fun HistoryRoute(
             onRefresh = vm::refresh,
             selectedIds = selectedIds,
             onToggleSelection = { item ->
+                if (searchOpen && state.appliedKeyword.isBlank()) searchOpen = false
                 val current = selectedIds ?: emptySet()
                 selectedIds = if (item.oid in current) current - item.oid else current + item.oid
             },
@@ -3562,7 +3603,26 @@ private fun OfflineRoute(
 
     // null 表示不在多选态,理由见 [OfflineScreen] 那个参数的注释。
     var selectedIds by remember { mutableStateOf<Set<String>?>(null) }
+    var searchOpen by rememberSaveable { mutableStateOf(false) }
+    var searchQuery by rememberSaveable { mutableStateOf("") }
+    var searchFocusNonce by remember { mutableIntStateOf(0) }
+    val searching = searchOpen || searchQuery.isNotEmpty()
+    RegisterPageSearch(
+        onTrigger = {
+            selectedIds = null
+            searchOpen = true
+            searchFocusNonce++
+        },
+    )
     var confirmingBatchDelete by remember { mutableStateOf(false) }
+    val trimmedQuery = searchQuery.trim()
+    val visibleItems = remember(items, trimmedQuery) {
+        if (trimmedQuery.isEmpty()) {
+            items
+        } else {
+            items.filter { matchesLibraryQuery(trimmedQuery, it.title, it.partTitle, it.upName, it.bvid) }
+        }
+    }
     val selected = items.filter { it.id in selectedIds.orEmpty() }
     // 列表里已经没有的 id 要跟着掉:删完之后集合里留着几个死 id,顶栏就一直显示"已选 3 项"。
     LaunchedEffect(items) { selectedIds = selectedIds?.intersect(items.map { it.id }.toSet()) }
@@ -3585,15 +3645,33 @@ private fun OfflineRoute(
                 label = "offline-top-bar",
             ) { ids ->
                 if (ids == null) {
-                    BilbyTopBar(
+                    BilbySearchTopBar(
                         title = stringResource(Res.string.offline_title),
+                        searching = searching,
+                        query = searchQuery,
+                        placeholder = stringResource(Res.string.offline_search_hint),
+                        onQueryChange = { searchQuery = it },
+                        onSearch = {},
+                        onOpenSearch = {
+                            selectedIds = null
+                            searchOpen = true
+                        },
+                        onCloseSearch = {
+                            searchOpen = false
+                            searchQuery = ""
+                        },
                         onBack = onBack,
                         scrollBehavior = scrollBehavior,
+                        focusRequestNonce = searchFocusNonce,
                         actions = {
                             // 多选此前只能长按进入,而长按没有任何视觉提示。照历史记录页的做法
                             // 在顶栏放一个入口,长按保留。
                             IconButton(
-                                onClick = { selectedIds = emptySet() },
+                                onClick = {
+                                    searchOpen = false
+                                    searchQuery = ""
+                                    selectedIds = emptySet()
+                                },
                                 enabled = items.isNotEmpty(),
                             ) {
                                 Icon(
@@ -3621,7 +3699,7 @@ private fun OfflineRoute(
                 exit = slideOutVertically { it } + fadeOut(fadeSpec),
             ) {
                 val ids = selectedIds ?: emptySet()
-                val all = remember(items) { items.map { it.id }.toSet() }
+                val all = remember(visibleItems) { visibleItems.map { it.id }.toSet() }
                 val allSelected = all.isNotEmpty() && ids == all
                 HorizontalFloatingToolbar(
                     expanded = true,
@@ -3672,9 +3750,11 @@ private fun OfflineRoute(
             onListenAll = onListenAll,
             selectedIds = selectedIds,
             onToggleSelection = { item ->
+                if (searchOpen && searchQuery.isEmpty()) searchOpen = false
                 val current = selectedIds.orEmpty()
                 selectedIds = if (item.id in current) current - item.id else current + item.id
             },
+            searchQuery = searchQuery,
             contentPadding = effectivePadding,
         )
     }
@@ -3727,6 +3807,16 @@ private fun ToViewListRoute(
     val state by vm.state.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
     var confirmingClear by remember { mutableStateOf<ToViewClear?>(null) }
+    var searchOpen by rememberSaveable { mutableStateOf(false) }
+    var searchQuery by rememberSaveable { mutableStateOf("") }
+    var searchFocusNonce by remember { mutableIntStateOf(0) }
+    val searching = searchOpen || searchQuery.isNotEmpty()
+    RegisterPageSearch(
+        onTrigger = {
+            searchOpen = true
+            searchFocusNonce++
+        },
+    )
 
     // 移出成功之后给一次撤销。稍后再看是远程列表,删掉就得回 B 站重新找一遍那条视频,
     // 而这个删除按钮紧挨着整行的可点区。
@@ -3758,22 +3848,34 @@ private fun ToViewListRoute(
     Scaffold(
         modifier = Modifier.nestedScroll(scrollBehavior.nestedScrollConnection),
         topBar = {
-            BilbyTopBar(
+            BilbySearchTopBar(
                 title = stringResource(Res.string.tab_toview),
+                searching = searching,
+                query = searchQuery,
+                placeholder = stringResource(Res.string.toview_search_hint),
+                onQueryChange = { searchQuery = it },
+                onSearch = {},
+                onOpenSearch = { searchOpen = true },
+                onCloseSearch = {
+                    searchOpen = false
+                    searchQuery = ""
+                },
                 onBack = onBack,
                 scrollBehavior = scrollBehavior,
-            ) {
-                IconButton(
-                    onClick = { confirmingClear = ToViewClear.Invalid },
-                    enabled = !state.clearing && state.items.isNotEmpty(),
-                ) {
-                    Icon(
-                        Icons.Outlined.LinkOff,
-                        contentDescription = stringResource(Res.string.toview_clear_invalid),
-                    )
-                }
-                RefreshAction(refreshing = state.loading && state.items.isNotEmpty(), onRefresh = vm::refresh)
-            }
+                focusRequestNonce = searchFocusNonce,
+                actions = {
+                    IconButton(
+                        onClick = { confirmingClear = ToViewClear.Invalid },
+                        enabled = !state.clearing && state.items.isNotEmpty(),
+                    ) {
+                        Icon(
+                            Icons.Outlined.LinkOff,
+                            contentDescription = stringResource(Res.string.toview_clear_invalid),
+                        )
+                    }
+                    RefreshAction(refreshing = state.loading && state.items.isNotEmpty(), onRefresh = vm::refresh)
+                },
+            )
         },
         floatingActionButton = {
             val finishedCount = state.items.count { it.isFinished }
@@ -3805,6 +3907,7 @@ private fun ToViewListRoute(
             onListenItem = { onListen(it.bvid, QueueContext.ToView(state.asc)) },
             onUpClick = onUpClick,
             onRefresh = vm::refresh,
+            searchQuery = searchQuery,
             contentPadding = PaddingValues(
                 start = insets.calculateStartPadding(layoutDirection),
                 top = insets.calculateTopPadding(),
@@ -3859,10 +3962,11 @@ private fun FavFolderRoute(
         QueueContext.FavFolder(mediaId, folderTitle, page, state.order, state.appliedKeyword)
     }
 
-    // 见 [SearchResultRoute]。
-    val scrollBehavior = TopAppBarDefaults.pinnedScrollBehavior()
+    // 中档可折叠顶栏配合 exitUntilCollapsedScrollBehavior，滚动时收起释放列表空间。
+    val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
     LaunchedEffect(state.order, state.appliedKeyword, state.items.isEmpty()) {
         scrollBehavior.state.contentOffset = 0f
+        scrollBehavior.state.heightOffset = 0f
     }
     Scaffold(
         modifier = Modifier.nestedScroll(scrollBehavior.nestedScrollConnection),
@@ -4265,6 +4369,8 @@ private fun DynamicDetailRoute(
 private fun FavFoldersRoute(
     container: AppContainer,
     onOpenFolder: (FavFolderDetail) -> Unit,
+    onVideoClick: (String) -> Unit,
+    onUpClick: (Long) -> Unit,
     onBack: () -> Unit,
 ) {
     val vm: FavFoldersViewModel = viewModel(
@@ -4273,28 +4379,55 @@ private fun FavFoldersRoute(
     val state by vm.state.collectAsStateWithLifecycle()
     val editor by vm.manager.editor.collectAsStateWithLifecycle()
     val deletion by vm.manager.deletion.collectAsStateWithLifecycle()
+    var searchOpen by rememberSaveable { mutableStateOf(false) }
+    var searchFocusNonce by remember { mutableIntStateOf(0) }
+    val searching = searchOpen || state.appliedKeyword.isNotBlank()
+    RegisterPageSearch(
+        onTrigger = {
+            searchOpen = true
+            searchFocusNonce++
+        },
+    )
+    RegisterPageRefresh(
+        refreshing = if (state.appliedKeyword.isNotBlank()) state.searchRefreshing else state.refreshing,
+        onRefresh = if (state.appliedKeyword.isNotBlank()) vm::refreshSearch else vm::refresh,
+    )
     // 从某个收藏夹返回时这一页重新进组合,那正是列表最可能过期的时候。判据见 onEnter。
     LaunchedEffect(Unit) { vm.onEnter() }
     // 见 [SearchResultRoute]。
     val scrollBehavior = TopAppBarDefaults.pinnedScrollBehavior()
-    LaunchedEffect(state.folders.isEmpty()) {
-        if (state.folders.isEmpty()) scrollBehavior.state.contentOffset = 0f
+    LaunchedEffect(state.folders.isEmpty(), state.appliedKeyword) {
+        if (state.folders.isEmpty() || state.appliedKeyword.isNotBlank()) {
+            scrollBehavior.state.contentOffset = 0f
+        }
     }
     Scaffold(
         modifier = Modifier.nestedScroll(scrollBehavior.nestedScrollConnection),
         topBar = {
-            BilbyTopBar(
+            BilbySearchTopBar(
                 title = stringResource(Res.string.fav_folders_title),
+                searching = searching,
+                query = state.keyword,
+                placeholder = stringResource(Res.string.fav_all_search_hint),
+                onQueryChange = vm::onKeywordChange,
+                onSearch = vm::search,
+                onOpenSearch = { searchOpen = true },
+                onCloseSearch = {
+                    searchOpen = false
+                    vm.closeSearch()
+                },
                 onBack = onBack,
                 scrollBehavior = scrollBehavior,
-            ) {
-                // 新建是这一页的页级操作,放顶栏。它原先是右下角的 FAB:FAB 要让开列表最后一行,
-                // 而一个不常用的操作不值得常驻在内容上面。
-                IconButton(onClick = vm.manager::startCreate) {
-                    Icon(Icons.Outlined.Add, contentDescription = stringResource(Res.string.fav_folder_create))
-                }
-                RefreshAction(state.refreshing, vm::refresh)
-            }
+                focusRequestNonce = searchFocusNonce,
+                actions = {
+                    // 新建是这一页的页级操作,放顶栏。它原先是右下角的 FAB:FAB 要让开列表最后一行,
+                    // 而一个不常用的操作不值得常驻在内容上面。
+                    IconButton(onClick = vm.manager::startCreate) {
+                        Icon(Icons.Outlined.Add, contentDescription = stringResource(Res.string.fav_folder_create))
+                    }
+                    RefreshAction(state.refreshing, vm::refresh)
+                },
+            )
         },
     ) { insets ->
         FavFoldersScreen(
@@ -4309,6 +4442,11 @@ private fun FavFoldersRoute(
             onRefresh = vm::refresh,
             editorActions = vm.manager.editorActions,
             deletionActions = vm.manager.deletionActions,
+            onVideoClick = { onVideoClick(it.bvid) },
+            onUpClick = onUpClick,
+            onLoadMoreSearch = vm::loadMoreSearch,
+            onRetrySearch = vm::retrySearch,
+            onRefreshSearch = vm::refreshSearch,
             contentPadding = insets,
         )
     }

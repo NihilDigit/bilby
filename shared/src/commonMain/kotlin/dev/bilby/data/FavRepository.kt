@@ -120,13 +120,15 @@ class FavRepository(
     /**
      * 收藏夹内容。
      *
-     * @param keyword 夹内搜索词,空串即不筛。
+     * @param keyword 夹内或跨夹搜索词，空串即不筛。
+     * @param searchAllFolders 为 `true` 时传 `type=1`，以用户默认收藏夹 `media_id` 跨全部收藏夹搜索视频。
      */
     suspend fun folderContents(
         mediaId: Long,
         page: Int,
         order: FavOrder = FavOrder.Mtime,
         keyword: String = "",
+        searchAllFolders: Boolean = false,
     ): BiliResult<FavPage> =
         client.getData<FavResourceListDto>(
             RESOURCE_LIST_URL,
@@ -136,7 +138,7 @@ class FavRepository(
                 "ps" to Paging.PAGE_SIZE.toString(),
                 "keyword" to keyword,
                 "order" to order.apiValue,
-                "type" to "0",
+                "type" to if (searchAllFolders) "1" else "0",
                 "tid" to "0",
                 "platform" to "web",
             ),

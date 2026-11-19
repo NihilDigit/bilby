@@ -2,6 +2,7 @@ package dev.bilby.data
 
 import dev.bilby.api.dto.HistoryItemDto
 import dev.bilby.api.dto.HistoryRefDto
+import dev.bilby.api.dto.HistorySearchResponseDto
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -64,5 +65,32 @@ class HistoryRepositoryTest {
     fun `非空列表未到底`() {
         val page = computeHistoryPage(listOf(archive(1, 100)), fallbackMax = 0, fallbackViewAt = 0)
         assertFalse(page.isEnd)
+    }
+
+    @Test
+    fun `历史搜索过滤非稿件条目并保留 hasMore`() {
+        val dto = HistorySearchResponseDto(
+            hasMore = true,
+            list = listOf(
+                archive(10, 1000),
+                live(11, 2000),
+                HistoryItemDto(history = HistoryRefDto(oid = 12, bvid = "", business = "archive")),
+            ),
+        )
+        val page = computeHistorySearchPage(dto)
+
+        assertEquals(listOf(10L), page.items.map { it.oid })
+        assertTrue(page.hasMore)
+    }
+
+    @Test
+    fun `历史搜索空列表或 null 列表视为无更多页`() {
+        val nullPage = computeHistorySearchPage(HistorySearchResponseDto(hasMore = true, list = null))
+        assertTrue(nullPage.items.isEmpty())
+        assertFalse(nullPage.hasMore)
+
+        val emptyPage = computeHistorySearchPage(HistorySearchResponseDto(hasMore = true, list = emptyList()))
+        assertTrue(emptyPage.items.isEmpty())
+        assertFalse(emptyPage.hasMore)
     }
 }

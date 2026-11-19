@@ -13,6 +13,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.outlined.Close
+import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -29,18 +31,26 @@ import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.TopAppBarScrollBehavior
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import dev.bilby.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import dev.bilby.resources.*
+import dev.bilby.ui.BackHandler
 import dev.bilby.ui.CaptionDragHeight
 import dev.bilby.ui.LocalWindowCaption
 import dev.bilby.ui.rememberCaptionSlot
@@ -99,6 +109,104 @@ fun BilbyTopBar(
             ) { center() }
         }
     }
+}
+
+/**
+ * 带统一页内搜索态的顶栏：常态为标准 [BilbyTopBar]（在 `actions` 前置带 `Ctrl+F` 提示的搜索按钮）；
+ * 展开态切换为紧凑 [TopAppBar] 内嵌自动聚焦的 [SearchField]，支持 `Esc` 与系统返回关闭，
+ * 完整保留桌面端窗口控制按钮槽位。
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun BilbySearchTopBar(
+    title: String,
+    searching: Boolean,
+    query: String,
+    placeholder: String,
+    onQueryChange: (String) -> Unit,
+    onSearch: () -> Unit,
+    onOpenSearch: () -> Unit,
+    onCloseSearch: () -> Unit,
+    modifier: Modifier = Modifier,
+    onBack: (() -> Unit)? = null,
+    scrollBehavior: TopAppBarScrollBehavior? = null,
+    subtitle: String? = null,
+    searchEnabled: Boolean = true,
+    focusRequestNonce: Int = 0,
+    actions: @Composable RowScope.() -> Unit = {},
+) {
+    BackHandler(enabled = searching, onBack = onCloseSearch)
+    if (!searching) {
+        BilbyTopBar(
+            title = title,
+            modifier = modifier,
+            onBack = onBack,
+            scrollBehavior = scrollBehavior,
+            subtitle = subtitle,
+            actions = {
+                val searchLabel = stringResource(Res.string.fav_search)
+                BilbyTooltip(text = searchLabel, shortcut = "Ctrl+F") {
+                    IconButton(onClick = onOpenSearch, enabled = searchEnabled) {
+                        Icon(Icons.Outlined.Search, contentDescription = searchLabel)
+                    }
+                }
+                actions()
+            },
+        )
+        return
+    }
+
+    LocalWindowCaption.current?.Host()
+    val captionSlot = rememberCaptionSlot()
+    val focusRequester = remember { FocusRequester() }
+    LaunchedEffect(searching, focusRequestNonce) {
+        if (searching) runCatching { focusRequester.requestFocus() }
+    }
+    TopAppBar(
+        modifier = modifier
+            .then(captionSlot.modifier)
+            .onPreviewKeyEvent { event ->
+                if (event.type == KeyEventType.KeyDown && event.key == Key.Escape) {
+                    onCloseSearch()
+                    true
+                } else {
+                    false
+                }
+            },
+        title = {
+            SearchField(
+                value = query,
+                onValueChange = onQueryChange,
+                placeholder = placeholder,
+                onSearch = onSearch,
+                focusRequester = focusRequester,
+            )
+        },
+        navigationIcon = {
+            if (onBack != null) {
+                val backLabel = stringResource(Res.string.action_back)
+                BilbyTooltip(text = backLabel, shortcut = "Alt+←") {
+                    IconButton(onClick = onBack) {
+                        Icon(
+                            Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = backLabel,
+                        )
+                    }
+                }
+            }
+        },
+        actions = {
+            val closeLabel = stringResource(Res.string.fav_search_close)
+            BilbyTooltip(text = closeLabel, shortcut = "Esc") {
+                IconButton(onClick = onCloseSearch) {
+                    Icon(Icons.Outlined.Close, contentDescription = closeLabel)
+                }
+            }
+            captionSlot.buttons?.invoke()
+        },
+        colors = TopAppBarDefaults.topAppBarColors(),
+        scrollBehavior = scrollBehavior,
+    )
 }
 
 @OptIn(ExperimentalMaterial3Api::class)

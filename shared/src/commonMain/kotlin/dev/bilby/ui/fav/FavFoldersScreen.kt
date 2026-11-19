@@ -41,18 +41,25 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dev.bilby.api.BiliResult
 import dev.bilby.data.FavFolderDetail
+import dev.bilby.data.FavOrder
 import dev.bilby.data.FavRepository
+import dev.bilby.data.FavVideo
 import dev.bilby.resources.*
 import dev.bilby.stringResource
 import dev.bilby.ui.AdaptiveListContent
+import dev.bilby.ui.AdaptiveVideoGridContent
 import dev.bilby.ui.components.BilbyTooltip
 import dev.bilby.ui.components.ContextMenuBox
 import dev.bilby.ui.components.LocalPointerSource
 import dev.bilby.ui.components.PagedColumn
 import dev.bilby.ui.components.PagedLayout
 import dev.bilby.ui.components.RefreshBox
+import dev.bilby.ui.components.VideoCommonMenuItems
+import dev.bilby.ui.components.VideoGridCard
+import dev.bilby.ui.components.VideoRow
 import dev.bilby.ui.components.menuItemShape
 import dev.bilby.ui.components.rememberCopyAction
+import dev.bilby.ui.components.videoCommonMenuItemCount
 import dev.bilby.ui.errorTextRes
 import dev.bilby.ui.theme.Dimens
 import dev.bilby.ui.theme.Spacing
@@ -73,6 +80,15 @@ data class FavFoldersUiState(
     val hasMore: Boolean = true,
     /** 存资源 id,见 [dev.bilby.ui.errorTextRes]。 */
     val error: StringResource? = null,
+    /** 跨全部收藏夹搜索的输入框内容与已提交关键词。 */
+    val keyword: String = "",
+    val appliedKeyword: String = "",
+    val searchItems: List<FavVideo> = emptyList(),
+    val searchLoading: Boolean = false,
+    val searchAppending: Boolean = false,
+    val searchRefreshing: Boolean = false,
+    val searchHasMore: Boolean = false,
+    val searchError: StringResource? = null,
 )
 
 /**
@@ -108,9 +124,146 @@ class FavFoldersViewModel(private val repository: FavRepository) : ViewModel() {
     private var fetching = false
 
     private var entered = false
+    private var searchPage = 0
+    private var searchGeneration = 0
+    private var searchJob: Job? = null
+    private val searchSeenAids = mutableSetOf<Long>()
 
     init {
         reload(indicator = false)
+    }
+
+    fun onKeywordChange(keyword: String) = _state.update { it.copy(keyword = keyword) }
+
+    fun search() {
+        val keyword = _state.value.keyword.trim()
+        if (keyword.isEmpty() || keyword == _state.value.appliedKeyword) return
+        searchGeneration++
+        searchJob?.cancel()
+        searchPage = 0
+        searchSeenAids.clear()
+        _state.update {
+            it.copy(
+                appliedKeyword = keyword,
+                searchItems = emptyList(),
+                searchLoading = false,
+                searchAppending = false,
+                searchRefreshing = false,
+                searchHasMore = true,
+                searchError = null,
+            )
+        }
+        loadMoreSearch(replace = true)
+    }
+
+    fun closeSearch() {
+        searchGeneration++
+        searchJob?.cancel()
+        searchPage = 0
+        searchSeenAids.clear()
+        _state.update {
+            it.copy(
+                keyword = "",
+                appliedKeyword = "",
+                searchItems = emptyList(),
+                searchLoading = false,
+                searchAppending = false,
+                searchRefreshing = false,
+                searchHasMore = false,
+                searchError = null,
+            )
+        }
+    }
+
+    fun refreshSearch() {
+        if (_state.value.appliedKeyword.isBlank()) return
+        searchGeneration++
+        searchJob?.cancel()
+        searchPage = 0
+        searchSeenAids.clear()
+        _state.update {
+            it.copy(
+                searchRefreshing = true,
+                searchLoading = false,
+                searchAppending = false,
+                searchHasMore = true,
+                searchError = null,
+            )
+        }
+        loadMoreSearch(replace = true)
+    }
+
+    fun retrySearch() {
+        if (_state.value.appliedKeyword.isBlank()) return
+        loadMoreSearch(replace = searchPage == 0)
+    }
+
+    fun loadMoreSearch(replace: Boolean = false) {
+        val current = _state.value
+        val keyword = current.appliedKeyword
+        if (keyword.isBlank()) return
+        if (current.searchLoading || current.searchAppending || (!replace && !current.searchHasMore)) return
+        val next = if (replace) 1 else searchPage + 1
+        val gen = searchGeneration
+        _state.update {
+            it.copy(
+                searchLoading = replace || next == 1,
+                searchAppending = !replace && next > 1,
+                searchError = null,
+            )
+        }
+        searchJob = viewModelScope.launch {
+            try {
+                val defaultFolderId = resolveDefaultFolderId()
+                if (gen != searchGeneration) return@launch
+                if (defaultFolderId == null) {
+                    _state.update {
+                        it.copy(searchItems = emptyList(), searchHasMore = false, searchError = null)
+                    }
+                    return@launch
+                }
+                val result = repository.folderContents(
+                    mediaId = defaultFolderId,
+                    page = next,
+                    order = FavOrder.Mtime,
+                    keyword = keyword,
+                    searchAllFolders = true,
+                )
+                if (gen != searchGeneration) return@launch
+                when (result) {
+                    is BiliResult.Ok -> {
+                        searchPage = next
+                        val fresh = result.value.items.filter { searchSeenAids.add(it.aid) }
+                        _state.update {
+                            it.copy(
+                                searchItems = if (replace || next == 1) fresh else it.searchItems + fresh,
+                                searchHasMore = result.value.hasMore,
+                                searchError = null,
+                            )
+                        }
+                    }
+
+                    else -> {
+                        val reason = result.errorTextRes("跨收藏夹搜索(pn=$next)")
+                        _state.update { it.copy(searchError = reason) }
+                    }
+                }
+            } finally {
+                if (gen == searchGeneration) {
+                    _state.update {
+                        it.copy(searchLoading = false, searchAppending = false, searchRefreshing = false)
+                    }
+                }
+            }
+        }
+    }
+
+    private suspend fun resolveDefaultFolderId(): Long? {
+        val cached = _state.value.folders
+        cached.firstOrNull { it.isDefault }?.id?.let { return it }
+        cached.firstOrNull()?.id?.let { return it }
+        val firstPage = (repository.folderPage(1) as? BiliResult.Ok)?.value?.items.orEmpty()
+        return firstPage.firstOrNull { it.isDefault }?.id ?: firstPage.firstOrNull()?.id
     }
 
     fun loadMore() {
@@ -204,9 +357,27 @@ fun FavFoldersScreen(
     onRefresh: () -> Unit,
     editorActions: FavFolderEditorActions,
     deletionActions: FavFolderDeletionActions,
+    onVideoClick: (FavVideo) -> Unit = {},
+    onUpClick: (Long) -> Unit = {},
+    onLoadMoreSearch: () -> Unit = {},
+    onRetrySearch: () -> Unit = {},
+    onRefreshSearch: () -> Unit = {},
     modifier: Modifier = Modifier,
     contentPadding: PaddingValues = PaddingValues(),
 ) {
+    if (state.appliedKeyword.isNotBlank()) {
+        FavAllSearchResults(
+            state = state,
+            onVideoClick = onVideoClick,
+            onUpClick = onUpClick,
+            onLoadMore = onLoadMoreSearch,
+            onRetry = onRetrySearch,
+            onRefresh = onRefreshSearch,
+            modifier = modifier,
+            contentPadding = contentPadding,
+        )
+        return
+    }
     val layoutDirection = LocalLayoutDirection.current
     val density = LocalDensity.current
     var listWidth by remember { mutableStateOf(0.dp) }
@@ -292,6 +463,131 @@ fun FavFoldersScreen(
 
     editor?.let { FavFolderEditorDialog(it, editorActions) }
     deletion?.let { FavFolderDeleteDialog(it, deletionActions) }
+}
+
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
+@Composable
+private fun FavAllSearchResults(
+    state: FavFoldersUiState,
+    onVideoClick: (FavVideo) -> Unit,
+    onUpClick: (Long) -> Unit,
+    onLoadMore: () -> Unit,
+    onRetry: () -> Unit,
+    onRefresh: () -> Unit,
+    modifier: Modifier = Modifier,
+    contentPadding: PaddingValues = PaddingValues(),
+) {
+    val layoutDirection = LocalLayoutDirection.current
+    AdaptiveVideoGridContent(modifier = modifier.fillMaxSize()) { columnCount ->
+        val multiColumn = columnCount > 1
+        val effectiveColumns = GridCells.Fixed(columnCount)
+        val gridPadding = if (multiColumn) {
+            PaddingValues(
+                start = contentPadding.calculateStartPadding(layoutDirection) + (Spacing.Tight - 2.dp),
+                top = contentPadding.calculateTopPadding(),
+                end = contentPadding.calculateEndPadding(layoutDirection) + (Spacing.Tight - 2.dp),
+                bottom = contentPadding.calculateBottomPadding() + Spacing.Comfortable,
+            )
+        } else {
+            contentPadding
+        }
+
+        RefreshBox(
+            refreshing = state.searchRefreshing,
+            onRefresh = onRefresh,
+            modifier = Modifier.fillMaxSize(),
+        ) {
+            PagedColumn(
+                layout = PagedLayout.Grid(effectiveColumns),
+                items = state.searchItems,
+                key = { it.aid },
+                loading = state.searchLoading,
+                appending = state.searchAppending,
+                hasMore = state.searchHasMore,
+                error = state.searchError?.let { stringResource(it) },
+                emptyText = stringResource(Res.string.fav_empty_search),
+                onLoadMore = onLoadMore,
+                onRetry = onRetry,
+                contentPadding = gridPadding,
+            ) { item ->
+                val rowUi = item.toRowUi()
+                val bvid = if (item.playable) item.bvid else ""
+                val copyFallbackTitle = bvid.isEmpty() && !item.invalid && item.title.isNotBlank()
+                val hasMenu = item.playable || item.upMid != 0L || copyFallbackTitle
+
+                if (hasMenu) {
+                    val copyTitleAction = rememberCopyAction()
+                    ContextMenuBox(
+                        onClick = null,
+                        menuLabel = stringResource(Res.string.menu_item_actions),
+                        menu = { close ->
+                            val leadingCount = if (copyFallbackTitle) 1 else 0
+                            val totalCount = leadingCount + videoCommonMenuItemCount(
+                                bvid = bvid,
+                                upMid = item.upMid,
+                                onOpenUpSpace = onUpClick,
+                                title = item.title,
+                            )
+                            if (copyFallbackTitle) {
+                                DropdownMenuItem(
+                                    onClick = {
+                                        close()
+                                        copyTitleAction(item.title)
+                                    },
+                                    text = { Text(stringResource(Res.string.action_copy_title)) },
+                                    leadingIcon = { Icon(Icons.Outlined.ContentCopy, contentDescription = null) },
+                                    shape = menuItemShape(0, totalCount),
+                                )
+                            }
+                            VideoCommonMenuItems(
+                                bvid = bvid,
+                                title = item.title,
+                                close = close,
+                                upMid = item.upMid,
+                                onOpenUpSpace = onUpClick,
+                                coverUrl = item.coverUrl,
+                                upName = item.upName,
+                                durationSeconds = item.durationSeconds,
+                                startIndex = leadingCount,
+                                totalCount = totalCount,
+                            )
+                        },
+                    ) { openMenu ->
+                        if (multiColumn) {
+                            VideoGridCard(
+                                ui = rowUi,
+                                enabled = item.playable,
+                                onClick = { if (item.playable) onVideoClick(item) },
+                                onLongClick = if (item.playable) openMenu else null,
+                                onUpClick = if (item.upMid != 0L) ({ onUpClick(item.upMid) }) else null,
+                                modifier = Modifier.padding(2.dp),
+                            )
+                        } else {
+                            VideoRow(
+                                item = rowUi,
+                                enabled = item.playable,
+                                onClick = { if (item.playable) onVideoClick(item) },
+                                onLongClick = if (item.playable) openMenu else null,
+                            )
+                        }
+                    }
+                } else if (multiColumn) {
+                    VideoGridCard(
+                        ui = rowUi,
+                        enabled = item.playable,
+                        onClick = { if (item.playable) onVideoClick(item) },
+                        modifier = Modifier.padding(2.dp),
+                    )
+                } else {
+                    VideoRow(
+                        item = rowUi,
+                        enabled = item.playable,
+                        onClick = { if (item.playable) onVideoClick(item) },
+                    )
+                }
+            }
+        }
+    }
 }
 
 /**
