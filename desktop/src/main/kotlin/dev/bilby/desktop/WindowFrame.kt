@@ -54,6 +54,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.FrameWindowScope
 import dev.bilby.BiliLog
+import dev.bilby.ui.CaptionButtonSize
+import dev.bilby.ui.CaptionButtonSpacing
 import dev.bilby.ui.LocalLiveWindowInfo
 import dev.bilby.ui.LocalWindowCaption
 import dev.bilby.ui.LocalWindowResizing
@@ -178,6 +180,8 @@ private fun SettledWindowInfo(
  * 没有谁声明 [Host] 时不写布局,交由外层的 [WindowsTitleBar] 管理。
  */
 private class CompactCaption(private val caption: WindowsCaption) : WindowCaption {
+    override val isActive: Boolean get() = caption.isActive
+
     private var hosts by mutableIntStateOf(0)
     val hosted: Boolean get() = hosts > 0
 
@@ -237,7 +241,7 @@ private class CompactCaption(private val caption: WindowsCaption) : WindowCaptio
             if (caption.isActive) it else it.copy(alpha = 0.45f)
         }
         Row(
-            horizontalArrangement = Arrangement.spacedBy(2.dp),
+            horizontalArrangement = Arrangement.spacedBy(CaptionButtonSpacing),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             for (button in WindowsCaption.Button.entries) {
@@ -330,7 +334,7 @@ private fun RoundCaptionButton(
     )
     Box(
         contentAlignment = Alignment.Center,
-        modifier = modifier.size(40.dp).clip(CircleShape).background(background),
+        modifier = modifier.size(CaptionButtonSize).clip(CircleShape).background(background),
     ) {
         CaptionGlyphIcon(button, isMaximized, glyphColor)
     }

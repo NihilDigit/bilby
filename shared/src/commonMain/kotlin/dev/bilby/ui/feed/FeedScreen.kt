@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
@@ -112,6 +113,7 @@ import dev.bilby.ui.LocalAppFullscreen
 import dev.bilby.resources.*
 import dev.bilby.stringResource
 import dev.bilby.ui.BilbyWindowSize
+import dev.bilby.ui.CaptionActionButton
 import dev.bilby.ui.CaptionDragHeight
 import dev.bilby.ui.LocalWindowCaption
 import dev.bilby.ui.components.Avatar
@@ -493,21 +495,54 @@ private fun FeedList(
     var containerWidth by remember { mutableStateOf(0.dp) }
     val isTouch = LocalPointerSource.current.isTouchLike
     val appFullscreen = LocalAppFullscreen.current
-    // 宽屏下「推送」「关注动态」入口固定归入左侧导航轨底栏可定制项，不再占用订阅页顶部空间。
+    val hasDesktopCaption = LocalWindowCaption.current != null
+    // 宽屏下「推送」「关注动态」入口固定归入左侧导航轨底栏可定制项,不再占用订阅页顶部空间。
     val showHeaderNavActions = !wide
-    val showHeaderFullscreen = appFullscreen != null
-    val showHeaderRefresh = appFullscreen != null || LocalWindowCaption.current != null || !isTouch
-    val headerActions: (@Composable () -> Unit)? = if (showHeaderNavActions || showHeaderFullscreen || showHeaderRefresh) {
+    val showCaptionActions = hasDesktopCaption || appFullscreen != null
+    val showTileRefresh = !showCaptionActions && !isTouch
+    val headerActions: (@Composable () -> Unit)? = if (showHeaderNavActions || showTileRefresh) {
         {
             FeedHeaderActions(
                 onOpenOtherDynamics = onOpenOtherDynamics,
                 onOpenPushes = onOpenPushes,
                 includeNavActions = showHeaderNavActions,
-                includeFullscreen = showHeaderFullscreen,
-                includeRefresh = showHeaderRefresh,
+                includeRefresh = showTileRefresh,
                 refreshing = state.refreshing,
                 onRefresh = onRefresh,
             )
+        }
+    } else {
+        null
+    }
+    val captionActions: (@Composable RowScope.() -> Unit)? = if (showCaptionActions) {
+        {
+            if (appFullscreen != null) {
+                val isWindowFullscreen = appFullscreen.isFullscreen
+                val fullscreenLabel = stringResource(
+                    if (isWindowFullscreen) Res.string.player_exit_fullscreen else Res.string.player_fullscreen,
+                )
+                val fullscreenIcon = if (isWindowFullscreen) {
+                    Icons.Outlined.FullscreenExit
+                } else {
+                    Icons.Outlined.Fullscreen
+                }
+                BilbyTooltip(text = fullscreenLabel, shortcut = "F11") {
+                    CaptionActionButton(
+                        icon = fullscreenIcon,
+                        contentDescription = fullscreenLabel,
+                        onClick = { appFullscreen.toggle() },
+                    )
+                }
+            }
+            val refreshLabel = stringResource(Res.string.action_refresh)
+            BilbyTooltip(text = refreshLabel, shortcut = "F5") {
+                CaptionActionButton(
+                    icon = Icons.Filled.Refresh,
+                    contentDescription = refreshLabel,
+                    loading = state.refreshing,
+                    onClick = onRefresh,
+                )
+            }
         }
     } else {
         null
@@ -536,6 +571,7 @@ private fun FeedList(
                 if (pinnedHeader) {
                     FeedHeader(
                         actions = headerActions,
+                        captionActions = captionActions,
                     )
                 }
                 Row(modifier = Modifier.weight(1f).fillMaxWidth()) {
@@ -569,6 +605,7 @@ private fun FeedList(
                                 item(key = "header", span = FullLine, contentType = "header") {
                                     FeedHeader(
                                         actions = headerActions,
+                                        captionActions = captionActions,
                                     )
                                 }
                             }
@@ -669,6 +706,7 @@ private fun FeedList(
 @Composable
 private fun FeedHeader(
     actions: (@Composable () -> Unit)?,
+    captionActions: (@Composable RowScope.() -> Unit)? = null,
 ) {
     val captionSlot = rememberCaptionSlot()
     Row(
@@ -696,34 +734,33 @@ private fun FeedHeader(
                 .windowDragArea(captionSlot.atTop),
         )
         actions?.invoke()
-        captionSlot.buttons?.invoke()
+        if (captionActions != null) {
+            captionSlot.ButtonsWithLeading(captionActions)
+        } else {
+            captionSlot.buttons?.invoke()
+        }
     }
 }
 
 /**
- * 推送、关注动态、桌面全屏与刷新入口：收口进 M3E [ButtonGroup]（`animateWidth` 弹性伸缩 + 窄屏自动折叠溢出菜单），
- * 内层延续 `32.dp` 高、`10.dp` 小圆角的轻量 `surfaceContainerLow` 方案 C 视觉，刷新按钮始终处于最右侧。
+ * 推送、关注动态与非桌面端键鼠刷新入口:收口进 M3E [ButtonGroup](`animateWidth` 弹性伸缩 + 窄屏自动折叠溢出菜单),
+ * 内层延续 `32.dp` 高、`10.dp` 小圆角的轻量 `surfaceContainerLow` 方案 C 视觉;
+ * 桌面端全屏与刷新入口统一并入标题栏按钮组([CaptionActionButton])。
  */
 @Composable
 private fun FeedHeaderActions(
     onOpenOtherDynamics: () -> Unit,
     onOpenPushes: () -> Unit,
     includeNavActions: Boolean,
-    includeFullscreen: Boolean,
     includeRefresh: Boolean,
     refreshing: Boolean,
     onRefresh: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val colorScheme = MaterialTheme.colorScheme
-    val appFullscreen = LocalAppFullscreen.current
     val refreshLabel = stringResource(Res.string.action_refresh)
     val pushesLabel = stringResource(Res.string.feed_up_pushes_entry)
     val dynamicsLabel = stringResource(Res.string.dynamic_other_entry)
-    val isWindowFullscreen = appFullscreen?.isFullscreen == true
-    val fullscreenLabel = stringResource(
-        if (isWindowFullscreen) Res.string.player_exit_fullscreen else Res.string.player_fullscreen,
-    )
     ButtonGroup(
         overflowIndicator = { menuState ->
             ButtonGroupDefaults.OverflowIndicator(
@@ -780,38 +817,6 @@ private fun FeedHeaderActions(
                         onClick = {
                             menuState.dismiss()
                             onOpenOtherDynamics()
-                        },
-                    )
-                },
-            )
-        }
-        if (includeFullscreen && appFullscreen != null) {
-            val fullscreenIcon = if (isWindowFullscreen) {
-                Icons.Outlined.FullscreenExit
-            } else {
-                Icons.Outlined.Fullscreen
-            }
-            customItem(
-                buttonGroupContent = {
-                    val interactionSource = remember { MutableInteractionSource() }
-                    BilbyTooltip(text = fullscreenLabel, shortcut = "F11") {
-                        FeedToolbarTile(
-                            icon = fullscreenIcon,
-                            label = null,
-                            contentDescription = fullscreenLabel,
-                            interactionSource = interactionSource,
-                            modifier = Modifier.animateWidth(interactionSource),
-                            onClick = { appFullscreen.toggle() },
-                        )
-                    }
-                },
-                menuContent = { menuState ->
-                    DropdownMenuItem(
-                        text = { Text(fullscreenLabel) },
-                        leadingIcon = { Icon(fullscreenIcon, contentDescription = null) },
-                        onClick = {
-                            menuState.dismiss()
-                            appFullscreen.toggle()
                         },
                     )
                 },

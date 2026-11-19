@@ -1,9 +1,23 @@
 package dev.bilby.ui
 
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsHoveredAsState
+import androidx.compose.foundation.interaction.collectIsPressedAsState
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
+import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.compositionLocalOf
@@ -11,17 +25,24 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.composed
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalWindowInfo
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import dev.bilby.ui.components.LoadingSpinner
 
 /**
  * 桌面端紧凑标题栏融合契约(照 Chrome / Piko):界面声明自己能容纳窗口按钮与拖动区后,窗口不再画单独一条
@@ -46,6 +67,9 @@ interface WindowCaption {
     /** 全窗口遮罩(如全屏看图器)在场期间暂时挂起底层顶栏的非客户区命中,避免遮罩上的按钮被当成标题栏拦截。 */
     @Composable
     fun Suppress() = Unit
+
+    /** 所属窗口当前是否处于活动态,用于同步紧邻标题栏按钮的失焦变灰。 */
+    val isActive: Boolean get() = true
 }
 
 val LocalWindowCaption = compositionLocalOf<WindowCaption?> { null }
@@ -81,7 +105,26 @@ class CaptionSlot(
     val buttons: (@Composable () -> Unit)?,
     /** 该行位于窗口顶部,行内空白应登记为 [windowDragArea]。 */
     val atTop: Boolean = false,
-)
+    private val dragGap: (@Composable () -> Unit)? = null,
+    private val rawButtons: (@Composable () -> Unit)? = null,
+) {
+    /**
+     * 将与标题栏同视觉体系的动作按钮(如全屏、刷新)紧贴窗口控制按钮(`— ❐ ×`)左侧排布:
+     * 拖动留白落在整组按钮之前,动作按钮与系统三键共用 [CaptionButtonSpacing],中间无额外断层。
+     * 处于无标题栏全屏态时([rawButtons] 为空),仍原样渲染 [leading]。
+     */
+    @Composable
+    fun ButtonsWithLeading(leading: @Composable RowScope.() -> Unit) {
+        dragGap?.invoke()
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(CaptionButtonSpacing),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            leading()
+            rawButtons?.invoke()
+        }
+    }
+}
 
 /**
  * @param topInset 允许该行上沿离窗口顶边的最大间距:宽屏圆角内容岛上沿留有 8dp 外框边,岛内页眉再留 8dp 内边距,
@@ -104,21 +147,99 @@ fun rememberCaptionSlot(topInset: Dp = 28.dp): CaptionSlot {
         atTop = nearTop
         touches = nearTop && bounds.right >= liveWindow.containerSize.width - edgeTolerancePx
     }
+    val dragGap: (@Composable () -> Unit)? = if (touches) {
+        {
+            // 按钮前固定留出一段可拖动空白:操作区按钮紧凑时无需去别处找缝隙拖窗口。
+            // 窄窗口收紧间距,为顶栏标题与返回/操作按钮让出空间。
+            val gapWidth = if (narrowWindow) CaptionDragGapNarrow else CaptionDragGap
+            Spacer(Modifier.width(gapWidth).height(CaptionDragHeight).windowDragArea())
+        }
+    } else {
+        null
+    }
+    val rawButtons: (@Composable () -> Unit)? = if (touches) {
+        { caption.Buttons() }
+    } else {
+        null
+    }
     return CaptionSlot(
         modifier = modifier,
         buttons = if (touches) {
             {
-                // 按钮前固定留出一段可拖动空白:操作区按钮紧凑时无需去别处找缝隙拖窗口。
-                // 窄窗口收紧间距，为顶栏标题与返回/操作按钮让出空间。
-                val gapWidth = if (narrowWindow) CaptionDragGapNarrow else CaptionDragGap
-                Spacer(Modifier.width(gapWidth).height(CaptionDragHeight).windowDragArea())
-                caption.Buttons()
+                dragGap?.invoke()
+                rawButtons?.invoke()
             }
         } else {
             null
         },
         atTop = atTop,
+        dragGap = dragGap,
+        rawButtons = rawButtons,
     )
+}
+
+/**
+ * 紧邻桌面窗口控制按钮(`— ❐ ×`)排布的无边框标题栏动作按钮(如应用全屏、刷新)。
+ * 与桌面圆形窗口按钮保持同一尺寸([CaptionButtonSize])、圆形热区、透明静息态、
+ * 悬停(`8%`)/按下(`12%`)底色与非活动窗口变灰规则。
+ */
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
+@Composable
+fun CaptionActionButton(
+    icon: ImageVector,
+    contentDescription: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    loading: Boolean = false,
+) {
+    val interactionSource = remember { MutableInteractionSource() }
+    val hovered by interactionSource.collectIsHoveredAsState()
+    val pressed by interactionSource.collectIsPressedAsState()
+    val caption = LocalWindowCaption.current
+    val baseColor = MaterialTheme.colorScheme.onSurfaceVariant
+    val contentColor = if (caption == null || caption.isActive) baseColor else baseColor.copy(alpha = 0.45f)
+    val targetBackground = when {
+        loading -> contentColor.copy(alpha = 0f)
+        pressed -> contentColor.copy(alpha = 0.12f)
+        hovered -> contentColor.copy(alpha = 0.08f)
+        else -> contentColor.copy(alpha = 0f)
+    }
+    val background by animateColorAsState(
+        targetValue = targetBackground,
+        animationSpec = MaterialTheme.motionScheme.fastEffectsSpec(),
+        label = "captionActionBg",
+    )
+    val glyphColor by animateColorAsState(
+        targetValue = contentColor,
+        animationSpec = MaterialTheme.motionScheme.fastEffectsSpec(),
+        label = "captionActionGlyph",
+    )
+    Box(
+        contentAlignment = Alignment.Center,
+        modifier = modifier
+            .size(CaptionButtonSize)
+            .clip(CircleShape)
+            .background(background)
+            .semantics { this.contentDescription = contentDescription }
+            .clickable(
+                enabled = !loading,
+                interactionSource = interactionSource,
+                indication = null,
+                role = Role.Button,
+                onClick = onClick,
+            ),
+    ) {
+        if (loading) {
+            LoadingSpinner(size = CaptionActionIconSize, color = glyphColor)
+        } else {
+            Icon(
+                imageVector = icon,
+                contentDescription = null,
+                tint = glyphColor,
+                modifier = Modifier.size(CaptionActionIconSize),
+            )
+        }
+    }
 }
 
 private val NoCaptionSlot = CaptionSlot(Modifier, null)
@@ -127,6 +248,9 @@ private val CaptionEdgeTolerance = 32.dp
 private val CaptionDragGap = 32.dp
 private val CaptionDragGapNarrow = 8.dp
 private val CaptionCompactWindowWidth = 600.dp
+val CaptionButtonSize = 40.dp
+val CaptionButtonSpacing = 2.dp
+private val CaptionActionIconSize = 18.dp
 val CaptionDragHeight = 40.dp
 
 /**
