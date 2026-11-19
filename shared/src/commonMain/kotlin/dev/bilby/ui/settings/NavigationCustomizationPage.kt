@@ -3,6 +3,8 @@ package dev.bilby.ui.settings
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Row
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.ViewSidebar
+import androidx.compose.material.icons.outlined.CollectionsBookmark
 import androidx.compose.material.icons.outlined.DownloadForOffline
 import androidx.compose.material.icons.outlined.Forum
 import androidx.compose.material.icons.outlined.History
@@ -24,6 +26,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.graphics.vector.ImageVector
+import dev.bilby.data.FeedUpStripPosition
 import dev.bilby.data.NavigationPrefs
 import dev.bilby.data.RailUtilityId
 import dev.bilby.data.RootTabId
@@ -108,6 +111,23 @@ fun NavigationCustomizationPage(
                         },
                     )
                 }
+            }
+        }
+
+        SettingsGroup(title = stringResource(Res.string.nav_custom_feed_up_strip_position)) {
+            row { position ->
+                ChoiceRow(
+                    position = position,
+                    icon = Icons.AutoMirrored.Outlined.ViewSidebar,
+                    title = stringResource(Res.string.nav_custom_feed_up_strip_position),
+                    subtitle = stringResource(Res.string.nav_custom_feed_up_strip_position_subtitle),
+                    options = FeedUpStripPosition.entries,
+                    selected = prefs.feedUpStripPosition,
+                    label = { feedUpStripPositionLabel(it) },
+                    onChange = { nextPosition ->
+                        onUpdatePrefs { it.withFeedUpStripPosition(nextPosition) }
+                    },
+                )
             }
         }
 
@@ -227,10 +247,19 @@ private fun RootTabId.icon(): ImageVector = when (this) {
 }
 
 @Composable
+private fun feedUpStripPositionLabel(position: FeedUpStripPosition): String = when (position) {
+    FeedUpStripPosition.Left -> stringResource(Res.string.nav_custom_feed_up_strip_left)
+    FeedUpStripPosition.Top -> stringResource(Res.string.nav_custom_feed_up_strip_top)
+    FeedUpStripPosition.Right -> stringResource(Res.string.nav_custom_feed_up_strip_right)
+}
+
+@Composable
 private fun railUtilityLabel(utility: RailUtilityId): String = when (utility) {
     RailUtilityId.Followings -> stringResource(Res.string.profile_following)
+    RailUtilityId.Pushes -> stringResource(Res.string.feed_up_pushes_entry)
     RailUtilityId.Dynamics -> stringResource(Res.string.nav_custom_utility_dynamics)
     RailUtilityId.Messages -> stringResource(Res.string.message_title)
+    RailUtilityId.FavFolders -> stringResource(Res.string.fav_folders_title)
     RailUtilityId.Offline -> stringResource(Res.string.offline_title)
     RailUtilityId.History -> stringResource(Res.string.history_title)
     RailUtilityId.ToView -> stringResource(Res.string.tab_toview)
@@ -239,8 +268,10 @@ private fun railUtilityLabel(utility: RailUtilityId): String = when (utility) {
 
 private fun RailUtilityId.icon(): ImageVector = when (this) {
     RailUtilityId.Followings -> Icons.Outlined.PeopleAlt
+    RailUtilityId.Pushes -> Icons.Outlined.Mail
     RailUtilityId.Dynamics -> Icons.Outlined.Forum
     RailUtilityId.Messages -> Icons.Outlined.Mail
+    RailUtilityId.FavFolders -> Icons.Outlined.CollectionsBookmark
     RailUtilityId.Offline -> Icons.Outlined.DownloadForOffline
     RailUtilityId.History -> Icons.Outlined.History
     RailUtilityId.ToView -> Icons.Outlined.WatchLater

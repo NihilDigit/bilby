@@ -46,12 +46,21 @@ enum class RootTabId {
 @Serializable
 enum class RailUtilityId {
     Followings,
+    Pushes,
     Dynamics,
     Messages,
+    FavFolders,
     Offline,
     History,
     ToView,
     Settings,
+}
+
+@Serializable
+enum class FeedUpStripPosition {
+    Left,
+    Top,
+    Right,
 }
 
 @Immutable
@@ -61,6 +70,7 @@ data class NavigationPrefs(
     val startupPage: StartupDestination = StartupDestination.Feed,
     val primaryTabs: List<RootTabId> = DefaultPrimaryTabs,
     val railUtilities: List<RailUtilityId> = DefaultRailUtilities,
+    val feedUpStripPosition: FeedUpStripPosition = FeedUpStripPosition.Right,
 ) {
     /**
      * 强校验与修复护栏：
@@ -143,6 +153,9 @@ data class NavigationPrefs(
         return copy(railUtilities = current).sanitize()
     }
 
+    fun withFeedUpStripPosition(position: FeedUpStripPosition): NavigationPrefs =
+        copy(feedUpStripPosition = position).sanitize()
+
     companion object {
         val DefaultPrimaryTabs = listOf(
             RootTabId.Feed,
@@ -152,6 +165,7 @@ data class NavigationPrefs(
 
         val DefaultRailUtilities = listOf(
             RailUtilityId.Followings,
+            RailUtilityId.Pushes,
             RailUtilityId.Dynamics,
             RailUtilityId.Messages,
             RailUtilityId.Settings,
@@ -162,6 +176,7 @@ data class NavigationPrefs(
             startupPage = StartupDestination.Feed,
             primaryTabs = DefaultPrimaryTabs,
             railUtilities = DefaultRailUtilities,
+            feedUpStripPosition = FeedUpStripPosition.Right,
         ).sanitize()
     }
 }

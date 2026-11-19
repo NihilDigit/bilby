@@ -1155,6 +1155,11 @@
     <string name="nav_custom_last_visible_tab_hint">At least one primary navigation item must remain visible</string>
     <string name="nav_custom_group_rail_utilities">Desktop rail shortcuts</string>
     <string name="nav_custom_utility_dynamics">Dynamics</string>
+    <string name="nav_custom_feed_up_strip_position">Desktop feed UP strip position</string>
+    <string name="nav_custom_feed_up_strip_position_subtitle">Placement of the avatar strip on wide screens; Pushes and Dynamics can be toggled in rail shortcuts below</string>
+    <string name="nav_custom_feed_up_strip_left">Left</string>
+    <string name="nav_custom_feed_up_strip_top">Top</string>
+    <string name="nav_custom_feed_up_strip_right">Right</string>
     <string name="nav_custom_settings_required_hint">Required entry, cannot be hidden</string>
     <string name="nav_custom_move_up">Move up</string>
     <string name="nav_custom_move_down">Move down</string>

@@ -80,6 +80,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.material.icons.outlined.AccountCircle
 import androidx.compose.material.icons.outlined.Checklist
+import androidx.compose.material.icons.outlined.CollectionsBookmark
 import androidx.compose.material.icons.outlined.DownloadForOffline
 import androidx.compose.material.icons.outlined.Forum
 import androidx.compose.material.icons.outlined.History
@@ -154,6 +155,7 @@ import dev.bilby.stringResource
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.bilby.data.AppearancePrefs
+import dev.bilby.data.FeedUpStripPosition
 import dev.bilby.data.NavigationPrefs
 import dev.bilby.data.RailUtilityId
 import dev.bilby.data.RootTabId
@@ -2126,6 +2128,7 @@ private fun RootTabs(
                     insets = insets,
                     selected = currentSelected,
                     showAccountHeader = true,
+                    feedUpStripPosition = cleanNavPrefs.feedUpStripPosition,
                     profileVm = profileVm,
                     feedScrollToTop = feedScrollToTop,
                     profileScrollToTop = profileScrollToTop,
@@ -2165,6 +2168,7 @@ private fun RootTabs(
                     insets = insets,
                     selected = currentSelected,
                     showAccountHeader = false,
+                    feedUpStripPosition = cleanNavPrefs.feedUpStripPosition,
                     profileVm = profileVm,
                     feedScrollToTop = feedScrollToTop,
                     profileScrollToTop = profileScrollToTop,
@@ -2226,8 +2230,10 @@ private fun RootTabs(
                     onOpenSelf = onUserClick,
                     onRetryAccount = profileVm::retryAccount,
                     onOpenFollowings = onOpenFollowings,
+                    onOpenPushes = onOpenPushes,
                     onOpenOtherDynamics = onOpenOtherDynamics,
                     onOpenMessages = onOpenMessages,
+                    onOpenFavFolders = onOpenFavFolders,
                     onOpenOffline = onOpenOffline,
                     onOpenHistory = onOpenHistory,
                     onOpenToView = onOpenToView,
@@ -2269,8 +2275,10 @@ private fun RootNavigationRail(
     onOpenSelf: (Long) -> Unit,
     onRetryAccount: () -> Unit,
     onOpenFollowings: () -> Unit,
+    onOpenPushes: () -> Unit,
     onOpenOtherDynamics: () -> Unit,
     onOpenMessages: () -> Unit,
+    onOpenFavFolders: () -> Unit,
     onOpenOffline: () -> Unit,
     onOpenHistory: () -> Unit,
     onOpenToView: () -> Unit,
@@ -2354,8 +2362,10 @@ private fun RootNavigationRail(
                 account = profileState.account,
                 utilities = railUtilities,
                 onOpenFollowings = onOpenFollowings,
+                onOpenPushes = onOpenPushes,
                 onOpenOtherDynamics = onOpenOtherDynamics,
                 onOpenMessages = onOpenMessages,
+                onOpenFavFolders = onOpenFavFolders,
                 onOpenOffline = onOpenOffline,
                 onOpenHistory = onOpenHistory,
                 onOpenToView = onOpenToView,
@@ -2429,16 +2439,20 @@ private fun RootRailUtilitySection(
     account: AccountInfo?,
     utilities: List<RailUtilityId>,
     onOpenFollowings: () -> Unit,
+    onOpenPushes: () -> Unit,
     onOpenOtherDynamics: () -> Unit,
     onOpenMessages: () -> Unit,
+    onOpenFavFolders: () -> Unit,
     onOpenOffline: () -> Unit,
     onOpenHistory: () -> Unit,
     onOpenToView: () -> Unit,
     onSettingsClick: () -> Unit,
 ) {
     val followingLabel = stringResource(Res.string.profile_following)
+    val pushesLabel = stringResource(Res.string.feed_up_pushes_entry)
     val dynamicsLabel = stringResource(Res.string.nav_custom_utility_dynamics)
     val messagesLabel = stringResource(Res.string.message_title)
+    val favFoldersLabel = stringResource(Res.string.fav_folders_title)
     val offlineLabel = stringResource(Res.string.offline_title)
     val historyLabel = stringResource(Res.string.history_title)
     val toViewLabel = stringResource(Res.string.tab_toview)
@@ -2457,6 +2471,20 @@ private fun RootRailUtilitySection(
                         Icon(
                             imageVector = Icons.Outlined.PeopleAlt,
                             contentDescription = followingLabel,
+                            tint = tint,
+                            modifier = Modifier.size(RailUtilityIconSize),
+                        )
+                    },
+                )
+
+                RailUtilityId.Pushes -> RootRailUtilityItem(
+                    label = pushesLabel,
+                    tooltip = pushesLabel,
+                    onClick = onOpenPushes,
+                    icon = {
+                        Icon(
+                            imageVector = Icons.Outlined.Mail,
+                            contentDescription = pushesLabel,
                             tint = tint,
                             modifier = Modifier.size(RailUtilityIconSize),
                         )
@@ -2485,6 +2513,20 @@ private fun RootRailUtilitySection(
                         Icon(
                             imageVector = Icons.Outlined.Mail,
                             contentDescription = messagesLabel,
+                            tint = tint,
+                            modifier = Modifier.size(RailUtilityIconSize),
+                        )
+                    },
+                )
+
+                RailUtilityId.FavFolders -> RootRailUtilityItem(
+                    label = favFoldersLabel,
+                    tooltip = favFoldersLabel,
+                    onClick = onOpenFavFolders,
+                    icon = {
+                        Icon(
+                            imageVector = Icons.Outlined.CollectionsBookmark,
+                            contentDescription = favFoldersLabel,
                             tint = tint,
                             modifier = Modifier.size(RailUtilityIconSize),
                         )
@@ -2620,6 +2662,7 @@ private fun RootTabsContent(
     insets: PaddingValues,
     selected: RootTab,
     showAccountHeader: Boolean,
+    feedUpStripPosition: FeedUpStripPosition,
     profileVm: ProfileViewModel,
     /** 每变一次就回到顶部。计数器而不是布尔:连按两下要滚两次,而布尔第二下没有变化。 */
     feedScrollToTop: Int,
@@ -2670,6 +2713,7 @@ private fun RootTabsContent(
                 RootTab.Feed -> FeedPane(
                     container = container,
                     scrollToTop = feedScrollToTop,
+                    upStripPosition = feedUpStripPosition,
                     onVideoClick = onVideoClick,
                     onUserClick = onUserClick,
                     onLiveClick = onLiveClick,
@@ -2879,6 +2923,7 @@ private fun DraftQueueBar(
 private fun FeedPane(
     container: AppContainer,
     scrollToTop: Int,
+    upStripPosition: FeedUpStripPosition,
     onVideoClick: (String) -> Unit,
     onUserClick: (Long) -> Unit,
     onLiveClick: (Long) -> Unit,
@@ -2909,6 +2954,7 @@ private fun FeedPane(
     FeedScreen(
         state = state,
         scrollToTop = scrollToTop,
+        upStripPosition = upStripPosition,
         onLoadMore = vm::loadMore,
         onRetry = vm::retry,
         onRefresh = vm::refresh,

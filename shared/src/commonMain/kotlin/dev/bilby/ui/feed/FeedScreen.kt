@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -24,6 +25,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
@@ -100,8 +102,8 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
-import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import dev.bilby.data.FeedUpStripPosition
 import dev.bilby.data.LiveUpBrief
 import dev.bilby.data.UpBrief
 import dev.bilby.data.model.FeedEntry
@@ -284,6 +286,8 @@ fun FeedScreen(
     onToViewNoticeShown: () -> Unit = {},
     /** 每变一次就回到顶部。重按底栏上当前这一格时由 MainActivity 递增。 */
     scrollToTop: Int = 0,
+    /** 宽屏下 UP 主头像栏摆放位置(左/顶/右)；窄屏始终在顶部。 */
+    upStripPosition: FeedUpStripPosition = FeedUpStripPosition.Right,
     modifier: Modifier = Modifier,
     contentPadding: PaddingValues = PaddingValues(),
 ) {
@@ -336,6 +340,7 @@ fun FeedScreen(
                 onScrollPositionChanged = onScrollPositionChanged,
                 onLocated = onLocated,
                 scrollToTop = scrollToTop,
+                upStripPosition = upStripPosition,
                 modifier = Modifier,
                 contentPadding = contentPadding,
             )
@@ -365,6 +370,7 @@ private fun FeedList(
     onScrollPositionChanged: (String) -> Unit,
     onLocated: () -> Unit,
     scrollToTop: Int,
+    upStripPosition: FeedUpStripPosition,
     modifier: Modifier,
     contentPadding: PaddingValues,
 ) {
@@ -385,12 +391,14 @@ private fun FeedList(
     val windowSize = rememberBilbyWindowSize()
     val wide = windowSize.isAtLeast(BilbyWindowSize.Expanded)
     val pinnedHeader = LocalWindowCaption.current != null
-    // 那一排头像排在动态流前面,分隔线/条目在网格里的绝对下标要把它加回来。
     // 「最常访问」那一格在没人可显示时整格不画,正在直播的那一格自己也可以撑起它 ——
     // 判据必须和下面渲染时用的是同一个,差一格就是开屏定位落错一条。
-    val hasUpsRow = state.topUps.isNotEmpty() || state.liveUps.isNotEmpty()
-    // 标题行在网格外（桌面固定标题栏）时不占网格下标。
-    val baseOffset = (if (pinnedHeader) 0 else 1) + (if (hasUpsRow) 1 else 0)
+    val hasUpsData = state.topUps.isNotEmpty() || state.liveUps.isNotEmpty()
+    val showTopUpsRow = hasUpsData && (!wide || upStripPosition == FeedUpStripPosition.Top)
+    val showLeftUpsRail = wide && hasUpsData && upStripPosition == FeedUpStripPosition.Left
+    val showRightUpsRail = wide && hasUpsData && upStripPosition == FeedUpStripPosition.Right
+    // 标题行在网格外（桌面固定标题栏）或 UP 栏在左右侧轨时不占网格下标。
+    val baseOffset = (if (pinnedHeader) 0 else 1) + (if (showTopUpsRow) 1 else 0)
 
     val beforeMarker = remember(state.items, markerIndex) {
         if (markerIndex != null) state.items.subList(0, markerIndex) else state.items
@@ -483,31 +491,18 @@ private fun FeedList(
     RegisterPageRefresh(refreshing = state.refreshing, onRefresh = onRefresh)
     val density = LocalDensity.current
     var containerWidth by remember { mutableStateOf(0.dp) }
-    var actionsWidth by remember { mutableStateOf(0.dp) }
-    var upsRowFits by remember { mutableStateOf(false) }
-    val actionsInUpsRow = wide && hasUpsRow && upsRowFits
     val isTouch = LocalPointerSource.current.isTouchLike
     val appFullscreen = LocalAppFullscreen.current
-    val upsTrailingActions: @Composable () -> Unit = {
-        FeedHeaderActions(
-            onOpenOtherDynamics = onOpenOtherDynamics,
-            onOpenPushes = onOpenPushes,
-            includeNavActions = true,
-            includeFullscreen = false,
-            includeRefresh = false,
-            refreshing = state.refreshing,
-            onRefresh = onRefresh,
-            modifier = Modifier.onSizeChanged { actionsWidth = with(density) { it.width.toDp() } },
-        )
-    }
+    // 宽屏下「推送」「关注动态」入口固定归入左侧导航轨底栏可定制项，不再占用订阅页顶部空间。
+    val showHeaderNavActions = !wide
     val showHeaderFullscreen = appFullscreen != null
     val showHeaderRefresh = appFullscreen != null || LocalWindowCaption.current != null || !isTouch
-    val headerActions: (@Composable () -> Unit)? = if (!actionsInUpsRow || showHeaderFullscreen || showHeaderRefresh) {
+    val headerActions: (@Composable () -> Unit)? = if (showHeaderNavActions || showHeaderFullscreen || showHeaderRefresh) {
         {
             FeedHeaderActions(
                 onOpenOtherDynamics = onOpenOtherDynamics,
                 onOpenPushes = onOpenPushes,
-                includeNavActions = !actionsInUpsRow,
+                includeNavActions = showHeaderNavActions,
                 includeFullscreen = showHeaderFullscreen,
                 includeRefresh = showHeaderRefresh,
                 refreshing = state.refreshing,
@@ -525,8 +520,7 @@ private fun FeedList(
         Box(
             modifier = Modifier
                 .then(if (wide) Modifier else Modifier.widthIn(max = Breakpoints.ReadableWidth))
-                .fillMaxSize()
-                .onSizeChanged { containerWidth = with(density) { it.width.toDp() } },
+                .fillMaxSize(),
         ) {
             val resolvedWidth = if (containerWidth > 0.dp) {
                 containerWidth
@@ -544,83 +538,109 @@ private fun FeedList(
                         actions = headerActions,
                     )
                 }
-                RefreshBox(
-                    refreshing = state.refreshing,
-                    onRefresh = onRefresh,
-                    modifier = Modifier.weight(1f).fillMaxWidth(),
-                ) {
-                    LazyVerticalGrid(
-                        columns = GridCells.Fixed(columns),
-                        state = listState,
-                        modifier = Modifier.fillMaxSize(),
-                        contentPadding = contentPadding,
-                    ) {
-                        if (!pinnedHeader) {
-                            item(key = "header", span = FullLine, contentType = "header") {
-                                FeedHeader(
-                                    actions = headerActions,
-                                )
-                            }
-                        }
-                        if (hasUpsRow) {
-                            item(key = "frequent-ups", span = FullLine, contentType = "frequent-ups") {
-                                FrequentUpsRow(
-                                    ups = state.topUps,
-                                    liveUps = state.liveUps,
-                                    liveCount = state.liveCount,
-                                    special = state.topUpsAreSpecial,
-                                    onUpClick = onUpClick,
-                                    onOpenLiveNow = { liveSheetOpen = true },
-                                    onOpenFollowings = onOpenFollowings,
-                                    trailing = upsTrailingActions.takeIf { wide },
-                                    trailingWidth = (if (actionsWidth > 0.dp) actionsWidth else DefaultUpsActionsWidth).takeIf { wide },
-                                    onFitChange = { upsRowFits = it },
-                                )
-                            }
-                        }
-                        if (state.items.isEmpty()) {
-                            item(key = "empty", span = FullLine, contentType = "empty") {
-                                EmptyState(stringResource(Res.string.feed_empty))
-                            }
-                        }
-                        feedDisplayNodes(
-                            nodes = beforeNodes,
-                            expandedBurstIds = expandedBurstIds,
-                            multiColumn = multiColumn,
-                            wide = wide,
-                            onExpandBurst = { expandedBurstIds = expandedBurstIds + it },
-                            onCollapseBurst = collapseBurst,
-                            onItemClick = onItemClick,
+                Row(modifier = Modifier.weight(1f).fillMaxWidth()) {
+                    if (showLeftUpsRail) {
+                        FrequentUpsRail(
+                            ups = state.topUps,
+                            liveUps = state.liveUps,
+                            liveCount = state.liveCount,
+                            special = state.topUpsAreSpecial,
                             onUpClick = onUpClick,
-                            onExcludeUp = onExcludeUp,
-                            onAddToView = onAddToView,
+                            onOpenLiveNow = { liveSheetOpen = true },
+                            onOpenFollowings = onOpenFollowings,
+                            contentPadding = contentPadding,
                         )
-                        if (markerIndex != null) {
-                            item(key = "read-marker", span = FullLine, contentType = "read-marker") {
-                                ReadMarkerDivider(Modifier.animateItem())
-                            }
-                        }
-                        feedDisplayNodes(
-                            nodes = fromNodes,
-                            expandedBurstIds = expandedBurstIds,
-                            multiColumn = multiColumn,
-                            wide = wide,
-                            onExpandBurst = { expandedBurstIds = expandedBurstIds + it },
-                            onCollapseBurst = collapseBurst,
-                            onItemClick = onItemClick,
-                            onUpClick = onUpClick,
-                            onExcludeUp = onExcludeUp,
-                            onAddToView = onAddToView,
-                        )
-                        item(key = "footer", span = FullLine, contentType = "footer") {
-                            ListFooter(
-                                appending = state.appending,
-                                hasMore = state.hasMore,
-                                hasItems = state.items.isNotEmpty(),
-                            )
-                        }
                     }
-                    ListScrollbar(listState, Modifier.align(Alignment.CenterEnd))
+                    RefreshBox(
+                        refreshing = state.refreshing,
+                        onRefresh = onRefresh,
+                        modifier = Modifier
+                            .weight(1f)
+                            .fillMaxHeight()
+                            .onSizeChanged { containerWidth = with(density) { it.width.toDp() } },
+                    ) {
+                        LazyVerticalGrid(
+                            columns = GridCells.Fixed(columns),
+                            state = listState,
+                            modifier = Modifier.fillMaxSize(),
+                            contentPadding = contentPadding,
+                        ) {
+                            if (!pinnedHeader) {
+                                item(key = "header", span = FullLine, contentType = "header") {
+                                    FeedHeader(
+                                        actions = headerActions,
+                                    )
+                                }
+                            }
+                            if (showTopUpsRow) {
+                                item(key = "frequent-ups", span = FullLine, contentType = "frequent-ups") {
+                                    FrequentUpsRow(
+                                        ups = state.topUps,
+                                        liveUps = state.liveUps,
+                                        liveCount = state.liveCount,
+                                        special = state.topUpsAreSpecial,
+                                        onUpClick = onUpClick,
+                                        onOpenLiveNow = { liveSheetOpen = true },
+                                        onOpenFollowings = onOpenFollowings,
+                                    )
+                                }
+                            }
+                            if (state.items.isEmpty()) {
+                                item(key = "empty", span = FullLine, contentType = "empty") {
+                                    EmptyState(stringResource(Res.string.feed_empty))
+                                }
+                            }
+                            feedDisplayNodes(
+                                nodes = beforeNodes,
+                                expandedBurstIds = expandedBurstIds,
+                                multiColumn = multiColumn,
+                                wide = wide,
+                                onExpandBurst = { expandedBurstIds = expandedBurstIds + it },
+                                onCollapseBurst = collapseBurst,
+                                onItemClick = onItemClick,
+                                onUpClick = onUpClick,
+                                onExcludeUp = onExcludeUp,
+                                onAddToView = onAddToView,
+                            )
+                            if (markerIndex != null) {
+                                item(key = "read-marker", span = FullLine, contentType = "read-marker") {
+                                    ReadMarkerDivider(Modifier.animateItem())
+                                }
+                            }
+                            feedDisplayNodes(
+                                nodes = fromNodes,
+                                expandedBurstIds = expandedBurstIds,
+                                multiColumn = multiColumn,
+                                wide = wide,
+                                onExpandBurst = { expandedBurstIds = expandedBurstIds + it },
+                                onCollapseBurst = collapseBurst,
+                                onItemClick = onItemClick,
+                                onUpClick = onUpClick,
+                                onExcludeUp = onExcludeUp,
+                                onAddToView = onAddToView,
+                            )
+                            item(key = "footer", span = FullLine, contentType = "footer") {
+                                ListFooter(
+                                    appending = state.appending,
+                                    hasMore = state.hasMore,
+                                    hasItems = state.items.isNotEmpty(),
+                                )
+                            }
+                        }
+                        ListScrollbar(listState, Modifier.align(Alignment.CenterEnd))
+                    }
+                    if (showRightUpsRail) {
+                        FrequentUpsRail(
+                            ups = state.topUps,
+                            liveUps = state.liveUps,
+                            liveCount = state.liveCount,
+                            special = state.topUpsAreSpecial,
+                            onUpClick = onUpClick,
+                            onOpenLiveNow = { liveSheetOpen = true },
+                            onOpenFollowings = onOpenFollowings,
+                            contentPadding = contentPadding,
+                        )
+                    }
                 }
             }
         }
@@ -1253,55 +1273,14 @@ private fun FrequentUpsRow(
     onUpClick: (Long) -> Unit,
     onOpenLiveNow: () -> Unit,
     onOpenFollowings: () -> Unit,
-    /** 宽屏整排放得下时画在右端的入口(刷新、推送、关注动态)。null 时不画。 */
-    trailing: (@Composable () -> Unit)?,
-    /** [trailing] 的宽度;null 表示不考虑并成一行(窄屏),只用钉住的排法。 */
-    trailingWidth: Dp?,
-    /** 这一排是否放得下并成一行。标题行据此决定入口画在哪。 */
-    onFitChange: (Boolean) -> Unit,
 ) {
-    // **不给这一排小标题,也不给分割线,和列表之间只隔一段留白。**
-    //
-    // 小标题要跟着名单来源在「特别关注」和「最常访问」之间切换 —— 一行会变的字,读者每次都得
-    // 先认一遍;一排头像本来就说得清自己是谁。分割线曾经留着,依据是 divider.md 的"Use
-    // dividers to group things",但它横在页面最上面一屏,是整页最硬的一道线,而导航区和内容区
-    // 的形状本来就不同(一排圆、一列方封面),靠留白分得开。
-    //
-    // **不给它 surfaceContainer 底色。** 试过,不好看,而且是误用:roles.md:172 把 surface
-    // 分给 background area、surface container 分给 **navigation area**(底栏、rail、抽屉
-    // 那种),拿它刷正文里的一块是把导航的颜色用进了 body。
-    // **头像横滚,「全部关注」钉在右边不参与滚动。**
-    //
-    // 原来那版把整排(含入口)塞进一个 LazyRow,入口于是躲在滚动尽头,想进完整名单得先横拖到头。
-    // 后来改成"按宽度算出能站几个、不滚",入口是露出来了,代价是每种屏宽都剩一段放不下一格的
-    // 余量,而且看得见的人变少了 —— 那段余量不是省下来的空间,是浪费掉的。
-    //
-    // 钉住入口之后两头都成立:名单要多长有多长,入口的位置不随屏宽和关注人数变。
-    //
-    // **宽屏整排放得下时另一种排法**:「关注列表」跟在最后一个人后面,标题行的刷新与两个入口
-    // 挪到这一排右端([trailing])。钉在右端是为横滚准备的;不滚的时候它和头像之间隔着半屏空白,
-    // 读不出是一组。放不下就回到钉住的排法,和窄屏一样。
-    val density = LocalDensity.current
-    var rowWidth by remember { mutableStateOf(0.dp) }
     val shownUps = remember(ups) { ups.take(FrequentUpLimit) }
     val startPadding = Spacing.Comfortable -
         if (liveUps.isNotEmpty()) liveNowSlotFaceInset(liveUps.size) else UpSlotFaceInset
-    val slotCount = shownUps.size + 1
-    val contentWidth = startPadding +
-        (if (liveUps.isNotEmpty()) liveNowSlotOuterWidth(liveUps.size) + SlotGap else 0.dp) +
-        UpSlotOuterWidth * slotCount + SlotGap * (slotCount - 1)
-    val fits = trailingWidth != null &&
-        rowWidth > 0.dp &&
-        contentWidth + Spacing.Loose + trailingWidth + Spacing.Comfortable <= rowWidth
-    LaunchedEffect(fits) { onFitChange(fits) }
-    val followingsSlot: @Composable (Modifier) -> Unit = { slotModifier ->
-        FollowingsSlot(onOpenFollowings, slotModifier)
-    }
     val listState = rememberLazyListState()
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .onSizeChanged { rowWidth = with(density) { it.width.toDp() } }
             .padding(bottom = Spacing.Cozy),
         verticalAlignment = Alignment.Top,
     ) {
@@ -1313,7 +1292,7 @@ private fun FrequentUpsRow(
             modifier = Modifier
                 .weight(1f)
                 .verticalWheelScrollsRow(listState)
-                .then(if (fits) Modifier else Modifier.fadingRightEdge()),
+                .fadingRightEdge(),
             contentPadding = PaddingValues(
                 // 排在最前的那一格决定起点:直播那一格更宽、头像叠着偏左,让出的量不一样。
                 start = startPadding,
@@ -1329,43 +1308,99 @@ private fun FrequentUpsRow(
                 }
             }
             items(shownUps, key = { it.mid }) { up ->
-                UpSlot(
-                    label = up.name,
-                    emphasized = special,
+                UpAvatarSlot(
+                    up = up,
+                    special = special,
                     onClick = { onUpClick(up.mid) },
-                ) {
-                    if (special) {
-                        Box(
-                            contentAlignment = Alignment.Center,
-                            modifier = Modifier
-                                .size(Dimens.AvatarStack)
-                                .clip(CircleShape)
-                                .border(SpecialUpRingWidth, MaterialTheme.colorScheme.secondaryContainer, CircleShape)
-                                .padding(SpecialUpRingWidth),
-                        ) {
-                            Avatar(
-                                url = up.faceUrl,
-                                size = Dimens.AvatarStack - SpecialUpRingWidth * 2,
-                            )
-                        }
-                    } else {
-                        Avatar(url = up.faceUrl, size = Dimens.AvatarStack)
-                    }
-                }
+                )
             }
-            if (fits) item(key = "followings") { followingsSlot(Modifier) }
         }
-        if (fits && trailing != null) {
-            // 入口对着头像的中线,胶囊右沿落在 16dp 页边线上。
+        // 右沿落在 16dp 页边线上,与标题行的入口、下面视频行的溢出按钮同一条竖线。
+        FollowingsSlot(
+            onClick = onOpenFollowings,
+            modifier = Modifier.padding(end = Spacing.Comfortable - UpSlotFaceInset),
+        )
+    }
+}
+
+/**
+ * 宽屏下位于视频网格左侧或右侧的纵向 UP 主头像轨(`84.dp`，与左侧 `80.dp` 导航轨视觉协调)。
+ * 顶部如有直播则显示「N 直播」，中间为关注 UP 头像，底部为「关注列表」。
+ */
+@Composable
+private fun FrequentUpsRail(
+    ups: List<UpBrief>,
+    liveUps: List<LiveUpBrief>,
+    liveCount: Int,
+    special: Boolean,
+    onUpClick: (Long) -> Unit,
+    onOpenLiveNow: () -> Unit,
+    onOpenFollowings: () -> Unit,
+    contentPadding: PaddingValues,
+) {
+    val shownUps = remember(ups) { ups.take(FrequentUpLimit) }
+    val listState = rememberLazyListState()
+    LazyColumn(
+        state = listState,
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(SlotGap),
+        contentPadding = PaddingValues(
+            top = contentPadding.calculateTopPadding() + Spacing.Tight,
+            bottom = contentPadding.calculateBottomPadding() + Spacing.Comfortable,
+        ),
+        modifier = Modifier
+            .width(UpsRailWidth)
+            .fillMaxHeight(),
+    ) {
+        if (liveUps.isNotEmpty()) {
+            item(key = "live-now") {
+                LiveNowSlot(
+                    liveUps = liveUps.take(1),
+                    count = liveCount.coerceAtLeast(liveUps.size),
+                    onClick = onOpenLiveNow,
+                )
+            }
+        }
+        items(shownUps, key = { it.mid }) { up ->
+            UpAvatarSlot(
+                up = up,
+                special = special,
+                onClick = { onUpClick(up.mid) },
+            )
+        }
+        item(key = "followings") {
+            FollowingsSlot(onClick = onOpenFollowings)
+        }
+    }
+}
+
+@Composable
+private fun UpAvatarSlot(
+    up: UpBrief,
+    special: Boolean,
+    onClick: () -> Unit,
+) {
+    UpSlot(
+        label = up.name,
+        emphasized = special,
+        onClick = onClick,
+    ) {
+        if (special) {
             Box(
-                modifier = Modifier.padding(
-                    end = Spacing.Comfortable,
-                    top = Spacing.Hair + (Dimens.AvatarStack - Dimens.MinTouchTarget) / 2,
-                ),
-            ) { trailing() }
+                contentAlignment = Alignment.Center,
+                modifier = Modifier
+                    .size(Dimens.AvatarStack)
+                    .clip(CircleShape)
+                    .border(SpecialUpRingWidth, MaterialTheme.colorScheme.secondaryContainer, CircleShape)
+                    .padding(SpecialUpRingWidth),
+            ) {
+                Avatar(
+                    url = up.faceUrl,
+                    size = Dimens.AvatarStack - SpecialUpRingWidth * 2,
+                )
+            }
         } else {
-            // 右沿落在 16dp 页边线上,与标题行的入口、下面视频行的溢出按钮同一条竖线。
-            followingsSlot(Modifier.padding(end = Spacing.Comfortable - UpSlotFaceInset))
+            Avatar(url = up.faceUrl, size = Dimens.AvatarStack)
         }
     }
 }
@@ -1921,8 +1956,8 @@ private val SpecialUpRingWidth = 2.dp
 /** 比头像宽一点,名字多站得下一两个字。 */
 private val AvatarSlotWidth = 60.dp
 
-/** 一格连内边距的总宽,算这一排放不放得下用。 */
-private val UpSlotOuterWidth get() = AvatarSlotWidth + SlotInset * 2
+/** 宽屏下纵向 UP 主头像轨宽度，与左侧 80dp 导航轨视觉协调。 */
+private val UpsRailWidth = 84.dp
 
 /** 每格自己的左右内边距。算箭头对齐时要用到,见「关注列表」那一格的注释。 */
 private val SlotInset = 2.dp
@@ -1949,4 +1984,3 @@ private val DeckFanMidShift = 2.dp
 private val DeckFanMidYShift = 1.dp
 private val DeckFanBackShift = 4.dp
 private const val DeckFanAngle = 1.2f
-private val DefaultUpsActionsWidth = 210.dp

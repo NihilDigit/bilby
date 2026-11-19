@@ -18,12 +18,14 @@ class NavigationPrefsTest {
         assertEquals(
             listOf(
                 RailUtilityId.Followings,
+                RailUtilityId.Pushes,
                 RailUtilityId.Dynamics,
                 RailUtilityId.Messages,
                 RailUtilityId.Settings,
             ),
             prefs.railUtilities,
         )
+        assertEquals(FeedUpStripPosition.Right, prefs.feedUpStripPosition)
     }
 
     @Test
@@ -32,15 +34,22 @@ class NavigationPrefsTest {
             startupPage = StartupDestination.ToView,
             primaryTabs = listOf(RootTabId.Library, RootTabId.Feed),
             railUtilities = listOf(
+                RailUtilityId.Pushes,
+                RailUtilityId.FavFolders,
                 RailUtilityId.History,
                 RailUtilityId.Offline,
                 RailUtilityId.Settings,
                 RailUtilityId.ToView,
             ),
+            feedUpStripPosition = FeedUpStripPosition.Left,
         )
         val encoded = encodeNavigationPrefs(custom)
         val decoded = decodeNavigationPrefs(encoded)
         assertEquals(custom.sanitize(), decoded)
+        assertEquals(FeedUpStripPosition.Left, decoded.feedUpStripPosition)
+
+        val topStrip = custom.withFeedUpStripPosition(FeedUpStripPosition.Top)
+        assertEquals(topStrip, decodeNavigationPrefs(encodeNavigationPrefs(topStrip)))
     }
 
     @Test
@@ -60,6 +69,7 @@ class NavigationPrefsTest {
         assertEquals(StartupDestination.History, decoded.startupPage)
         assertEquals(listOf(RootTabId.Search, RootTabId.Feed), decoded.primaryTabs)
         assertEquals(listOf(RailUtilityId.Messages, RailUtilityId.Settings), decoded.railUtilities)
+        assertEquals(FeedUpStripPosition.Right, decoded.feedUpStripPosition)
 
         assertEquals(NavigationPrefs.Default, decodeNavigationPrefs(null))
         assertEquals(NavigationPrefs.Default, decodeNavigationPrefs(""))
@@ -147,11 +157,20 @@ class NavigationPrefsTest {
         assertEquals(
             listOf(
                 RailUtilityId.Followings,
+                RailUtilityId.Pushes,
                 RailUtilityId.Dynamics,
                 RailUtilityId.Settings,
                 RailUtilityId.Messages,
             ),
             prefs.railUtilities,
         )
+
+        // New utilities (FavFolders / Pushes) and UP strip position can be toggled/updated.
+        prefs = prefs.setRailUtilityVisible(RailUtilityId.FavFolders, true)
+        assertTrue(RailUtilityId.FavFolders in prefs.railUtilities)
+        prefs = prefs.setRailUtilityVisible(RailUtilityId.Pushes, false)
+        assertTrue(RailUtilityId.Pushes !in prefs.railUtilities)
+        prefs = prefs.withFeedUpStripPosition(FeedUpStripPosition.Left)
+        assertEquals(FeedUpStripPosition.Left, prefs.feedUpStripPosition)
     }
 }

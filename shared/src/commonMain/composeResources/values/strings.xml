@@ -1218,6 +1218,11 @@
     <string name="nav_custom_last_visible_tab_hint">至少保留一项主导航入口</string>
     <string name="nav_custom_group_rail_utilities">桌面端侧栏快捷入口</string>
     <string name="nav_custom_utility_dynamics">动态</string>
+    <string name="nav_custom_feed_up_strip_position">桌面端订阅 UP 主栏位置</string>
+    <string name="nav_custom_feed_up_strip_position_subtitle">宽屏下订阅页头像栏的摆放方向，推送与动态入口可于下方侧栏快捷入口中开关</string>
+    <string name="nav_custom_feed_up_strip_left">左侧</string>
+    <string name="nav_custom_feed_up_strip_top">顶部</string>
+    <string name="nav_custom_feed_up_strip_right">右侧</string>
     <string name="nav_custom_settings_required_hint">核心入口，不可隐藏</string>
     <string name="nav_custom_move_up">上移</string>
     <string name="nav_custom_move_down">下移</string>
