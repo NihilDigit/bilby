@@ -19,7 +19,6 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Bedtime
-import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.FastForward
 import androidx.compose.material.icons.filled.FastRewind
 import androidx.compose.material.icons.filled.GraphicEq
@@ -45,7 +44,6 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -88,9 +86,8 @@ import dev.bilby.ui.player.DanmakuFontSizeSp
 import dev.bilby.ui.player.DanmakuVoteOverlay
 import dev.bilby.ui.player.rememberDanmakuVoteUiState
 import dev.bilby.ui.player.rememberLargePlayer
-import dev.bilby.ui.BilbyWindowSize
-import dev.bilby.ui.isAtLeast
 import dev.bilby.ui.rememberBilbyWindowSize
+import dev.bilby.ui.useTwoPaneMediaLayout
 import dev.bilby.ui.player.PlayerDanmakuLayer
 import dev.bilby.ui.player.PlayerProgressState
 import dev.bilby.ui.components.SeekBar
@@ -163,6 +160,8 @@ fun BilbyPlayer(
     onAudioChange: (Int) -> Unit = {},
     isFullscreen: Boolean,
     onFullscreenChange: (Boolean) -> Unit,
+    /** 平板/宽屏双栏左列等大尺寸内嵌画面：复用全屏形态的控件排布，全屏专属壳层仍由 [isFullscreen] 控制。 */
+    spaciousEmbedded: Boolean = false,
     /** 会被自动跳过的片段。只染在进度条上,不参与交互,见 [SeekBar]。 */
     seekBarSegments: List<SeekBarSegment> = emptyList(),
     /** 这条(cid)有哪些字幕轨,含 AI 生成的。为空时控制条不出现字幕按钮。 */
@@ -245,11 +244,9 @@ fun BilbyPlayer(
     /** 播放器面板与中央簇自定义配置。 */
     layoutPrefs: PlayerLayoutPrefs = LocalPlayerLayoutPrefs.current,
 ) {
-    /** 两栏布局(含紧凑高度横屏):内嵌画面占整窗高度,控制条按全屏的尺寸排。 */
-    val windowSize = rememberBilbyWindowSize()
-    val isHeightCompact = LocalWindowInfo.current.containerSize.height < with(LocalDensity.current) { 480.dp.roundToPx() }
-    val twoPane = windowSize.isAtLeast(BilbyWindowSize.Expanded) ||
-        (windowSize == BilbyWindowSize.Medium && isHeightCompact)
+    /** 两栏布局(含紧凑高度横屏)或大画面内嵌:控制条与中央簇按全屏形态排布，全屏专属壳层仍按 [isFullscreen] 门控。 */
+    val twoPane = rememberBilbyWindowSize().useTwoPaneMediaLayout
+    val largePlayer = rememberLargePlayer(isFullscreen) || twoPane || spaciousEmbedded
     /** 播放设置面板开着没有。见 [PlayerSettingsContent]。 */
     var settingsOpen by remember { mutableStateOf(false) }
     // 开的是哪一段。关面板时不清:退场动画里内容要保持原样,下次打开会重新赋值。
@@ -262,6 +259,7 @@ fun BilbyPlayer(
         placeholderCoverUrl = placeholderCoverUrl,
         isFullscreen = isFullscreen,
         onFullscreenChange = onFullscreenChange,
+        spaciousEmbedded = spaciousEmbedded || twoPane,
         locked = locked,
         onLockedChange = onLockedChange,
         title = title,
@@ -375,7 +373,7 @@ fun BilbyPlayer(
         },
         embeddedTopActions = embeddedTopActions,
         pip = pip,
-        wheelAdjustsVolume = isFullscreen || twoPane,
+        wheelAdjustsVolume = isFullscreen || twoPane || spaciousEmbedded,
         onToggleDanmaku = danmakuEditor?.let { editor -> { editor.setEnabled(!danmakuPrefs.enabled) } },
         onRequestDanmakuInput = when {
             controlBarDanmaku != null -> ({ danmakuFocusNonce += 1 })
@@ -383,7 +381,6 @@ fun BilbyPlayer(
             else -> null
         },
         overlay = {
-            val largePlayer = rememberLargePlayer(isFullscreen)
             // 弹幕层:字号由这里按形态给,层自己不认识"全屏"。
             if (!pip || danmakuPrefs.inPip) {
                 PlayerDanmakuLayer(
@@ -471,7 +468,7 @@ fun BilbyPlayer(
                 sleepTimer = sleepTimer,
                 hasSleepTimer = onSleepTimer != null,
                 isFullscreen = isFullscreen,
-                largePlayer = isFullscreen || twoPane,
+                largePlayer = largePlayer,
                 danmakuField = controlBarDanmaku,
                 danmakuFocusNonce = danmakuFocusNonce,
                 // 写弹幕时控制条不自动收起,同设置面板开着时。
@@ -536,7 +533,7 @@ fun BilbyPlayer(
                     onSleepTimerAdjust = onSleepTimerAdjust,
                     onDismiss = close,
                     only = settingsOnly,
-                    fullHeightHost = isFullscreen || twoPane,
+                    fullHeightHost = largePlayer,
                 )
             }
             PlayerSettingsHost(isFullscreen, settingsOpen, settingsOnly, onDismiss = close, content = settings)
@@ -831,15 +828,25 @@ private fun PlayerControlBar(
                                         )
                                     }
                                     PlayerControlId.DanmakuInput -> if (danmakuField != null) {
-                                        val label = stringResource(Res.string.danmaku_send)
-                                        PlayerTooltip(label, shortcut = "Enter") {
-                                            PlayerIconButton(
-                                                onClick = { composing = true },
-                                                icon = Icons.Filled.Edit,
-                                                contentDescription = label,
-                                                showBackground = showBg,
-                                            )
-                                        }
+                                        ControlBarDanmakuField(
+                                            draft = danmakuField.draft,
+                                            onDraftChange = danmakuField.onDraftChange,
+                                            maxLength = danmakuField.maxLength,
+                                            sending = danmakuField.sending,
+                                            error = danmakuField.error,
+                                            onSend = danmakuField.onSend,
+                                            onFocusChange = { focused ->
+                                                composing = focused
+                                                onDanmakuFieldFocusChange(focused)
+                                                danmakuField.onComposingChange(focused)
+                                            },
+                                            autoFocus = false,
+                                            focusRequestNonce = danmakuFocusNonce,
+                                            modifier = Modifier
+                                                .weight(1f)
+                                                .widthIn(min = 84.dp)
+                                                .padding(horizontal = Spacing.Hair),
+                                        )
                                     }
                                     PlayerControlId.Volume -> PlayerVolumeControl(showBackground = showBg)
                                     PlayerControlId.DanmakuToggle -> if (isFullscreen) {
@@ -886,14 +893,10 @@ private fun PlayerControlBar(
                 verticalArrangement = Arrangement.spacedBy(-ControlRowOverlap),
             ) {
                 seekBar(Modifier.fillMaxWidth())
-                val showField = danmakuField != null && (roomy || composing)
                 val hasBottomSpacer = activeLayout.bottomBar.any { it == PlayerPanelItem.Spacer }
-                val danmakuIdx = activeLayout.bottomBar.indexOfFirst {
-                    it is PlayerPanelItem.Control && it.id == PlayerControlId.DanmakuInput
-                }
-                val spacerIdx = activeLayout.bottomBar.indexOfFirst { it == PlayerPanelItem.Spacer }
-                val danmakuAbsorbsSpacer = showField && danmakuIdx >= 0
-                val danmakuAfterSpacer = danmakuIdx >= 0 && spacerIdx >= 0 && danmakuIdx > spacerIdx
+                val hasDanmakuPill = danmakuField != null && activeLayout.hasInBottomBar(PlayerControlId.DanmakuInput)
+                // 弹幕输入框本身以 weight(1f) 弹性胶囊占位，自带弹性空白能力，避免与相邻 Spacer 重复瓜分宽度。
+                val danmakuAbsorbsSpacer = hasDanmakuPill
                 Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
                     for (item in activeLayout.bottomBar) {
                         when (item) {
@@ -983,49 +986,27 @@ private fun PlayerControlBar(
                                         PlayerVolumeControl(showBackground = showBg)
                                     }
                                     PlayerControlId.DanmakuInput -> if (danmakuField != null) {
-                                        if (showField) {
-                                            // 用 weight(1f) 占位确保所有固定宽度图标按钮优先完整测量，绝不挤压右端全屏键；
-                                            // 输入框在未聚焦时按最大 260.dp 贴齐对应一侧，窄宽时平滑收缩。
-                                            Box(
-                                                contentAlignment = if (danmakuAfterSpacer) Alignment.CenterEnd else Alignment.CenterStart,
-                                                modifier = Modifier.weight(1f),
-                                            ) {
-                                                ControlBarDanmakuField(
-                                                    draft = danmakuField.draft,
-                                                    onDraftChange = danmakuField.onDraftChange,
-                                                    maxLength = danmakuField.maxLength,
-                                                    sending = danmakuField.sending,
-                                                    error = danmakuField.error,
-                                                    onSend = danmakuField.onSend,
-                                                    onFocusChange = { focused ->
-                                                        composing = focused
-                                                        onDanmakuFieldFocusChange(focused)
-                                                        danmakuField.onComposingChange(focused)
-                                                    },
-                                                    autoFocus = !roomy,
-                                                    focusRequestNonce = danmakuFocusNonce,
-                                                    modifier = Modifier
-                                                        .then(
-                                                            if (composing) {
-                                                                Modifier.fillMaxWidth()
-                                                            } else {
-                                                                Modifier.widthIn(min = 96.dp, max = 260.dp).fillMaxWidth()
-                                                            },
-                                                        )
-                                                        .padding(horizontal = Spacing.Tight),
-                                                )
-                                            }
-                                        } else {
-                                            val label = stringResource(Res.string.danmaku_send)
-                                            PlayerTooltip(label, shortcut = "Enter") {
-                                                PlayerIconButton(
-                                                    onClick = { composing = true },
-                                                    icon = Icons.Filled.Edit,
-                                                    contentDescription = label,
-                                                    showBackground = showBg,
-                                                )
-                                            }
-                                        }
+                                        // 以 weight(1f) 弹性胶囊直接充当弹性空白：固定宽度图标按钮优先完整测量，绝不挤压右端全屏键，
+                                        // 剩余宽度全部由弹幕输入框胶囊优雅承接并在窄宽下平滑收缩。
+                                        ControlBarDanmakuField(
+                                            draft = danmakuField.draft,
+                                            onDraftChange = danmakuField.onDraftChange,
+                                            maxLength = danmakuField.maxLength,
+                                            sending = danmakuField.sending,
+                                            error = danmakuField.error,
+                                            onSend = danmakuField.onSend,
+                                            onFocusChange = { focused ->
+                                                composing = focused
+                                                onDanmakuFieldFocusChange(focused)
+                                                danmakuField.onComposingChange(focused)
+                                            },
+                                            autoFocus = false,
+                                            focusRequestNonce = danmakuFocusNonce,
+                                            modifier = Modifier
+                                                .weight(1f)
+                                                .widthIn(min = 84.dp)
+                                                .padding(horizontal = Spacing.Tight),
+                                        )
                                     }
                                     PlayerControlId.Speed -> if (wide && !composing) {
                                         val speedDescription = stringResource(Res.string.player_speed)
@@ -1099,7 +1080,7 @@ private fun PlayerControlBar(
                                             }
                                         }
                                     }
-                                    PlayerControlId.DanmakuToggle -> DanmakuButton(danmakuEnabled, onDanmakuEnabledChange, isFullscreen, showBackground = showBg)
+                                    PlayerControlId.DanmakuToggle -> DanmakuButton(danmakuEnabled, onDanmakuEnabledChange, largePlayer, showBackground = showBg)
                                     PlayerControlId.Settings -> PlayerSettingsButton(showBackground = showBg) { onOpenSettings(null) }
                                     PlayerControlId.Lock -> if (isFullscreen) {
                                         val lockDesc = stringResource(if (locked) Res.string.player_unlock else Res.string.player_lock)

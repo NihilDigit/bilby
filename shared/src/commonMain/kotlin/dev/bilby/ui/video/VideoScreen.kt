@@ -988,6 +988,7 @@ fun VideoScreen(
                     speedController = speedController,
                     showSpeedOverlay = expandedLayout || immersive,
                     isFullscreen = fullscreen,
+                    spaciousEmbedded = expandedLayout,
                     onFullscreenChange = { fullscreen = it },
                     // 非全屏时画面一直顶到屏幕上边缘,状态栏压在它身上。
                     fullBleed = true,
@@ -1104,7 +1105,7 @@ fun VideoScreen(
                 // 一起,加载键压着提示文字,读起来既像在等又像失败了。
                 shownError == null && state.error == null -> PlayerTheme {
                     Box(modifier = Modifier.align(Alignment.Center)) {
-                        CenterPlayButton(isPlaying = true, loading = true, large = fullscreen, onClick = {})
+                        CenterPlayButton(isPlaying = true, loading = true, large = fullscreen || expandedLayout, onClick = {})
                     }
                 }
             }

@@ -138,6 +138,8 @@ import dev.bilby.ui.components.LocalPointerSource
 import dev.bilby.player.PlayerListener
 import dev.bilby.player.PlayerPhase
 import dev.bilby.ui.LocalPlaybackHost
+import dev.bilby.ui.rememberBilbyWindowSize
+import dev.bilby.ui.useTwoPaneMediaLayout
 import dev.bilby.resources.*
 import dev.bilby.stringResource
 import dev.bilby.ui.barsAndCutout
@@ -350,6 +352,8 @@ fun PlayerShell(
     placeholderCoverUrl: String,
     isFullscreen: Boolean,
     onFullscreenChange: (Boolean) -> Unit,
+    /** 平板/宽屏双栏左列等大尺寸内嵌画面：复用全屏形态的控件排布，全屏专属壳层仍由 [isFullscreen] 控制。 */
+    spaciousEmbedded: Boolean = false,
     locked: Boolean,
     onLockedChange: (Boolean) -> Unit,
     /** 只在全屏时显示。竖屏下标题就在播放器正下方,再印一遍是多余的。 */
@@ -1232,7 +1236,8 @@ fun PlayerShell(
 
         // 手势反馈按形态分三处(见 [PlayerHud] 的说明):横划进退在正中、音量与亮度用极窄竖条贴侧边、
         // 双击在落点那一侧;倍速提示归贴边或画面下方的选档覆盖层显示。
-        val largePlayer = rememberLargePlayer(isFullscreen)
+        val twoPane = rememberBilbyWindowSize().useTwoPaneMediaLayout
+        val largePlayer = rememberLargePlayer(isFullscreen) || twoPane || spaciousEmbedded
         val currentGesture = gesture
         SeekHudLayer(
             gesture = currentGesture,
@@ -1653,7 +1658,7 @@ fun PlayerShell(
                 config = centerConfig,
                 isPlaying = playWhenReady,
                 loading = loadingVisible,
-                large = isFullscreen && !pip,
+                large = largePlayer && !pip,
                 showSideButtons = showCenterCluster,
                 canPrevious = scope.canPrevious,
                 canNext = scope.canNext,
