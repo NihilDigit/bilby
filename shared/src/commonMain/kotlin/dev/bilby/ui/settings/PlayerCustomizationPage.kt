@@ -14,8 +14,10 @@ import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -36,6 +38,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Bedtime
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Edit
@@ -55,7 +58,6 @@ import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.material.icons.filled.SpaceBar
 import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.Subtitles
-import androidx.compose.material.icons.filled.SwapHoriz
 import androidx.compose.material.icons.filled.SwapVert
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.outlined.DeleteOutline
@@ -65,16 +67,18 @@ import androidx.compose.material.icons.outlined.SwapHoriz
 import androidx.compose.material.icons.outlined.SwapVert
 import androidx.compose.material.icons.outlined.Timer
 import androidx.compose.material.icons.outlined.Tune
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ButtonGroup
 import androidx.compose.material3.ButtonGroupDefaults
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
-import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.MenuDefaults
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Slider
@@ -154,8 +158,13 @@ import dev.bilby.resources.*
 import dev.bilby.stringResource
 import dev.bilby.ui.AdaptiveContent
 import dev.bilby.ui.components.BilbyIcons
+import dev.bilby.ui.components.BilbyTooltip
 import dev.bilby.ui.components.BilbyTopBar
+import dev.bilby.ui.components.DesktopMenuMotionTheme
 import dev.bilby.ui.components.LocalPointerSource
+import dev.bilby.ui.components.menuItemShape
+import dev.bilby.ui.components.menuSelectedMark
+import dev.bilby.ui.components.selectedSemantics
 import dev.bilby.ui.components.trackEditableFocus
 import dev.bilby.ui.navigationBarsBottom
 import dev.bilby.ui.padScaffoldExceptBottom
@@ -765,10 +774,6 @@ fun PlayerCustomizationPage(
                                         selectedSection = listenSection,
                                         selectedSlot = selectedListenSlot,
                                         onSelectSection = { listenSection = it },
-                                        onSelectSlot = { pos ->
-                                            selectedListenSlot = pos
-                                            listenSection = ListenEditorSection.SideSlot
-                                        },
                                         onUpdateLayout = onUpdateLayout,
                                     )
                                 }
@@ -952,10 +957,6 @@ fun PlayerCustomizationPage(
                                             selectedSection = listenSection,
                                             selectedSlot = selectedListenSlot,
                                             onSelectSection = { listenSection = it },
-                                            onSelectSlot = { pos ->
-                                                selectedListenSlot = pos
-                                                listenSection = ListenEditorSection.SideSlot
-                                            },
                                             onUpdateLayout = onUpdateLayout,
                                         )
                                         PresetChipsRow(
@@ -1476,67 +1477,79 @@ private fun ListenCustomizationCards(
     selectedSection: ListenEditorSection,
     selectedSlot: CenterSlotPosition,
     onSelectSection: (ListenEditorSection) -> Unit,
-    onSelectSlot: (CenterSlotPosition) -> Unit,
     onUpdateLayout: ((PlayerLayoutPrefs) -> PlayerLayoutPrefs) -> Unit,
 ) {
-    // 1. 播放键两侧槽位卡片（支持外左 / 内左 / 内右 / 外右 4 槽位）
+    // 1. 播放键两侧槽位卡片（点选画布槽位后在此精简编辑：标题+轻操作、动作、步进秒数、相对尺寸、显示底色）
     val slot = config.slot(selectedSlot)
     val currentSeconds = slot.action.seekSecondsOrNull() ?: seekButtonSeconds
+    val symmetricLabel = stringResource(Res.string.player_custom_apply_symmetric)
+    val clearLabel = stringResource(Res.string.player_custom_clear_slot)
     ListenEditorCard(
-        title = stringResource(Res.string.player_custom_listen_side_title),
+        title = centerSlotLabel(selectedSlot),
         selected = selectedSection == ListenEditorSection.SideSlot,
         onClick = { onSelectSection(ListenEditorSection.SideSlot) },
-    ) {
-        // 槽位切换
-        FlowRow(
-            horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
-            verticalArrangement = Arrangement.spacedBy(Spacing.Hair),
-        ) {
-            val slotTabs = listOf(
-                CenterSlotPosition.OuterLeft to stringResource(Res.string.player_custom_slot_outer_left_short),
-                CenterSlotPosition.InnerLeft to stringResource(Res.string.player_custom_slot_inner_left_short),
-                CenterSlotPosition.InnerRight to stringResource(Res.string.player_custom_slot_inner_right_short),
-                CenterSlotPosition.OuterRight to stringResource(Res.string.player_custom_slot_outer_right_short),
-            )
-            for ((pos, label) in slotTabs) {
-                FilterChip(
-                    selected = selectedSlot == pos,
-                    onClick = { onSelectSlot(pos) },
-                    label = { Text(label) },
-                )
+        headerActions = {
+            BilbyTooltip(text = symmetricLabel) {
+                IconButton(
+                    onClick = {
+                        onSelectSection(ListenEditorSection.SideSlot)
+                        onUpdateLayout { prefs -> prefs.updateListen { it.withSymmetricSlot(selectedSlot) } }
+                    },
+                    modifier = Modifier.size(36.dp),
+                ) {
+                    Icon(
+                        imageVector = Icons.Outlined.SwapHoriz,
+                        contentDescription = symmetricLabel,
+                        modifier = Modifier.size(18.dp),
+                    )
+                }
             }
-        }
-
-        // 动作选择
-        FlowRow(
-            horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
-            verticalArrangement = Arrangement.spacedBy(Spacing.Hair),
-        ) {
-            val actions = listOf(
-                CenterSlotAction.None to stringResource(Res.string.player_custom_action_none),
-                CenterSlotAction.Previous to stringResource(Res.string.player_custom_action_previous),
-                CenterSlotAction.Next to stringResource(Res.string.player_custom_action_next),
-                CenterSlotAction.SeekBackward(currentSeconds) to stringResource(Res.string.player_custom_action_seek_backward),
-                CenterSlotAction.SeekForward(currentSeconds) to stringResource(Res.string.player_custom_action_seek_forward),
-            )
-            for ((actionOption, label) in actions) {
-                val isCurrent = when {
+            if (slot.action != CenterSlotAction.None) {
+                BilbyTooltip(text = clearLabel) {
+                    IconButton(
+                        onClick = {
+                            onSelectSection(ListenEditorSection.SideSlot)
+                            onUpdateLayout { prefs ->
+                                prefs.updateListen { it.withSlot(selectedSlot, slot.copy(action = CenterSlotAction.None)) }
+                            }
+                        },
+                        modifier = Modifier.size(36.dp),
+                    ) {
+                        Icon(
+                            imageVector = Icons.Outlined.DeleteOutline,
+                            contentDescription = clearLabel,
+                            modifier = Modifier.size(18.dp),
+                        )
+                    }
+                }
+            }
+        },
+    ) {
+        val actions = listOf(
+            CenterSlotAction.None to stringResource(Res.string.player_custom_action_none),
+            CenterSlotAction.Previous to stringResource(Res.string.player_custom_action_previous),
+            CenterSlotAction.Next to stringResource(Res.string.player_custom_action_next),
+            CenterSlotAction.SeekBackward(currentSeconds) to stringResource(Res.string.player_custom_action_seek_backward),
+            CenterSlotAction.SeekForward(currentSeconds) to stringResource(Res.string.player_custom_action_seek_forward),
+        )
+        InspectorDropdownRow(
+            label = "动作",
+            selectedLabel = centerActionLabel(slot.action),
+            options = actions,
+            isSelected = { actionOption ->
+                when {
                     actionOption is CenterSlotAction.SeekBackward && slot.action is CenterSlotAction.SeekBackward -> true
                     actionOption is CenterSlotAction.SeekForward && slot.action is CenterSlotAction.SeekForward -> true
                     else -> slot.action == actionOption
                 }
-                FilterChip(
-                    selected = isCurrent,
-                    onClick = {
-                        onSelectSection(ListenEditorSection.SideSlot)
-                        onUpdateLayout { prefs ->
-                            prefs.updateListen { it.withSlot(selectedSlot, slot.copy(action = actionOption)) }
-                        }
-                    },
-                    label = { Text(label) },
-                )
-            }
-        }
+            },
+            onSelect = { actionOption ->
+                onSelectSection(ListenEditorSection.SideSlot)
+                onUpdateLayout { prefs ->
+                    prefs.updateListen { it.withSlot(selectedSlot, slot.copy(action = actionOption)) }
+                }
+            },
+        )
 
         val isSeekAction = slot.action is CenterSlotAction.SeekBackward ||
             slot.action is CenterSlotAction.SeekForward
@@ -1559,37 +1572,24 @@ private fun ListenCustomizationCards(
             )
         }
 
-        // 相对尺寸档位
-        Column(verticalArrangement = Arrangement.spacedBy(Spacing.Hair)) {
-            Text(
-                text = stringResource(Res.string.player_custom_scale_title),
-                style = MaterialTheme.typography.labelLarge,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            FlowRow(
-                horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
-                verticalArrangement = Arrangement.spacedBy(Spacing.Hair),
-            ) {
-                val scales = listOf(
-                    CenterSlotScale.Large to stringResource(Res.string.player_custom_scale_large),
-                    CenterSlotScale.Medium to stringResource(Res.string.player_custom_scale_medium),
-                    CenterSlotScale.Small to stringResource(Res.string.player_custom_scale_small),
-                    CenterSlotScale.ExtraSmall to stringResource(Res.string.player_custom_scale_extra_small),
-                )
-                for ((scaleOption, label) in scales) {
-                    FilterChip(
-                        selected = slot.scale == scaleOption,
-                        onClick = {
-                            onSelectSection(ListenEditorSection.SideSlot)
-                            onUpdateLayout { prefs ->
-                                prefs.updateListen { it.withSlot(selectedSlot, slot.copy(scale = scaleOption)) }
-                            }
-                        },
-                        label = { Text(label) },
-                    )
+        val scales = listOf(
+            CenterSlotScale.Large to stringResource(Res.string.player_custom_scale_large),
+            CenterSlotScale.Medium to stringResource(Res.string.player_custom_scale_medium),
+            CenterSlotScale.Small to stringResource(Res.string.player_custom_scale_small),
+            CenterSlotScale.ExtraSmall to stringResource(Res.string.player_custom_scale_extra_small),
+        )
+        InspectorDropdownRow(
+            label = stringResource(Res.string.player_custom_scale_title),
+            selectedLabel = centerScaleLabel(slot.scale),
+            options = scales,
+            isSelected = { it == slot.scale },
+            onSelect = { scaleOption ->
+                onSelectSection(ListenEditorSection.SideSlot)
+                onUpdateLayout { prefs ->
+                    prefs.updateListen { it.withSlot(selectedSlot, slot.copy(scale = scaleOption)) }
                 }
-            }
-        }
+            },
+        )
 
         if (slot.action != CenterSlotAction.None) {
             ShowBackgroundSwitchRow(
@@ -1602,63 +1602,31 @@ private fun ListenCustomizationCards(
                 },
             )
         }
-
-        // 对称应用 + 清空
-        Row(
-            horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
-            modifier = Modifier.fillMaxWidth(),
-        ) {
-            FilledTonalButton(
-                onClick = {
-                    onSelectSection(ListenEditorSection.SideSlot)
-                    onUpdateLayout { prefs -> prefs.updateListen { it.withSymmetricSlot(selectedSlot) } }
-                },
-                modifier = Modifier.weight(1f),
-            ) {
-                Icon(Icons.Filled.SwapHoriz, contentDescription = null, modifier = Modifier.size(18.dp))
-                Spacer(Modifier.width(Spacing.Hair))
-                Text(stringResource(Res.string.player_custom_apply_symmetric), maxLines = 1, overflow = TextOverflow.Ellipsis)
-            }
-            if (slot.action != CenterSlotAction.None) {
-                OutlinedButton(
-                    onClick = {
-                        onSelectSection(ListenEditorSection.SideSlot)
-                        onUpdateLayout { prefs ->
-                            prefs.updateListen { it.withSlot(selectedSlot, slot.copy(action = CenterSlotAction.None)) }
-                        }
-                    },
-                ) {
-                    Text(stringResource(Res.string.player_custom_clear_slot))
-                }
-            }
-        }
     }
 
     // 2. 封面样式卡片
+    val coverOptions = listOf(
+        ListenCoverStyle.VinylDisc to stringResource(Res.string.player_custom_listen_cover_vinyl),
+        ListenCoverStyle.StaticCover to stringResource(Res.string.player_custom_listen_cover_static),
+    )
+    val selectedCoverLabel = coverOptions.firstOrNull { it.first == config.coverStyle }?.second
+        ?: stringResource(Res.string.player_custom_listen_cover_vinyl)
     ListenEditorCard(
         title = stringResource(Res.string.player_custom_listen_cover_title),
         selected = selectedSection == ListenEditorSection.Cover,
         onClick = { onSelectSection(ListenEditorSection.Cover) },
-    ) {
-        FlowRow(
-            horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
-            verticalArrangement = Arrangement.spacedBy(Spacing.Hair),
-        ) {
-            val coverOptions = listOf(
-                ListenCoverStyle.VinylDisc to stringResource(Res.string.player_custom_listen_cover_vinyl),
-                ListenCoverStyle.StaticCover to stringResource(Res.string.player_custom_listen_cover_static),
+        headerActions = {
+            InspectorDropdownButton(
+                selectedLabel = selectedCoverLabel,
+                options = coverOptions,
+                isSelected = { it == config.coverStyle },
+                onSelect = { style ->
+                    onSelectSection(ListenEditorSection.Cover)
+                    onUpdateLayout { prefs -> prefs.updateListen { it.copy(coverStyle = style) } }
+                },
             )
-            for ((style, label) in coverOptions) {
-                FilterChip(
-                    selected = config.coverStyle == style,
-                    onClick = {
-                        onSelectSection(ListenEditorSection.Cover)
-                        onUpdateLayout { prefs -> prefs.updateListen { it.copy(coverStyle = style) } }
-                    },
-                    label = { Text(label) },
-                )
-            }
-        }
+        },
+    ) {
         Text(
             text = stringResource(Res.string.player_custom_listen_cover_static_hint),
             style = MaterialTheme.typography.bodySmall,
@@ -1711,25 +1679,21 @@ private fun ShowBackgroundSwitchRow(
 ) {
     Row(
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(Spacing.Cozy),
+        horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
         modifier = Modifier
             .fillMaxWidth()
-            .clip(MaterialTheme.shapes.medium)
+            .clip(MaterialTheme.shapes.small)
             .clickable { onCheckedChange(!checked) }
-            .padding(vertical = Spacing.Hair),
+            .pointerHoverIcon(PointerIcon.Hand),
     ) {
-        Column(modifier = Modifier.weight(1f)) {
-            Text(
-                text = stringResource(Res.string.player_custom_show_background),
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurface,
-            )
-            Text(
-                text = stringResource(Res.string.player_custom_show_background_subtitle),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
+        Text(
+            text = stringResource(Res.string.player_custom_show_background),
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurface,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f),
+        )
         Switch(
             checked = checked,
             onCheckedChange = onCheckedChange,
@@ -1742,6 +1706,7 @@ private fun ListenEditorCard(
     title: String,
     selected: Boolean,
     onClick: () -> Unit,
+    headerActions: @Composable RowScope.() -> Unit = {},
     content: @Composable () -> Unit,
 ) {
     val shape = MaterialTheme.shapes.large
@@ -1760,14 +1725,24 @@ private fun ListenEditorCard(
             .clickable(onClick = onClick),
     ) {
         Column(
-            verticalArrangement = Arrangement.spacedBy(Spacing.Cozy),
-            modifier = Modifier.padding(Spacing.Comfortable),
+            verticalArrangement = Arrangement.spacedBy(Spacing.Tight),
+            modifier = Modifier.padding(horizontal = Spacing.Comfortable, vertical = Spacing.Cozy),
         ) {
-            Text(
-                text = title,
-                style = MaterialTheme.typography.titleSmall,
-                color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
-            )
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(Spacing.Hair),
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.titleSmall,
+                    color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f),
+                )
+                headerActions()
+            }
             content()
         }
     }
@@ -1779,29 +1754,32 @@ private fun PresetChipsRow(
     onApplyPreset: (PlayerLayoutPreset) -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val presets = listOf(
+        PlayerLayoutPreset.Default to stringResource(Res.string.player_custom_preset_default),
+        PlayerLayoutPreset.Minimal to stringResource(Res.string.player_custom_preset_minimal),
+        PlayerLayoutPreset.Podcast to stringResource(Res.string.player_custom_preset_podcast),
+    )
+    val matchedLabel = presets.firstOrNull { (preset, _) ->
+        current == PlayerLayoutPrefs.preset(preset)
+    }?.second ?: stringResource(Res.string.settings_group_customization)
+
     Row(
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
-        modifier = modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+        horizontalArrangement = Arrangement.spacedBy(Spacing.Hair),
+        modifier = modifier,
     ) {
         Text(
             text = stringResource(Res.string.player_custom_presets),
-            style = MaterialTheme.typography.labelLarge,
+            style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
         )
-        val presets = listOf(
-            PlayerLayoutPreset.Default to stringResource(Res.string.player_custom_preset_default),
-            PlayerLayoutPreset.Minimal to stringResource(Res.string.player_custom_preset_minimal),
-            PlayerLayoutPreset.Podcast to stringResource(Res.string.player_custom_preset_podcast),
+        InspectorDropdownButton(
+            selectedLabel = matchedLabel,
+            options = presets,
+            isSelected = { preset -> current == PlayerLayoutPrefs.preset(preset) },
+            onSelect = onApplyPreset,
         )
-        for ((preset, label) in presets) {
-            val selected = current == PlayerLayoutPrefs.preset(preset)
-            FilterChip(
-                selected = selected,
-                onClick = { onApplyPreset(preset) },
-                label = { Text(label) },
-            )
-        }
     }
 }
 
@@ -3470,7 +3448,6 @@ private fun PlainToggleRow(
     }
 }
 
-@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun SelectionInspectorStrip(
     layoutMode: PlayerLayoutMode,
@@ -3721,68 +3698,61 @@ private fun SelectionInspectorStrip(
             }
 
             is PreviewSelection.CenterSlot -> {
+                val closeLabel = stringResource(Res.string.action_close)
                 Column(
                     verticalArrangement = Arrangement.spacedBy(Spacing.Tight),
                     modifier = Modifier.padding(horizontal = Spacing.Comfortable, vertical = Spacing.Cozy),
                 ) {
-                    // 5 槽位快捷切换（触控与键鼠预览共享同一套 layout.center，点选任一槽位均可直接切换编辑外左/内左/播放/内右/外右）
-                    FlowRow(
-                        horizontalArrangement = Arrangement.spacedBy(Spacing.Hair),
-                        verticalArrangement = Arrangement.spacedBy(Spacing.Hair),
-                    ) {
-                        val slotTabs = listOf(
-                            CenterSlotPosition.OuterLeft to stringResource(Res.string.player_custom_slot_outer_left_short),
-                            CenterSlotPosition.InnerLeft to stringResource(Res.string.player_custom_slot_inner_left_short),
-                            CenterSlotPosition.Center to stringResource(Res.string.player_custom_ctrl_play_pause),
-                            CenterSlotPosition.InnerRight to stringResource(Res.string.player_custom_slot_inner_right_short),
-                            CenterSlotPosition.OuterRight to stringResource(Res.string.player_custom_slot_outer_right_short),
-                        )
-                        for ((pos, label) in slotTabs) {
-                            FilterChip(
-                                selected = selection.position == pos,
-                                onClick = { onSelect(PreviewSelection.CenterSlot(pos)) },
-                                label = { Text(label, maxLines = 1) },
-                            )
-                        }
-                    }
-
                     if (selection.position == CenterSlotPosition.Center) {
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
+                            horizontalArrangement = Arrangement.spacedBy(Spacing.Hair),
                             modifier = Modifier.fillMaxWidth(),
                         ) {
-                            PlainToggleRow(
-                                icon = Icons.Filled.PlayArrow,
-                                title = stringResource(Res.string.player_custom_show_center_play),
-                                subtitle = stringResource(Res.string.player_custom_show_center_play_subtitle),
-                                checked = layout.center.showCenterPlay,
-                                onCheckedChange = { show ->
-                                    onUpdateLayout { prefs ->
-                                        prefs.updateLayout(layoutMode) {
-                                            it.withCenterPlay(show, layoutMode.isFullscreen)
-                                        }
-                                    }
-                                },
+                            Text(
+                                text = centerSlotLabel(CenterSlotPosition.Center),
+                                style = MaterialTheme.typography.titleSmall,
+                                color = MaterialTheme.colorScheme.primary,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
                                 modifier = Modifier.weight(1f),
                             )
-                            IconButton(
-                                onClick = onDismiss,
-                                modifier = Modifier.size(36.dp),
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Filled.Close,
-                                    contentDescription = stringResource(Res.string.action_close),
-                                    modifier = Modifier.size(18.dp),
-                                )
+                            BilbyTooltip(text = closeLabel) {
+                                IconButton(
+                                    onClick = onDismiss,
+                                    modifier = Modifier.size(36.dp),
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Filled.Close,
+                                        contentDescription = closeLabel,
+                                        modifier = Modifier.size(18.dp),
+                                    )
+                                }
                             }
                         }
+                        PlainToggleRow(
+                            icon = Icons.Filled.PlayArrow,
+                            title = stringResource(Res.string.player_custom_show_center_play),
+                            subtitle = stringResource(Res.string.player_custom_show_center_play_subtitle),
+                            checked = layout.center.showCenterPlay,
+                            onCheckedChange = { show ->
+                                onUpdateLayout { prefs ->
+                                    prefs.updateLayout(layoutMode) {
+                                        it.withCenterPlay(show, layoutMode.isFullscreen)
+                                    }
+                                }
+                            },
+                        )
                     } else {
                         val slot = layout.center.slot(selection.position)
                         val currentSeconds = slot.action.seekSecondsOrNull() ?: layoutPrefs.seekButtonSeconds
+                        val symmetricLabel = stringResource(Res.string.player_custom_apply_symmetric)
+                        val clearLabel = stringResource(Res.string.player_custom_clear_slot)
+
+                        // 1. 标题与轻操作（对称应用 / 清空 / 关闭）
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
+                            horizontalArrangement = Arrangement.spacedBy(Spacing.Hair),
                             modifier = Modifier.fillMaxWidth(),
                         ) {
                             Text(
@@ -3793,129 +3763,95 @@ private fun SelectionInspectorStrip(
                                 overflow = TextOverflow.Ellipsis,
                                 modifier = Modifier.weight(1f),
                             )
-                            FilledTonalButton(
-                                onClick = {
-                                    onUpdateLayout { prefs ->
-                                        prefs.updateLayout(layoutMode) {
-                                            it.withSymmetricCenterSlot(selection.position, layoutMode.isFullscreen)
-                                        }
-                                    }
-                                },
-                                contentPadding = PaddingValues(horizontal = Spacing.Cozy, vertical = 6.dp),
-                            ) {
-                                Icon(Icons.Filled.SwapHoriz, contentDescription = null, modifier = Modifier.size(16.dp))
-                                Spacer(Modifier.width(Spacing.Hair))
-                                Text(
-                                    text = stringResource(Res.string.player_custom_apply_symmetric),
-                                    style = MaterialTheme.typography.labelMedium,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                )
-                            }
-                            if (slot.action != CenterSlotAction.None) {
-                                OutlinedButton(
+                            BilbyTooltip(text = symmetricLabel) {
+                                IconButton(
                                     onClick = {
                                         onUpdateLayout { prefs ->
                                             prefs.updateLayout(layoutMode) {
-                                                it.withCenterSlot(
-                                                    selection.position,
-                                                    slot.copy(action = CenterSlotAction.None),
-                                                    layoutMode.isFullscreen,
-                                                )
+                                                it.withSymmetricCenterSlot(selection.position, layoutMode.isFullscreen)
                                             }
                                         }
                                     },
-                                    contentPadding = PaddingValues(horizontal = Spacing.Cozy, vertical = 6.dp),
+                                    modifier = Modifier.size(36.dp),
                                 ) {
-                                    Text(
-                                        text = stringResource(Res.string.player_custom_clear_slot),
-                                        style = MaterialTheme.typography.labelMedium,
-                                        maxLines = 1,
+                                    Icon(
+                                        imageVector = Icons.Outlined.SwapHoriz,
+                                        contentDescription = symmetricLabel,
+                                        modifier = Modifier.size(18.dp),
                                     )
                                 }
                             }
-                            IconButton(
-                                onClick = onDismiss,
-                                modifier = Modifier.size(36.dp),
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Filled.Close,
-                                    contentDescription = stringResource(Res.string.action_close),
-                                    modifier = Modifier.size(18.dp),
-                                )
+                            if (slot.action != CenterSlotAction.None) {
+                                BilbyTooltip(text = clearLabel) {
+                                    IconButton(
+                                        onClick = {
+                                            onUpdateLayout { prefs ->
+                                                prefs.updateLayout(layoutMode) {
+                                                    it.withCenterSlot(
+                                                        selection.position,
+                                                        slot.copy(action = CenterSlotAction.None),
+                                                        layoutMode.isFullscreen,
+                                                    )
+                                                }
+                                            }
+                                        },
+                                        modifier = Modifier.size(36.dp),
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Outlined.DeleteOutline,
+                                            contentDescription = clearLabel,
+                                            modifier = Modifier.size(18.dp),
+                                        )
+                                    }
+                                }
+                            }
+                            BilbyTooltip(text = closeLabel) {
+                                IconButton(
+                                    onClick = onDismiss,
+                                    modifier = Modifier.size(36.dp),
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Filled.Close,
+                                        contentDescription = closeLabel,
+                                        modifier = Modifier.size(18.dp),
+                                    )
+                                }
                             }
                         }
 
-                        FlowRow(
-                            horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
-                            verticalArrangement = Arrangement.spacedBy(Spacing.Hair),
-                        ) {
-                            val actions = listOf(
-                                CenterSlotAction.None to stringResource(Res.string.player_custom_action_none),
-                                CenterSlotAction.Previous to stringResource(Res.string.player_custom_action_previous),
-                                CenterSlotAction.Next to stringResource(Res.string.player_custom_action_next),
-                                CenterSlotAction.SeekBackward(currentSeconds) to stringResource(Res.string.player_custom_action_seek_backward),
-                                CenterSlotAction.SeekForward(currentSeconds) to stringResource(Res.string.player_custom_action_seek_forward),
-                            )
-                            for ((actionOption, label) in actions) {
-                                val isCurrent = when {
+                        // 2. 动作下拉
+                        val actions = listOf(
+                            CenterSlotAction.None to stringResource(Res.string.player_custom_action_none),
+                            CenterSlotAction.Previous to stringResource(Res.string.player_custom_action_previous),
+                            CenterSlotAction.Next to stringResource(Res.string.player_custom_action_next),
+                            CenterSlotAction.SeekBackward(currentSeconds) to stringResource(Res.string.player_custom_action_seek_backward),
+                            CenterSlotAction.SeekForward(currentSeconds) to stringResource(Res.string.player_custom_action_seek_forward),
+                        )
+                        InspectorDropdownRow(
+                            label = "动作",
+                            selectedLabel = centerActionLabel(slot.action),
+                            options = actions,
+                            isSelected = { actionOption ->
+                                when {
                                     actionOption is CenterSlotAction.SeekBackward && slot.action is CenterSlotAction.SeekBackward -> true
                                     actionOption is CenterSlotAction.SeekForward && slot.action is CenterSlotAction.SeekForward -> true
                                     else -> slot.action == actionOption
                                 }
-                                FilterChip(
-                                    selected = isCurrent,
-                                    onClick = {
-                                        onUpdateLayout { prefs ->
-                                            prefs.updateLayout(layoutMode) {
-                                                it.withCenterSlot(
-                                                    selection.position,
-                                                    slot.copy(action = actionOption),
-                                                    layoutMode.isFullscreen,
-                                                )
-                                            }
-                                        }
-                                    },
-                                    label = { Text(label) },
-                                )
-                            }
-                        }
+                            },
+                            onSelect = { actionOption ->
+                                onUpdateLayout { prefs ->
+                                    prefs.updateLayout(layoutMode) {
+                                        it.withCenterSlot(
+                                            selection.position,
+                                            slot.copy(action = actionOption),
+                                            layoutMode.isFullscreen,
+                                        )
+                                    }
+                                }
+                            },
+                        )
 
-                        FlowRow(
-                            horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
-                            verticalArrangement = Arrangement.spacedBy(Spacing.Hair),
-                        ) {
-                            Text(
-                                text = stringResource(Res.string.player_custom_scale_title),
-                                style = MaterialTheme.typography.labelLarge,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.align(Alignment.CenterVertically),
-                            )
-                            val scales = listOf(
-                                CenterSlotScale.Large to stringResource(Res.string.player_custom_scale_large),
-                                CenterSlotScale.Medium to stringResource(Res.string.player_custom_scale_medium),
-                                CenterSlotScale.Small to stringResource(Res.string.player_custom_scale_small),
-                                CenterSlotScale.ExtraSmall to stringResource(Res.string.player_custom_scale_extra_small),
-                            )
-                            for ((scaleOption, label) in scales) {
-                                FilterChip(
-                                    selected = slot.scale == scaleOption,
-                                    onClick = {
-                                        onUpdateLayout { prefs ->
-                                            prefs.updateLayout(layoutMode) {
-                                                it.withCenterSlot(
-                                                    selection.position,
-                                                    slot.copy(scale = scaleOption),
-                                                    layoutMode.isFullscreen,
-                                                )
-                                            }
-                                        }
-                                    },
-                                    label = { Text(label) },
-                                )
-                            }
-                        }
-
+                        // 2b. 步进秒数（仅快退/快进时显示）
                         val isSeekAction = slot.action is CenterSlotAction.SeekBackward ||
                             slot.action is CenterSlotAction.SeekForward
                         if (isSeekAction) {
@@ -3943,6 +3879,32 @@ private fun SelectionInspectorStrip(
                             )
                         }
 
+                        // 3. 相对尺寸下拉
+                        val scales = listOf(
+                            CenterSlotScale.Large to stringResource(Res.string.player_custom_scale_large),
+                            CenterSlotScale.Medium to stringResource(Res.string.player_custom_scale_medium),
+                            CenterSlotScale.Small to stringResource(Res.string.player_custom_scale_small),
+                            CenterSlotScale.ExtraSmall to stringResource(Res.string.player_custom_scale_extra_small),
+                        )
+                        InspectorDropdownRow(
+                            label = stringResource(Res.string.player_custom_scale_title),
+                            selectedLabel = centerScaleLabel(slot.scale),
+                            options = scales,
+                            isSelected = { it == slot.scale },
+                            onSelect = { scaleOption ->
+                                onUpdateLayout { prefs ->
+                                    prefs.updateLayout(layoutMode) {
+                                        it.withCenterSlot(
+                                            selection.position,
+                                            slot.copy(scale = scaleOption),
+                                            layoutMode.isFullscreen,
+                                        )
+                                    }
+                                }
+                            },
+                        )
+
+                        // 4. 显示底色开关
                         if (slot.action != CenterSlotAction.None) {
                             ShowBackgroundSwitchRow(
                                 checked = slot.showBackground,
@@ -3966,53 +3928,165 @@ private fun SelectionInspectorStrip(
     }
 }
 
-@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun <T> InspectorDropdownRow(
+    label: String,
+    selectedLabel: String,
+    options: List<Pair<T, String>>,
+    isSelected: (T) -> Boolean,
+    onSelect: (T) -> Unit,
+    modifier: Modifier = Modifier,
+    valueTabular: Boolean = false,
+) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
+        modifier = modifier.fillMaxWidth(),
+    ) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurface,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f),
+        )
+        InspectorDropdownButton(
+            selectedLabel = selectedLabel,
+            options = options,
+            isSelected = isSelected,
+            onSelect = onSelect,
+            valueTabular = valueTabular,
+        )
+    }
+}
+
+@Composable
+private fun <T> InspectorDropdownButton(
+    selectedLabel: String,
+    options: List<Pair<T, String>>,
+    isSelected: (T) -> Boolean,
+    onSelect: (T) -> Unit,
+    modifier: Modifier = Modifier,
+    valueTabular: Boolean = false,
+) {
+    var expanded by remember { mutableStateOf(false) }
+    Box(modifier = modifier) {
+        TextButton(
+            onClick = { expanded = true },
+            contentPadding = PaddingValues(start = Spacing.Cozy, end = Spacing.Tight),
+            modifier = Modifier.defaultMinSize(minWidth = 1.dp),
+        ) {
+            Text(
+                text = selectedLabel,
+                style = if (valueTabular) MaterialTheme.typography.labelLarge.tabular else MaterialTheme.typography.labelLarge,
+                maxLines = 1,
+                softWrap = false,
+            )
+            Icon(
+                imageVector = Icons.Filled.ArrowDropDown,
+                contentDescription = null,
+                modifier = Modifier.size(Dimens.IconInline),
+            )
+        }
+        DesktopMenuMotionTheme {
+            DropdownMenu(
+                expanded = expanded,
+                onDismissRequest = { expanded = false },
+                shape = MenuDefaults.shape,
+                containerColor = MenuDefaults.containerColor,
+            ) {
+                options.forEachIndexed { index, (value, optionLabel) ->
+                    val selected = isSelected(value)
+                    DropdownMenuItem(
+                        onClick = {
+                            expanded = false
+                            onSelect(value)
+                        },
+                        text = {
+                            Text(
+                                text = optionLabel,
+                                style = if (valueTabular) MaterialTheme.typography.bodyLarge.tabular else MaterialTheme.typography.bodyLarge,
+                            )
+                        },
+                        shape = menuItemShape(index, options.size),
+                        trailingContent = if (selected) menuSelectedMark else null,
+                        modifier = Modifier.selectedSemantics(selected),
+                    )
+                }
+            }
+        }
+    }
+}
+
 @Composable
 private fun SeekSecondsEditor(
     title: String,
     seconds: Int,
     onSecondsChange: (Int) -> Unit,
 ) {
-    var customInput by remember(seconds) { mutableStateOf(seconds.toString()) }
-    Column(verticalArrangement = Arrangement.spacedBy(Spacing.Tight)) {
-        Text(
-            text = title,
-            style = MaterialTheme.typography.labelLarge,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        FlowRow(
-            horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
-            verticalArrangement = Arrangement.spacedBy(Spacing.Hair),
-        ) {
-            for (preset in SEEK_SECONDS_PRESETS) {
-                FilterChip(
-                    selected = seconds == preset,
-                    onClick = { onSecondsChange(preset) },
-                    label = {
-                        Text(
-                            text = stringResource(Res.string.player_custom_seek_seconds_unit, preset),
-                            style = MaterialTheme.typography.labelLarge.tabular,
-                        )
-                    },
-                )
+    var showCustomDialog by remember { mutableStateOf(false) }
+    var customInput by remember { mutableStateOf(seconds.toString()) }
+    val customOptionSentinel = -1
+    val options = SEEK_SECONDS_PRESETS.map { preset ->
+        preset to stringResource(Res.string.player_custom_seek_seconds_unit, preset)
+    } + (customOptionSentinel to "${stringResource(Res.string.settings_group_customization)}…")
+
+    InspectorDropdownRow(
+        label = title,
+        selectedLabel = stringResource(Res.string.player_custom_seek_seconds_unit, seconds),
+        options = options,
+        isSelected = { opt ->
+            if (opt == customOptionSentinel) seconds !in SEEK_SECONDS_PRESETS else seconds == opt
+        },
+        onSelect = { opt ->
+            if (opt == customOptionSentinel) {
+                customInput = seconds.toString()
+                showCustomDialog = true
+            } else {
+                onSecondsChange(opt)
             }
-        }
-        OutlinedTextField(
-            value = customInput,
-            onValueChange = { text ->
-                val digits = text.filter { it.isDigit() }.take(3)
-                customInput = digits
-                digits.toIntOrNull()?.let { parsed ->
-                    if (parsed in MIN_SEEK_SECONDS..MAX_SEEK_SECONDS) {
-                        onSecondsChange(parsed)
-                    }
+        },
+        valueTabular = true,
+    )
+
+    if (showCustomDialog) {
+        val parsed = customInput.toIntOrNull()
+        val valid = parsed != null && parsed in MIN_SEEK_SECONDS..MAX_SEEK_SECONDS
+        AlertDialog(
+            onDismissRequest = { showCustomDialog = false },
+            title = { Text(title) },
+            text = {
+                OutlinedTextField(
+                    value = customInput,
+                    onValueChange = { text ->
+                        customInput = text.filter { it.isDigit() }.take(3)
+                    },
+                    singleLine = true,
+                    label = { Text(stringResource(Res.string.player_custom_seek_seconds_custom)) },
+                    textStyle = MaterialTheme.typography.bodyLarge.tabular,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    modifier = Modifier.fillMaxWidth().trackEditableFocus(),
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    enabled = valid,
+                    onClick = {
+                        if (parsed != null && parsed in MIN_SEEK_SECONDS..MAX_SEEK_SECONDS) {
+                            onSecondsChange(parsed)
+                        }
+                        showCustomDialog = false
+                    },
+                ) {
+                    Text(stringResource(Res.string.action_confirm))
                 }
             },
-            singleLine = true,
-            label = { Text(stringResource(Res.string.player_custom_seek_seconds_custom)) },
-            textStyle = MaterialTheme.typography.bodyLarge.tabular,
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-            modifier = Modifier.fillMaxWidth().trackEditableFocus(),
+            dismissButton = {
+                TextButton(onClick = { showCustomDialog = false }) {
+                    Text(stringResource(Res.string.action_cancel))
+                }
+            },
         )
     }
 }
@@ -4044,7 +4118,6 @@ private fun GestureSectionCard(
     }
 }
 
-@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun GestureCustomizationCards(
     state: SettingsUiState,
@@ -4117,29 +4190,18 @@ private fun GestureCustomizationCards(
                         onUpdateLayout { it.updateGestures { g -> g.copy(swipeSeekCancelZone = enabled) } }
                     },
                 )
-                Column(verticalArrangement = Arrangement.spacedBy(Spacing.Hair)) {
-                    Text(
-                        text = stringResource(Res.string.player_custom_gesture_seek_sensitivity),
-                        style = MaterialTheme.typography.labelLarge,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    FlowRow(
-                        horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
-                        verticalArrangement = Arrangement.spacedBy(Spacing.Hair),
-                    ) {
-                        for (option in SwipeSeekSensitivity.entries) {
-                            FilterChip(
-                                selected = gestures.swipeSeekSensitivity == option,
-                                onClick = {
-                                    onUpdateLayout {
-                                        it.updateGestures { g -> g.copy(swipeSeekSensitivity = option) }
-                                    }
-                                },
-                                label = { Text(swipeSeekSensitivityLabel(option)) },
-                            )
+                val sensitivityOptions = SwipeSeekSensitivity.entries.map { it to swipeSeekSensitivityLabel(it) }
+                InspectorDropdownRow(
+                    label = stringResource(Res.string.player_custom_gesture_seek_sensitivity),
+                    selectedLabel = swipeSeekSensitivityLabel(gestures.swipeSeekSensitivity),
+                    options = sensitivityOptions,
+                    isSelected = { it == gestures.swipeSeekSensitivity },
+                    onSelect = { option ->
+                        onUpdateLayout {
+                            it.updateGestures { g -> g.copy(swipeSeekSensitivity = option) }
                         }
-                    }
-                }
+                    },
+                )
             }
         }
 
@@ -4202,61 +4264,34 @@ private fun GestureCustomizationCards(
                     checked = state.longPressSpeedDial,
                     onCheckedChange = onLongPressSpeedDialChange,
                 )
-                Column(verticalArrangement = Arrangement.spacedBy(Spacing.Hair)) {
-                    Text(
-                        text = stringResource(Res.string.settings_default_hold_speed),
-                        style = MaterialTheme.typography.labelLarge,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    FlowRow(
-                        horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
-                        verticalArrangement = Arrangement.spacedBy(Spacing.Hair),
-                    ) {
-                        for (option in SettingsStore.HOLD_SPEED_OPTIONS) {
-                            FilterChip(
-                                selected = state.defaultHoldSpeed == option,
-                                onClick = { onDefaultHoldSpeedChange(option) },
-                                label = {
-                                    Text(
-                                        text = formatSpeed(option),
-                                        style = MaterialTheme.typography.labelLarge.tabular,
-                                    )
-                                },
-                            )
-                        }
-                    }
-                }
+                val speedOptions = SettingsStore.HOLD_SPEED_OPTIONS.map { it to formatSpeed(it) }
+                InspectorDropdownRow(
+                    label = stringResource(Res.string.settings_default_hold_speed),
+                    selectedLabel = formatSpeed(state.defaultHoldSpeed),
+                    options = speedOptions,
+                    isSelected = { it == state.defaultHoldSpeed },
+                    onSelect = onDefaultHoldSpeedChange,
+                    valueTabular = true,
+                )
             }
         }
     }
 }
 
-@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun VerticalSwipeActionSelector(
     title: String,
     selected: VerticalSwipeAction,
     onSelect: (VerticalSwipeAction) -> Unit,
 ) {
-    Column(verticalArrangement = Arrangement.spacedBy(Spacing.Hair)) {
-        Text(
-            text = title,
-            style = MaterialTheme.typography.labelLarge,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        FlowRow(
-            horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
-            verticalArrangement = Arrangement.spacedBy(Spacing.Hair),
-        ) {
-            for (action in VerticalSwipeAction.entries) {
-                FilterChip(
-                    selected = selected == action,
-                    onClick = { onSelect(action) },
-                    label = { Text(verticalSwipeActionLabel(action)) },
-                )
-            }
-        }
-    }
+    val options = VerticalSwipeAction.entries.map { it to verticalSwipeActionLabel(it) }
+    InspectorDropdownRow(
+        label = title,
+        selectedLabel = verticalSwipeActionLabel(selected),
+        options = options,
+        isSelected = { it == selected },
+        onSelect = onSelect,
+    )
 }
 
 @Composable
@@ -4322,6 +4357,27 @@ private fun centerSlotLabel(position: CenterSlotPosition): String = stringResour
         CenterSlotPosition.Center -> Res.string.player_custom_slot_center
         CenterSlotPosition.InnerRight -> Res.string.player_custom_slot_inner_right
         CenterSlotPosition.OuterRight -> Res.string.player_custom_slot_outer_right
+    },
+)
+
+@Composable
+private fun centerActionLabel(action: CenterSlotAction): String = stringResource(
+    when (action) {
+        CenterSlotAction.None -> Res.string.player_custom_action_none
+        CenterSlotAction.Previous -> Res.string.player_custom_action_previous
+        CenterSlotAction.Next -> Res.string.player_custom_action_next
+        is CenterSlotAction.SeekBackward -> Res.string.player_custom_action_seek_backward
+        is CenterSlotAction.SeekForward -> Res.string.player_custom_action_seek_forward
+    },
+)
+
+@Composable
+private fun centerScaleLabel(scale: CenterSlotScale): String = stringResource(
+    when (scale) {
+        CenterSlotScale.Large -> Res.string.player_custom_scale_large
+        CenterSlotScale.Medium -> Res.string.player_custom_scale_medium
+        CenterSlotScale.Small -> Res.string.player_custom_scale_small
+        CenterSlotScale.ExtraSmall -> Res.string.player_custom_scale_extra_small
     },
 )
 
