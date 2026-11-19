@@ -3,9 +3,7 @@ package dev.bilby.ui
 import android.app.Activity
 import android.content.ContentValues
 import android.os.Environment
-import android.os.Looper
 import android.provider.MediaStore
-import android.widget.Toast
 import dev.bilby.BiliLog
 import dev.bilby.api.BiliClient
 import kotlinx.coroutines.Dispatchers
@@ -76,18 +74,6 @@ class AndroidSystemActions(
                         BiliLog.w("清理失败的相册记录失败 file=$fileName", cleanupError)
                     }
             }.getOrDefault(false)
-        }
-    }
-
-    override fun showToast(message: String) {
-        if (message.isBlank()) return
-        val show = Runnable {
-            Toast.makeText(activity.applicationContext, message, Toast.LENGTH_SHORT).show()
-        }
-        if (Looper.myLooper() == Looper.getMainLooper()) {
-            show.run()
-        } else {
-            activity.runOnUiThread(show)
         }
     }
 }

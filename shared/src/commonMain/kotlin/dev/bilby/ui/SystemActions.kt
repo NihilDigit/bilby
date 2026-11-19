@@ -44,9 +44,6 @@ interface SystemActions {
      * 保存成功返回 true,失败返回 false,用户取消返回 null。
      */
     suspend fun saveImage(url: String): Boolean? = null
-
-    /** 显示轻量原生或窗口级短提示，不打断当前操作或抢夺焦点。 */
-    fun showToast(message: String) {}
 }
 
 /**

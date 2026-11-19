@@ -8,12 +8,12 @@ import dev.bilby.data.FollowOrder
 import dev.bilby.data.FollowRepository
 import dev.bilby.data.HistoryRepository
 import dev.bilby.data.AppearancePrefs
-import dev.bilby.data.MINUTES_PER_DAY
 import dev.bilby.data.NightModePrefs
+import dev.bilby.data.ScheduleRule
 import dev.bilby.data.StartTab
 import dev.bilby.data.ThemeMode
 import dev.bilby.data.UpBrief
-import dev.bilby.data.WhitelistedUp
+import dev.bilby.data.computeNextNightEndEpochMillis
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.Stable
 import androidx.lifecycle.ViewModel
@@ -518,30 +518,76 @@ class SettingsViewModel(
         persist { settings.setNightModeEnabled(enabled) }
     }
 
-    fun setNightModeSchedule(startMinute: Int, endMinute: Int) {
-        val start = startMinute.coerceIn(0, MINUTES_PER_DAY - 1)
-        val end = endMinute.coerceIn(0, MINUTES_PER_DAY - 1)
-        _state.update {
-            it.copy(nightMode = it.nightMode.copy(startMinuteOfDay = start, endMinuteOfDay = end))
-        }
-        persist { settings.setNightModeSchedule(start, end) }
-    }
-
-    fun setNightModeAllowedUps(ups: List<WhitelistedUp>) {
-        val normalized = ups.distinctBy { it.mid }.map { it.copy(faceUrl = it.faceUrl.toHttpsUrl()) }
-        _state.update { it.copy(nightMode = it.nightMode.copy(allowedUps = normalized)) }
-        persist { settings.setNightModeAllowedUps(normalized) }
-    }
-
-    fun removeNightModeAllowedUp(mid: Long) {
-        _state.update {
-            it.copy(
-                nightMode = it.nightMode.copy(
-                    allowedUps = it.nightMode.allowedUps.filterNot { up -> up.mid == mid },
+    fun upsertScheduleRule(rule: ScheduleRule) {
+        val now = System.currentTimeMillis()
+        val normalized = rule.normalized().copy(
+            allowedUps = rule.allowedUps
+                .distinctBy { it.mid }
+                .map { it.copy(faceUrl = it.faceUrl.toHttpsUrl()) },
+        )
+        _state.update { state ->
+            val current = state.nightMode
+            val idx = current.rules.indexOfFirst { it.id == normalized.id }
+            val nextRules = if (idx >= 0) {
+                current.rules.toMutableList().apply { set(idx, normalized) }
+            } else {
+                current.rules + normalized
+            }
+            val nextManualUntil = if (current.manualUntilEpochMillis > now && current.manualRuleId == normalized.id) {
+                computeNextNightEndEpochMillis(normalized.endMinuteOfDay, now)
+            } else {
+                current.manualUntilEpochMillis
+            }
+            state.copy(
+                nightMode = current.copy(
+                    rules = nextRules,
+                    manualUntilEpochMillis = nextManualUntil,
                 ),
             )
         }
-        persist { settings.removeNightModeAllowedUp(mid) }
+        persist { settings.upsertScheduleRule(normalized, now) }
+    }
+
+    fun setScheduleRuleEnabled(ruleId: String, enabled: Boolean) {
+        _state.update { state ->
+            val current = state.nightMode
+            state.copy(
+                nightMode = current.copy(
+                    rules = current.rules.map { if (it.id == ruleId) it.copy(enabled = enabled) else it },
+                ),
+            )
+        }
+        persist { settings.setScheduleRuleEnabled(ruleId, enabled) }
+    }
+
+    fun deleteScheduleRule(ruleId: String) {
+        _state.update { state ->
+            val current = state.nightMode
+            val clearingManual = current.manualRuleId == ruleId
+            state.copy(
+                nightMode = current.copy(
+                    rules = current.rules.filterNot { it.id == ruleId },
+                    manualRuleId = if (clearingManual) null else current.manualRuleId,
+                    manualUntilEpochMillis = if (clearingManual) 0L else current.manualUntilEpochMillis,
+                ),
+            )
+        }
+        persist { settings.deleteScheduleRule(ruleId) }
+    }
+
+    fun engageNightModeManually(ruleId: String) {
+        val now = System.currentTimeMillis()
+        val target = _state.value.nightMode.ruleById(ruleId) ?: return
+        _state.update { state ->
+            state.copy(
+                nightMode = state.nightMode.copy(
+                    manualRuleId = target.id,
+                    manualUntilEpochMillis = computeNextNightEndEpochMillis(target.endMinuteOfDay, now),
+                    overrideUntilEpochMillis = 0L,
+                ),
+            )
+        }
+        persist { settings.engageNightModeManually(target.id, now) }
     }
 
     fun clearNightModeOverride() {

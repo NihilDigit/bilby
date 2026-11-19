@@ -96,51 +96,6 @@ internal val BilbyDarkColors = darkColorScheme(
 )
 
 /**
- * 夜间静息模式的独立低唤醒深板岩色板。
- *
- * 与日间外观设置解耦:即便用户平时把主题固定在浅色,凌晨进入夜间模式时界面也始终沉入这套
- * 低明度、柔和暖石板蓝的暗房配色,避免高对比白底刺眼。
- */
-val NightSanctuaryColorScheme: ColorScheme = darkColorScheme(
-    primary = Color(0xFFB8C4E8),
-    onPrimary = Color(0xFF1E2B4A),
-    primaryContainer = Color(0xFF2B395C),
-    onPrimaryContainer = Color(0xFFDAE2FF),
-    inversePrimary = Color(0xFF4C5D82),
-    secondary = Color(0xFFB4BDD4),
-    onSecondary = Color(0xFF202636),
-    secondaryContainer = Color(0xFF252B3B),
-    onSecondaryContainer = Color(0xFFC8D0E4),
-    tertiary = Color(0xFFC8BCD8),
-    onTertiary = Color(0xFF30283E),
-    tertiaryContainer = Color(0xFF463E55),
-    onTertiaryContainer = Color(0xFFE5DAFF),
-    background = Color(0xFF0C0E14),
-    onBackground = Color(0xFFDCE1EE),
-    surface = Color(0xFF0C0E14),
-    onSurface = Color(0xFFDCE1EE),
-    surfaceVariant = Color(0xFF2E3444),
-    onSurfaceVariant = Color(0xFF98A0B4),
-    surfaceTint = Color(0xFFB8C4E8),
-    inverseSurface = Color(0xFFDCE1EE),
-    inverseOnSurface = Color(0xFF1F2432),
-    error = Color(0xFFFFB4AB),
-    onError = Color(0xFF690005),
-    errorContainer = Color(0xFF93000A),
-    onErrorContainer = Color(0xFFFFDAD6),
-    outline = Color(0xFF656D80),
-    outlineVariant = Color(0xFF2E3444),
-    scrim = Color(0xFF000000),
-    surfaceBright = Color(0xFF2E3547),
-    surfaceDim = Color(0xFF0C0E14),
-    surfaceContainerLowest = Color(0xFF07090D),
-    surfaceContainerLow = Color(0xFF11141C),
-    surfaceContainer = Color(0xFF161A24),
-    surfaceContainerHigh = Color(0xFF1F2432),
-    surfaceContainerHighest = Color(0xFF282F40),
-)
-
-/**
  * 不跟随主题、也不跟随动态取色的固定色。
  *
  * 判据只有一条:**这个颜色是画给机器看的,还是压在一张我们控制不了的图片上的**。

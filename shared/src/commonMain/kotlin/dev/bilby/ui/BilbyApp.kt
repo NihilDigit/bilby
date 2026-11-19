@@ -203,7 +203,6 @@ import dev.bilby.ui.comment.CommentUiState
 import dev.bilby.ui.comment.CommentViewModel
 import dev.bilby.data.FavFolderDetail
 import dev.bilby.data.LocalEmoteRepository
-import dev.bilby.data.NightModePrefs
 import dev.bilby.data.NightWindowStatus
 import dev.bilby.data.PlayerPrefs
 import dev.bilby.data.evaluateNightMode
@@ -294,6 +293,7 @@ import dev.bilby.ui.settings.PrivacySettingsPage
 import dev.bilby.ui.settings.SettingsScreen
 import dev.bilby.ui.settings.SettingsSection
 import dev.bilby.ui.settings.NightModeSettingsPage
+import dev.bilby.ui.settings.ScheduleRulePickerSheet
 import dev.bilby.ui.settings.SponsorCategoriesPage
 import dev.bilby.ui.settings.SettingsViewModel
 import dev.bilby.ui.night.NightModeScreen
@@ -307,7 +307,6 @@ import dev.bilby.ui.space.SpaceViewModel
 import dev.bilby.ui.theme.Motion
 import dev.bilby.ui.theme.Spacing
 import dev.bilby.ui.theme.rememberReducedMotion
-import dev.bilby.ui.theme.BilbyNightSanctuaryTheme
 import dev.bilby.ui.theme.BilbyTheme
 import dev.bilby.ui.theme.LocalIsDarkTheme
 import dev.bilby.ui.theme.tabular
@@ -475,8 +474,10 @@ private fun BilbyApp(
             }
         }
     }
-    val allowedMids = remember(nightPrefs.allowedUps) { nightPrefs.allowedMids }
+    val activeAllowedUps = (nightStatus as? NightWindowStatus.Active)?.allowedUps.orEmpty()
+    val allowedMids = remember(activeAllowedUps) { activeAllowedUps.mapTo(HashSet()) { it.mid } }
     var nightEngaged by remember { mutableStateOf(nightStatus is NightWindowStatus.Active) }
+    var showScheduleRulePicker by rememberSaveable { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
         // buvid 激活只需成功一次,失败被内部吞掉:没有设备身份只影响写接口,
@@ -624,15 +625,23 @@ private fun BilbyApp(
         pruneBackStackForNightMode(currentAllowedMids)
         pruneDraftQueueForNightMode()
         if (showNotice) {
-            system.showToast(nightEnteredNotice)
+            snackbarScope.launch { snackbarHostState.showSnackbar(nightEnteredNotice) }
         }
     }
 
-    val enterNightModeManually: () -> Unit = {
+    val engageManualRule: (String) -> Unit = { ruleId ->
         container.persistScope.launch {
-            container.settings.engageNightModeManually()
+            container.settings.engageNightModeManually(ruleId)
         }
         engageNightModeNow(showNotice = true)
+    }
+
+    val enterNightModeManually: () -> Unit = {
+        when (nightPrefs.rules.size) {
+            0 -> backStack.pushUnique(SettingsPage(SettingsSection.NightMode))
+            1 -> engageManualRule(nightPrefs.rules.first().id)
+            else -> showScheduleRulePicker = true
+        }
     }
 
     /**
@@ -1318,32 +1327,24 @@ private fun BilbyApp(
             entry<Home> {
                 CutoutSafe {
                     if (nightEngaged) {
-                        val currentNightStatus = nightStatus
-                        val isManualNight = when (currentNightStatus) {
-                            is NightWindowStatus.Active -> currentNightStatus.manual
-                            is NightWindowStatus.Overridden -> false
-                            NightWindowStatus.Inactive -> true
-                        }
-                        BilbyNightSanctuaryTheme {
-                            DesktopIslandFrame {
-                                NightModeHomeRoute(
-                                    container = container,
-                                    prefs = nightPrefs,
-                                    manual = isManualNight,
-                                    hasVideoPage = hasVideoPage,
-                                    onPlayDraftQueue = playDraftQueue,
-                                    onVideoClick = { bvid, context -> push(Video(bvid, context = context)) },
-                                    onOpenSpace = { push(Space(it)) },
-                                    onOpenOffline = { push(Offline) },
-                                    onOpenSettings = openSettings,
-                                    onTempExit = {
-                                        nightEngaged = false
-                                        container.persistScope.launch {
-                                            container.settings.exitNightModeTemporarily()
-                                        }
-                                    },
-                                )
-                            }
+                        val activeNightStatus = nightStatus as? NightWindowStatus.Active
+                        DesktopIslandFrame {
+                            NightModeHomeRoute(
+                                container = container,
+                                activeStatus = activeNightStatus,
+                                hasVideoPage = hasVideoPage,
+                                onPlayDraftQueue = playDraftQueue,
+                                onVideoClick = { bvid, context -> push(Video(bvid, context = context)) },
+                                onOpenSpace = { push(Space(it)) },
+                                onOpenOffline = { push(Offline) },
+                                onOpenSettings = openSettings,
+                                onTempExit = {
+                                    nightEngaged = false
+                                    container.persistScope.launch {
+                                        container.settings.exitNightModeTemporarily()
+                                    }
+                                },
+                            )
                         }
                     } else {
                         RootTabs(
@@ -1852,6 +1853,16 @@ private fun BilbyApp(
     }
     if (shortcutsOpen) {
         ShortcutsSheet(onDismiss = { shortcutsOpen = false })
+    }
+    if (showScheduleRulePicker) {
+        ScheduleRulePickerSheet(
+            rules = nightPrefs.rules,
+            onSelect = { rule ->
+                showScheduleRulePicker = false
+                engageManualRule(rule.id)
+            },
+            onDismiss = { showScheduleRulePicker = false },
+        )
     }
     }
     }
@@ -3271,9 +3282,10 @@ private fun SettingsPageRoute(
                 onLoadMoreFollowings = vm::loadMoreFollowings,
                 onSearchFollowings = vm::searchFollowings,
                 onEnabledChange = vm::setNightModeEnabled,
-                onScheduleChange = vm::setNightModeSchedule,
-                onAllowedUpsChange = vm::setNightModeAllowedUps,
-                onRemoveUp = vm::removeNightModeAllowedUp,
+                onUpsertRule = vm::upsertScheduleRule,
+                onRuleEnabledChange = vm::setScheduleRuleEnabled,
+                onDeleteRule = vm::deleteScheduleRule,
+                onEngageRuleManually = vm::engageNightModeManually,
                 onClearOverride = vm::clearNightModeOverride,
                 onBack = onBack,
             )
@@ -4213,8 +4225,7 @@ private fun FollowingsRoute(
 @Composable
 private fun NightModeHomeRoute(
     container: AppContainer,
-    prefs: NightModePrefs,
-    manual: Boolean,
+    activeStatus: NightWindowStatus.Active?,
     hasVideoPage: Boolean,
     onPlayDraftQueue: (String?) -> Unit,
     onVideoClick: (String, QueueContext) -> Unit,
@@ -4228,18 +4239,24 @@ private fun NightModeHomeRoute(
         factory = viewModelFactory {
             initializer {
                 NightModeViewModel(
-                    settings = container.settings,
                     spaceRepository = container.spaceRepository,
                     toViewRepository = container.toViewRepository,
                 )
             }
         },
     )
+    val activeRules = activeStatus?.activeRules.orEmpty()
+    val activeAllowedUps = activeStatus?.allowedUps.orEmpty()
+    val activeRuleName = activeRules.singleOrNull()?.name?.trim().orEmpty()
+    LaunchedEffect(activeAllowedUps, activeRuleName) {
+        vm.syncActiveContext(activeAllowedUps, activeRuleName)
+    }
     val state by vm.state.collectAsStateWithLifecycle()
     NightModeScreen(
-        prefs = prefs,
+        activeRules = activeRules,
+        windowEndEpochMillis = activeStatus?.window?.endEpochMillis,
         state = state,
-        manual = manual,
+        manual = activeStatus?.manual ?: true,
         onSelectUp = vm::selectUp,
         onLoadMore = vm::loadMore,
         onRetry = vm::retry,

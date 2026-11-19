@@ -56,12 +56,13 @@ sealed interface QueueContext {
         val upName: String = "",
     ) : QueueContext
 
-    /** 夜间模式的白名单投稿列表:全部白名单按发布时间归并,或选定某一位白名单 UP 主。 */
+    /** 定时白名单的投稿列表:全部白名单按发布时间归并,或选定某一位白名单 UP 主。 */
     @Serializable
     data class NightMode(
         val ups: List<WhitelistedUp>,
         val selectedMid: Long? = null,
         val anchorPage: Int = 1,
+        val ruleName: String = "",
     ) : QueueContext
 
     /** 收藏夹内容,带着当时的排序与夹内搜索词,理由同 [UpArchive]。 */

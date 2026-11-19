@@ -25,10 +25,10 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Bedtime
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.LockOpen
 import androidx.compose.material.icons.outlined.Lock
+import androidx.compose.material.icons.outlined.Schedule
 import androidx.compose.material.icons.outlined.TouchApp
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.Icon
@@ -542,7 +542,7 @@ private fun NightHoldDial(
             Icon(
                 imageVector = when {
                     completed -> Icons.Filled.LockOpen
-                    active -> Icons.Filled.Bedtime
+                    active -> Icons.Outlined.Schedule
                     else -> Icons.Outlined.Lock
                 },
                 contentDescription = null,

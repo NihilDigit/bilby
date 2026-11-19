@@ -22,8 +22,8 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.material.icons.automirrored.outlined.AltRoute
 import androidx.compose.material.icons.outlined.AccessTime
+import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.Api
-import androidx.compose.material.icons.outlined.Bedtime
 import androidx.compose.material.icons.outlined.Block
 import androidx.compose.material.icons.outlined.Campaign
 import androidx.compose.material.icons.outlined.Check
@@ -51,6 +51,7 @@ import androidx.compose.material.icons.outlined.Palette
 import androidx.compose.material.icons.outlined.Person
 import androidx.compose.material.icons.outlined.PersonAdd
 import androidx.compose.material.icons.outlined.PersonOff
+import androidx.compose.material.icons.outlined.PlayArrow
 import androidx.compose.material.icons.outlined.Preview
 import androidx.compose.material.icons.outlined.PushPin
 import androidx.compose.material.icons.outlined.Restore
@@ -75,14 +76,18 @@ import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.FilledTonalToggleButtonDefaults
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SegmentedListItem
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TimeInput
@@ -91,6 +96,7 @@ import androidx.compose.material3.TimePickerDialog
 import androidx.compose.material3.ToggleButton
 import androidx.compose.material3.ToggleButtonDefaults
 import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.material3.rememberTimePickerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -111,15 +117,24 @@ import dev.bilby.resources.*
 import dev.bilby.ui.navigationBarsBottom
 import dev.bilby.ui.padScaffoldExceptBottom
 import dev.bilby.data.CodecPreference
+import dev.bilby.data.DEFAULT_NIGHT_END_MINUTE
+import dev.bilby.data.DEFAULT_NIGHT_START_MINUTE
 import dev.bilby.data.LlmConfig
 import dev.bilby.data.MINUTES_PER_DAY
+import dev.bilby.data.NightModePrefs
 import dev.bilby.data.NightWindowStatus
 import dev.bilby.data.PlayEndMode
+import dev.bilby.data.ScheduleRule
 import dev.bilby.data.SettingsStore
 import dev.bilby.data.SponsorBlockPrefs
 import dev.bilby.data.WhitelistedUp
+import dev.bilby.data.computeNextNightEndEpochMillis
 import dev.bilby.data.evaluateNightMode
 import dev.bilby.data.formatMinuteOfDay
+import dev.bilby.data.formatNightRange
+import dev.bilby.data.relaxesActiveRestriction
+import dev.bilby.ui.components.MetaSeparator
+import java.util.UUID
 import dev.bilby.api.toHttpsUrl
 import dev.bilby.ui.update.UpdateDialog
 import dev.bilby.update.AppUpdateService
@@ -1334,16 +1349,17 @@ private val AboutBadgeSize = 48.dp
 private enum class TimeEditTarget { Start, End }
 
 private sealed interface PendingNightRestrictionAction {
-    data object Disable : PendingNightRestrictionAction
-    data class UpdateSchedule(val startMinute: Int, val endMinute: Int) : PendingNightRestrictionAction
-    data class UpdateAllowedUps(val ups: List<WhitelistedUp>) : PendingNightRestrictionAction
+    data object DisableMaster : PendingNightRestrictionAction
+    data class SetRuleEnabled(val ruleId: String, val enabled: Boolean) : PendingNightRestrictionAction
+    data class UpsertRule(val rule: ScheduleRule) : PendingNightRestrictionAction
+    data class DeleteRule(val ruleId: String) : PendingNightRestrictionAction
 }
 
 /**
- * 夜间模式设置页：开关、生效时段（24h 表盘/键盘切换）、临时退出恢复、允许访问的 UP 主白名单。
+ * 定时白名单设置页：总开关、恢复当前时段/立即进入、多时段规则列表与规则编辑器。
  *
- * 在夜间模式生效中尝试关闭开关、缩窄当前生效时段或新增 UP 主时，需先完成一次 30 秒长按确认
- * （同一次页面停留期间解锁一次即可；移除 UP 主始终即时生效）。
+ * 仅拦截「放宽当前生效限制」的操作（生效中关总开关、关闭/删除/缩短当前生效规则、
+ * 向当前生效非空规则加 UP 主）；编辑未生效规则或新建规则无需长按确认。
  */
 @Composable
 fun NightModeSettingsPage(
@@ -1353,28 +1369,47 @@ fun NightModeSettingsPage(
     onLoadMoreFollowings: () -> Unit,
     onSearchFollowings: (String) -> Unit,
     onEnabledChange: (Boolean) -> Unit,
-    onScheduleChange: (Int, Int) -> Unit,
-    onAllowedUpsChange: (List<WhitelistedUp>) -> Unit,
-    onRemoveUp: (Long) -> Unit,
+    onUpsertRule: (ScheduleRule) -> Unit,
+    onRuleEnabledChange: (String, Boolean) -> Unit,
+    onDeleteRule: (String) -> Unit,
+    onEngageRuleManually: (String) -> Unit,
     onClearOverride: () -> Unit,
     onBack: (() -> Unit)?,
 ) {
     val prefs = state.nightMode
     var unlocked by rememberSaveable { mutableStateOf(false) }
-    var editingTimeTarget by rememberSaveable { mutableStateOf<TimeEditTarget?>(null) }
-    var showUpPicker by rememberSaveable { mutableStateOf(false) }
+    var nowMillis by remember { mutableLongStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(prefs) {
+        nowMillis = System.currentTimeMillis()
+        if (!prefs.enabled && prefs.manualUntilEpochMillis <= 0L) return@LaunchedEffect
+        while (true) {
+            delay(15_000L)
+            nowMillis = System.currentTimeMillis()
+        }
+    }
+
+    val status = evaluateNightMode(prefs, nowMillis)
+    val activeRuleIds = remember(status) {
+        (status as? NightWindowStatus.Active)?.activeRules?.mapTo(HashSet()) { it.id }.orEmpty()
+    }
+
+    var editingRule by remember { mutableStateOf<ScheduleRule?>(null) }
+    var editingIsNew by rememberSaveable { mutableStateOf(false) }
+    var showRulePicker by rememberSaveable { mutableStateOf(false) }
     var pendingAction by remember { mutableStateOf<PendingNightRestrictionAction?>(null) }
 
     fun executeAction(action: PendingNightRestrictionAction) {
         when (action) {
-            PendingNightRestrictionAction.Disable -> onEnabledChange(false)
-            is PendingNightRestrictionAction.UpdateSchedule -> onScheduleChange(action.startMinute, action.endMinute)
-            is PendingNightRestrictionAction.UpdateAllowedUps -> onAllowedUpsChange(action.ups)
+            PendingNightRestrictionAction.DisableMaster -> onEnabledChange(false)
+            is PendingNightRestrictionAction.SetRuleEnabled -> onRuleEnabledChange(action.ruleId, action.enabled)
+            is PendingNightRestrictionAction.UpsertRule -> onUpsertRule(action.rule)
+            is PendingNightRestrictionAction.DeleteRule -> onDeleteRule(action.ruleId)
         }
     }
 
-    fun runOrGate(action: PendingNightRestrictionAction, shouldGate: Boolean) {
-        if (shouldGate && !unlocked && evaluateNightMode(prefs, System.currentTimeMillis()) is NightWindowStatus.Active) {
+    fun runOrGate(action: PendingNightRestrictionAction, nextPrefs: NightModePrefs) {
+        val now = System.currentTimeMillis()
+        if (!unlocked && relaxesActiveRestriction(prefs, nextPrefs, now)) {
             pendingAction = action
         } else {
             executeAction(action)
@@ -1384,117 +1419,129 @@ fun NightModeSettingsPage(
     SettingsSubPage(stringResource(Res.string.settings_section_night_mode), onBack, state.loaded) {
         NightModeToggleGroup(
             prefs = prefs,
+            status = status,
             onEnabledChange = { enabled ->
                 if (enabled) {
                     onEnabledChange(true)
                 } else {
-                    runOrGate(PendingNightRestrictionAction.Disable, shouldGate = true)
+                    runOrGate(
+                        action = PendingNightRestrictionAction.DisableMaster,
+                        nextPrefs = prefs.copy(enabled = false, overrideUntilEpochMillis = 0L),
+                    )
                 }
             },
             onClearOverride = onClearOverride,
+            onEnterNow = {
+                when (prefs.rules.size) {
+                    0 -> Unit
+                    1 -> onEngageRuleManually(prefs.rules.first().id)
+                    else -> showRulePicker = true
+                }
+            },
         )
         SettingsGroup(title = stringResource(Res.string.night_mode_schedule_group)) {
-            row { position ->
-                SettingRow(
-                    position = position,
-                    icon = Icons.Outlined.Schedule,
-                    title = stringResource(Res.string.night_mode_start_time),
-                    value = formatMinuteOfDay(prefs.startMinuteOfDay),
-                    valueAtEnd = true,
-                    onClick = { editingTimeTarget = TimeEditTarget.Start },
-                )
-            }
-            row { position ->
-                SettingRow(
-                    position = position,
-                    icon = Icons.Outlined.AccessTime,
-                    title = stringResource(Res.string.night_mode_end_time),
-                    value = formatMinuteOfDay(prefs.endMinuteOfDay),
-                    valueAtEnd = true,
-                    onClick = { editingTimeTarget = TimeEditTarget.End },
-                )
-            }
-        }
-        SettingsGroup(title = stringResource(Res.string.night_mode_allowed_ups)) {
-            row { position ->
-                SettingRow(
-                    position = position,
-                    icon = Icons.Outlined.PersonAdd,
-                    title = stringResource(Res.string.night_mode_add_up),
-                    onClick = { showUpPicker = true },
-                )
-            }
-            prefs.allowedUps.forEach { up ->
+            prefs.rules.forEach { rule ->
                 row { position ->
-                    AllowedUpRow(
+                    ScheduleRuleRow(
                         position = position,
-                        up = up,
-                        onRemove = { onRemoveUp(up.mid) },
+                        rule = rule,
+                        active = rule.id in activeRuleIds,
+                        onClick = {
+                            editingRule = rule
+                            editingIsNew = false
+                        },
+                        onEnabledChange = { nextEnabled ->
+                            if (nextEnabled) {
+                                onRuleEnabledChange(rule.id, true)
+                            } else {
+                                val nextPrefs = prefs.copy(
+                                    rules = prefs.rules.map { if (it.id == rule.id) it.copy(enabled = false) else it },
+                                )
+                                runOrGate(
+                                    action = PendingNightRestrictionAction.SetRuleEnabled(rule.id, false),
+                                    nextPrefs = nextPrefs,
+                                )
+                            }
+                        },
                     )
                 }
             }
-        }
-    }
-
-    editingTimeTarget?.let { target ->
-        key(target) {
-            val initialMinute = when (target) {
-                TimeEditTarget.Start -> prefs.startMinuteOfDay
-                TimeEditTarget.End -> prefs.endMinuteOfDay
-            }
-            val dialogTitle = stringResource(
-                when (target) {
-                    TimeEditTarget.Start -> Res.string.night_mode_start_time
-                    TimeEditTarget.End -> Res.string.night_mode_end_time
-                },
-            )
-            NightTimePickerDialog(
-                title = dialogTitle,
-                initialMinuteOfDay = initialMinute,
-                onConfirm = { pickedMinute ->
-                    val nextStart = if (target == TimeEditTarget.Start) pickedMinute else prefs.startMinuteOfDay
-                    val nextEnd = if (target == TimeEditTarget.End) pickedMinute else prefs.endMinuteOfDay
-                    editingTimeTarget = null
-                    if (nextStart == prefs.startMinuteOfDay && nextEnd == prefs.endMinuteOfDay) return@NightTimePickerDialog
-                    val now = System.currentTimeMillis()
-                    val currentStatus = evaluateNightMode(prefs, now)
-                    val nextStatus = evaluateNightMode(
-                        prefs.copy(startMinuteOfDay = nextStart, endMinuteOfDay = nextEnd),
-                        now,
-                    )
-                    val shrinksActiveWindow = currentStatus is NightWindowStatus.Active && (
-                        nextStatus !is NightWindowStatus.Active ||
-                            nextStatus.window.endEpochMillis < currentStatus.window.endEpochMillis
+            row { position ->
+                SettingRow(
+                    position = position,
+                    icon = Icons.Outlined.Add,
+                    title = stringResource(Res.string.night_mode_add_rule),
+                    onClick = {
+                        editingRule = ScheduleRule(
+                            id = UUID.randomUUID().toString(),
+                            name = "",
+                            enabled = true,
+                            startMinuteOfDay = DEFAULT_NIGHT_START_MINUTE,
+                            endMinuteOfDay = DEFAULT_NIGHT_END_MINUTE,
                         )
-                    runOrGate(
-                        PendingNightRestrictionAction.UpdateSchedule(nextStart, nextEnd),
-                        shouldGate = shrinksActiveWindow,
-                    )
+                        editingIsNew = true
+                    },
+                )
+            }
+        }
+    }
+
+    editingRule?.let { initial ->
+        key(initial.id, editingIsNew) {
+            ScheduleRuleEditorSheet(
+                initialRule = initial,
+                isNew = editingIsNew,
+                followPicker = followPicker,
+                onLoadFollowings = onLoadFollowings,
+                onLoadMoreFollowings = onLoadMoreFollowings,
+                onSearchFollowings = onSearchFollowings,
+                onSave = { savedRule ->
+                    editingRule = null
+                    val normalized = savedRule.normalized()
+                    if (editingIsNew) {
+                        onUpsertRule(normalized)
+                    } else {
+                        val nextRules = prefs.rules.map { if (it.id == normalized.id) normalized else it }
+                        val nextManualUntil = if (prefs.manualRuleId == normalized.id && prefs.manualUntilEpochMillis > System.currentTimeMillis()) {
+                            computeNextNightEndEpochMillis(normalized.endMinuteOfDay, System.currentTimeMillis())
+                        } else {
+                            prefs.manualUntilEpochMillis
+                        }
+                        runOrGate(
+                            action = PendingNightRestrictionAction.UpsertRule(normalized),
+                            nextPrefs = prefs.copy(rules = nextRules, manualUntilEpochMillis = nextManualUntil),
+                        )
+                    }
                 },
-                onDismiss = { editingTimeTarget = null },
+                onDelete = if (editingIsNew) null else {
+                    {
+                        val targetId = initial.id
+                        editingRule = null
+                        val clearingManual = prefs.manualRuleId == targetId
+                        val nextPrefs = prefs.copy(
+                            rules = prefs.rules.filterNot { it.id == targetId },
+                            manualRuleId = if (clearingManual) null else prefs.manualRuleId,
+                            manualUntilEpochMillis = if (clearingManual) 0L else prefs.manualUntilEpochMillis,
+                        )
+                        runOrGate(
+                            action = PendingNightRestrictionAction.DeleteRule(targetId),
+                            nextPrefs = nextPrefs,
+                        )
+                    }
+                },
+                onDismiss = { editingRule = null },
             )
         }
     }
 
-    if (showUpPicker) {
-        NightFollowPickerSheet(
-            followPicker = followPicker,
-            initialAllowed = prefs.allowedUps,
-            onLoadFollowings = onLoadFollowings,
-            onLoadMoreFollowings = onLoadMoreFollowings,
-            onSearchFollowings = onSearchFollowings,
-            onConfirm = { selectedUps ->
-                showUpPicker = false
-                val changed = selectedUps.map { it.mid } != prefs.allowedUps.map { it.mid }
-                if (!changed) return@NightFollowPickerSheet
-                val currentMids = prefs.allowedMids
-                val addedAny = selectedUps.any { it.mid !in currentMids }
-                runOrGate(
-                    PendingNightRestrictionAction.UpdateAllowedUps(selectedUps),
-                    shouldGate = addedAny && prefs.allowedUps.isNotEmpty(),
-                )
+    if (showRulePicker) {
+        ScheduleRulePickerSheet(
+            rules = prefs.rules,
+            onSelect = { rule ->
+                showRulePicker = false
+                onEngageRuleManually(rule.id)
             },
-            onDismiss = { showUpPicker = false },
+            onDismiss = { showRulePicker = false },
         )
     }
 
@@ -1513,40 +1560,427 @@ fun NightModeSettingsPage(
 
 @Composable
 private fun NightModeToggleGroup(
-    prefs: dev.bilby.data.NightModePrefs,
+    prefs: NightModePrefs,
+    status: NightWindowStatus,
     onEnabledChange: (Boolean) -> Unit,
     onClearOverride: () -> Unit,
+    onEnterNow: () -> Unit,
 ) {
-    var nowMillis by remember { mutableLongStateOf(System.currentTimeMillis()) }
-    LaunchedEffect(prefs) {
-        nowMillis = System.currentTimeMillis()
-        if (!prefs.enabled && prefs.manualUntilEpochMillis <= 0L) return@LaunchedEffect
-        while (true) {
-            delay(15_000L)
-            nowMillis = System.currentTimeMillis()
-        }
-    }
-    val status = evaluateNightMode(prefs, nowMillis)
     SettingsGroup {
         row { position ->
             ToggleSettingRow(
                 position = position,
-                icon = Icons.Outlined.Bedtime,
+                icon = Icons.Outlined.Schedule,
                 title = stringResource(Res.string.night_mode_enable),
                 subtitle = stringResource(Res.string.night_mode_enable_subtitle),
                 checked = prefs.enabled,
                 onCheckedChange = onEnabledChange,
             )
         }
-        if (status is NightWindowStatus.Overridden) {
-            row { position ->
+        when (status) {
+            is NightWindowStatus.Overridden -> {
+                row { position ->
+                    SettingRow(
+                        position = position,
+                        icon = Icons.Outlined.Restore,
+                        title = stringResource(Res.string.night_mode_resume_now),
+                        onClick = onClearOverride,
+                    )
+                }
+            }
+
+            NightWindowStatus.Inactive -> if (prefs.rules.isNotEmpty()) {
+                row { position ->
+                    SettingRow(
+                        position = position,
+                        icon = Icons.Outlined.PlayArrow,
+                        title = stringResource(Res.string.night_mode_enter_action),
+                        onClick = onEnterNow,
+                    )
+                }
+            }
+
+            is NightWindowStatus.Active -> Unit
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
+@Composable
+private fun ScheduleRuleRow(
+    position: RowPosition,
+    rule: ScheduleRule,
+    active: Boolean,
+    onClick: () -> Unit,
+    onEnabledChange: (Boolean) -> Unit,
+) {
+    val colors = MaterialTheme.colorScheme
+    val range = formatNightRange(rule.startMinuteOfDay, rule.endMinuteOfDay)
+    val daysSummary = formatDaysSummary(rule.daysOfWeek)
+    val upCountLabel = stringResource(Res.string.night_mode_rule_up_count, rule.allowedUps.size)
+    val activeBadge = if (active) stringResource(Res.string.night_mode_rule_active_badge) else null
+    val titleText = rule.name.ifBlank { range }
+    val subtitleParts = buildList {
+        if (activeBadge != null) add(activeBadge)
+        if (rule.name.isNotBlank()) add(range)
+        add(daysSummary)
+        add(upCountLabel)
+    }
+    SegmentedListItem(
+        onClick = onClick,
+        shapes = ListItemDefaults.segmentedShapes(index = position.index, count = position.count),
+        colors = ListItemDefaults.segmentedColors(
+            containerColor = colors.surfaceContainer,
+            selectedContainerColor = colors.surfaceContainer,
+        ),
+        supportingContent = {
+            Text(
+                text = subtitleParts.joinToString(MetaSeparator),
+                style = MaterialTheme.typography.bodySmall.tabular,
+                color = if (active) colors.primary else colors.onSurfaceVariant,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+        },
+        trailingContent = {
+            Switch(
+                checked = rule.enabled,
+                onCheckedChange = onEnabledChange,
+            )
+        },
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Text(
+            text = titleText,
+            style = MaterialTheme.typography.bodyLarge.tabular,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+    }
+}
+
+@OptIn(ExperimentalMaterial3ExpressiveApi::class, ExperimentalLayoutApi::class)
+@Composable
+private fun ScheduleRuleEditorSheet(
+    initialRule: ScheduleRule,
+    isNew: Boolean,
+    followPicker: NightFollowPickerState,
+    onLoadFollowings: () -> Unit,
+    onLoadMoreFollowings: () -> Unit,
+    onSearchFollowings: (String) -> Unit,
+    onSave: (ScheduleRule) -> Unit,
+    onDelete: (() -> Unit)?,
+    onDismiss: () -> Unit,
+) {
+    var name by rememberSaveable { mutableStateOf(initialRule.name) }
+    var startMinute by rememberSaveable { mutableIntStateOf(initialRule.startMinuteOfDay) }
+    var endMinute by rememberSaveable { mutableIntStateOf(initialRule.endMinuteOfDay) }
+    var daysOfWeek by remember { mutableStateOf(initialRule.daysOfWeek) }
+    var allowedUps by remember { mutableStateOf(initialRule.allowedUps) }
+    var editingTimeTarget by rememberSaveable { mutableStateOf<TimeEditTarget?>(null) }
+    var showUpPicker by rememberSaveable { mutableStateOf(false) }
+
+    val colors = MaterialTheme.colorScheme
+    val dayShortLabels = listOf(
+        1 to stringResource(Res.string.night_mode_day_short_mon),
+        2 to stringResource(Res.string.night_mode_day_short_tue),
+        3 to stringResource(Res.string.night_mode_day_short_wed),
+        4 to stringResource(Res.string.night_mode_day_short_thu),
+        5 to stringResource(Res.string.night_mode_day_short_fri),
+        6 to stringResource(Res.string.night_mode_day_short_sat),
+        7 to stringResource(Res.string.night_mode_day_short_sun),
+    )
+
+    PaneSheet(
+        onDismissRequest = onDismiss,
+        title = stringResource(if (isNew) Res.string.night_mode_add_rule else Res.string.night_mode_edit_rule),
+        skipPartiallyExpanded = true,
+        footer = {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
+            ) {
+                if (onDelete != null) {
+                    TextButton(
+                        onClick = onDelete,
+                        colors = ButtonDefaults.textButtonColors(contentColor = colors.error),
+                    ) {
+                        Text(stringResource(Res.string.night_mode_rule_delete))
+                    }
+                }
+                Spacer(Modifier.weight(1f))
+                TextButton(onClick = onDismiss) {
+                    Text(stringResource(Res.string.action_cancel))
+                }
+                Button(
+                    onClick = {
+                        onSave(
+                            initialRule.copy(
+                                name = name,
+                                startMinuteOfDay = startMinute,
+                                endMinuteOfDay = endMinute,
+                                daysOfWeek = daysOfWeek,
+                                allowedUps = allowedUps,
+                            ),
+                        )
+                    },
+                ) {
+                    Text(stringResource(Res.string.night_mode_rule_save))
+                }
+            }
+        },
+    ) {
+        Column(
+            verticalArrangement = Arrangement.spacedBy(Spacing.Comfortable),
+            modifier = Modifier
+                .fillMaxWidth()
+                .weight(1f, fill = false)
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = Spacing.Comfortable, vertical = Spacing.Tight),
+        ) {
+            OutlinedTextField(
+                value = name,
+                onValueChange = { if (it.length <= 24) name = it },
+                singleLine = true,
+                label = { Text(stringResource(Res.string.night_mode_rule_name_label)) },
+                placeholder = { Text(stringResource(Res.string.night_mode_rule_name_hint)) },
+                modifier = Modifier.fillMaxWidth(),
+            )
+
+            Column(verticalArrangement = Arrangement.spacedBy(ListItemDefaults.SegmentedGap)) {
                 SettingRow(
-                    position = position,
-                    icon = Icons.Outlined.Restore,
-                    title = stringResource(Res.string.night_mode_resume_now),
-                    onClick = onClearOverride,
+                    position = RowPosition(0, 2),
+                    icon = Icons.Outlined.Schedule,
+                    title = stringResource(Res.string.night_mode_start_time),
+                    value = formatMinuteOfDay(startMinute),
+                    valueAtEnd = true,
+                    onClick = { editingTimeTarget = TimeEditTarget.Start },
+                )
+                SettingRow(
+                    position = RowPosition(1, 2),
+                    icon = Icons.Outlined.AccessTime,
+                    title = stringResource(Res.string.night_mode_end_time),
+                    value = formatMinuteOfDay(endMinute),
+                    valueAtEnd = true,
+                    onClick = { editingTimeTarget = TimeEditTarget.End },
                 )
             }
+
+            Column(verticalArrangement = Arrangement.spacedBy(Spacing.Tight)) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text(
+                        text = stringResource(Res.string.night_mode_rule_days),
+                        style = MaterialTheme.typography.titleSmallEmphasized,
+                        color = colors.onSurface,
+                    )
+                    Text(
+                        text = formatDaysSummary(daysOfWeek),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = colors.onSurfaceVariant,
+                    )
+                }
+                val chipColors = FilterChipDefaults.filterChipColors(
+                    containerColor = colors.surfaceContainer,
+                    labelColor = colors.onSurfaceVariant,
+                    selectedContainerColor = colors.secondaryContainer,
+                    selectedLabelColor = colors.onSecondaryContainer,
+                )
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
+                    verticalArrangement = Arrangement.spacedBy(Spacing.Hair),
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    dayShortLabels.forEach { (isoDay, label) ->
+                        val selected = isoDay in daysOfWeek
+                        FilterChip(
+                            selected = selected,
+                            onClick = {
+                                val next = if (selected) daysOfWeek - isoDay else daysOfWeek + isoDay
+                                daysOfWeek = if (next.size == 7) emptySet() else next
+                            },
+                            label = { Text(label) },
+                            shape = CircleShape,
+                            border = null,
+                            colors = chipColors,
+                            modifier = Modifier.minimumInteractiveComponentSize(),
+                        )
+                    }
+                }
+            }
+
+            Column(verticalArrangement = Arrangement.spacedBy(Spacing.Tight)) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text(
+                        text = stringResource(Res.string.night_mode_allowed_ups),
+                        style = MaterialTheme.typography.titleSmallEmphasized,
+                        color = colors.onSurface,
+                    )
+                    TextButton(onClick = { showUpPicker = true }) {
+                        Icon(
+                            imageVector = Icons.Outlined.PersonAdd,
+                            contentDescription = null,
+                            modifier = Modifier.size(Dimens.IconInline),
+                        )
+                        Spacer(Modifier.width(Spacing.Hair))
+                        Text(stringResource(Res.string.night_mode_add_up))
+                    }
+                }
+                if (allowedUps.isEmpty()) {
+                    Text(
+                        text = stringResource(Res.string.night_mode_empty_ups),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = colors.onSurfaceVariant,
+                        modifier = Modifier.padding(vertical = Spacing.Hair),
+                    )
+                } else {
+                    Column(verticalArrangement = Arrangement.spacedBy(ListItemDefaults.SegmentedGap)) {
+                        allowedUps.forEachIndexed { index, up ->
+                            AllowedUpRow(
+                                position = RowPosition(index, allowedUps.size),
+                                up = up,
+                                onRemove = { allowedUps = allowedUps.filterNot { it.mid == up.mid } },
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    editingTimeTarget?.let { target ->
+        key(target) {
+            val initialMinute = when (target) {
+                TimeEditTarget.Start -> startMinute
+                TimeEditTarget.End -> endMinute
+            }
+            val dialogTitle = stringResource(
+                when (target) {
+                    TimeEditTarget.Start -> Res.string.night_mode_start_time
+                    TimeEditTarget.End -> Res.string.night_mode_end_time
+                },
+            )
+            NightTimePickerDialog(
+                title = dialogTitle,
+                initialMinuteOfDay = initialMinute,
+                onConfirm = { pickedMinute ->
+                    when (target) {
+                        TimeEditTarget.Start -> startMinute = pickedMinute
+                        TimeEditTarget.End -> endMinute = pickedMinute
+                    }
+                    editingTimeTarget = null
+                },
+                onDismiss = { editingTimeTarget = null },
+            )
+        }
+    }
+
+    if (showUpPicker) {
+        NightFollowPickerSheet(
+            followPicker = followPicker,
+            initialAllowed = allowedUps,
+            onLoadFollowings = onLoadFollowings,
+            onLoadMoreFollowings = onLoadMoreFollowings,
+            onSearchFollowings = onSearchFollowings,
+            onConfirm = { selectedUps ->
+                allowedUps = selectedUps
+                showUpPicker = false
+            },
+            onDismiss = { showUpPicker = false },
+        )
+    }
+}
+
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
+@Composable
+fun ScheduleRulePickerSheet(
+    rules: List<ScheduleRule>,
+    onSelect: (ScheduleRule) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val colors = MaterialTheme.colorScheme
+    PaneSheet(
+        onDismissRequest = onDismiss,
+        title = stringResource(Res.string.night_mode_pick_rule_title),
+        skipPartiallyExpanded = true,
+    ) {
+        LazyColumn(
+            contentPadding = PaddingValues(horizontal = Spacing.Comfortable, vertical = Spacing.Tight),
+            verticalArrangement = Arrangement.spacedBy(ListItemDefaults.SegmentedGap),
+            modifier = Modifier.fillMaxWidth().weight(1f, fill = false),
+        ) {
+            itemsIndexed(rules, key = { _, rule -> rule.id }) { index, rule ->
+                val range = formatNightRange(rule.startMinuteOfDay, rule.endMinuteOfDay)
+                val upCount = stringResource(Res.string.night_mode_rule_up_count, rule.allowedUps.size)
+                val title = rule.name.ifBlank { range }
+                val subtitle = buildList {
+                    if (rule.name.isNotBlank()) add(range)
+                    add(upCount)
+                }.joinToString(MetaSeparator)
+                SegmentedListItem(
+                    onClick = { onSelect(rule) },
+                    shapes = ListItemDefaults.segmentedShapes(index = index, count = rules.size),
+                    colors = ListItemDefaults.segmentedColors(
+                        containerColor = colors.surfaceContainer,
+                        selectedContainerColor = colors.surfaceContainer,
+                    ),
+                    leadingContent = {
+                        Icon(
+                            imageVector = Icons.Outlined.Schedule,
+                            contentDescription = null,
+                            tint = colors.onSurfaceVariant,
+                        )
+                    },
+                    supportingContent = {
+                        Text(
+                            text = subtitle,
+                            style = MaterialTheme.typography.bodySmall.tabular,
+                            color = colors.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text(
+                        text = title,
+                        style = MaterialTheme.typography.bodyLarge.tabular,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun formatDaysSummary(daysOfWeek: Set<Int>): String {
+    val normalized = daysOfWeek.filter { it in 1..7 }.toSet()
+    return when {
+        normalized.isEmpty() || normalized.size == 7 -> stringResource(Res.string.night_mode_days_daily)
+        normalized == setOf(1, 2, 3, 4, 5) -> stringResource(Res.string.night_mode_days_weekdays)
+        normalized == setOf(6, 7) -> stringResource(Res.string.night_mode_days_weekends)
+        else -> {
+            val sep = stringResource(Res.string.night_mode_day_sep)
+            val labels = mapOf(
+                1 to stringResource(Res.string.night_mode_day_mon),
+                2 to stringResource(Res.string.night_mode_day_tue),
+                3 to stringResource(Res.string.night_mode_day_wed),
+                4 to stringResource(Res.string.night_mode_day_thu),
+                5 to stringResource(Res.string.night_mode_day_fri),
+                6 to stringResource(Res.string.night_mode_day_sat),
+                7 to stringResource(Res.string.night_mode_day_sun),
+            )
+            normalized.sorted().mapNotNull { labels[it] }.joinToString(sep)
         }
     }
 }

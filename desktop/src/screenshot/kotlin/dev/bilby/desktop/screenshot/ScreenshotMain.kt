@@ -31,7 +31,6 @@ import dev.bilby.data.StartTab
 import dev.bilby.data.ThemeMode
 import dev.bilby.desktop.AppMotionScale
 import dev.bilby.desktop.BilbyWindow
-import dev.bilby.desktop.DesktopToastOverlay
 import dev.bilby.desktop.PixelAlignedContentEffect
 import dev.bilby.desktop.WindowFrame
 import dev.bilby.desktop.appIcon
@@ -243,11 +242,6 @@ private fun runScreenshotHarness(config: ScreenshotConfig) {
                             ) {
                                 BilbyRoot(container, incomingLink, wrapTheme = false)
                             }
-                            DesktopToastOverlay(
-                                toastState = systemActions.toastState,
-                                onDismiss = systemActions::dismissToast,
-                                modifier = Modifier.align(Alignment.BottomCenter),
-                            )
                         }
                     }
                 }

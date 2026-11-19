@@ -5,10 +5,6 @@ import androidx.compose.ui.graphics.toComposeImageBitmap
 import dev.bilby.BiliLog
 import dev.bilby.api.BiliClient
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.withContext
 import org.jetbrains.skia.Image as SkiaImage
 import java.awt.Color
@@ -20,12 +16,6 @@ import java.awt.datatransfer.Transferable
 import java.awt.datatransfer.UnsupportedFlavorException
 import java.awt.image.BufferedImage
 import java.net.URI
-import java.util.concurrent.atomic.AtomicLong
-
-data class DesktopToastEvent(
-    val id: Long,
-    val message: String,
-)
 
 /**
  * 桌面上的 [SystemActions]。
@@ -37,21 +27,6 @@ class DesktopSystemActions(
     private val languageStore: DesktopLanguageStore,
     private val biliClient: BiliClient? = null,
 ) : SystemActions {
-    private val toastSeq = AtomicLong(0L)
-    private val _toastState = MutableStateFlow<DesktopToastEvent?>(null)
-    val toastState: StateFlow<DesktopToastEvent?> = _toastState.asStateFlow()
-
-    override fun showToast(message: String) {
-        if (message.isBlank()) return
-        _toastState.value = DesktopToastEvent(
-            id = toastSeq.incrementAndGet(),
-            message = message,
-        )
-    }
-
-    fun dismissToast(id: Long) {
-        _toastState.update { current -> if (current?.id == id) null else current }
-    }
     override fun shareVideo(bvid: String, title: String) = copy(title, "https://www.bilibili.com/video/$bvid")
     override fun shareLiveRoom(roomId: Long, title: String) = copy(title, "https://live.bilibili.com/$roomId")
     override fun shareSpace(mid: Long, name: String) = copy(name, "https://space.bilibili.com/$mid")

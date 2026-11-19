@@ -110,13 +110,14 @@ class QueueSourceRepository(
     }
 
     private suspend fun openNightMode(context: QueueContext.NightMode, bvid: String): OpenedQueue? {
+        val prefix = context.ruleName.ifBlank { getString(Res.string.settings_section_night_mode) }
         val selectedMid = context.selectedMid
         if (selectedMid == null) {
             if (context.ups.isEmpty()) return null
             return openFeed(
                 feed = NightMergeFeed(spaceRepository, context.ups),
                 bvid = bvid,
-                label = getString(Res.string.queue_source_night_all),
+                label = getString(Res.string.queue_source_night_all, prefix),
                 source = null,
             )
         }
@@ -128,16 +129,16 @@ class QueueSourceRepository(
                     hasMore = page * SpaceRepository.ARCHIVE_PAGE_SIZE < r.value.total,
                     total = r.value.total,
                 )
-                else -> null.also { BiliLog.w("队列:夜间模式拉取投稿第 $page 页失败 mid=$selectedMid") }
+                else -> null.also { BiliLog.w("队列:定时白名单拉取投稿第 $page 页失败 mid=$selectedMid") }
             }
         }
         val items = feed.open(bvid) ?: return null
         val upName = selectedUp?.name?.takeIf { it.isNotBlank() }
             ?: items.firstOrNull { it.upName.isNotBlank() }?.upName.orEmpty()
         val label = if (upName.isNotBlank()) {
-            getString(Res.string.queue_source_night_up, upName)
+            getString(Res.string.queue_source_night_up, prefix, upName)
         } else {
-            getString(Res.string.queue_source_night_all)
+            getString(Res.string.queue_source_night_all, prefix)
         }
         return OpenedQueue(items, label, source = null, feed = feed)
     }

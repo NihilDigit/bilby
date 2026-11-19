@@ -531,17 +531,54 @@ class SettingsStore(private val store: DataStore<Preferences>) {
         }
     }
 
-    /** 夜间模式设置、临时退出与手动开启截止时间戳，见 [NightModePrefs]。 */
-    val nightModePrefs: Flow<NightModePrefs> = store.data.map { p ->
-        NightModePrefs(
-            enabled = p[KEY_NIGHT_ENABLED] ?: false,
+    /** 定时白名单设置、临时退出与手动开启截止时间戳，见 [NightModePrefs]。 */
+    val nightModePrefs: Flow<NightModePrefs> = store.data.map { p -> readNightModePrefs(p) }
+
+    private fun readNightModePrefs(p: Preferences): NightModePrefs {
+        val enabled = p[KEY_NIGHT_ENABLED] ?: false
+        val overrideUntil = (p[KEY_NIGHT_OVERRIDE_UNTIL] ?: 0L).coerceAtLeast(0L)
+        val manualUntil = (p[KEY_NIGHT_MANUAL_UNTIL] ?: 0L).coerceAtLeast(0L)
+        val storedManualRuleId = p[KEY_SCHEDULE_MODE_MANUAL_RULE_ID]?.takeIf { it.isNotBlank() }
+
+        val rawRules = p[KEY_SCHEDULE_MODE_RULES]
+        if (rawRules != null) {
+            return NightModePrefs(
+                enabled = enabled,
+                rules = decodeScheduleRules(rawRules),
+                overrideUntilEpochMillis = overrideUntil,
+                manualRuleId = storedManualRuleId,
+                manualUntilEpochMillis = manualUntil,
+            )
+        }
+
+        val hasLegacy = p.contains(KEY_NIGHT_ENABLED) ||
+            p.contains(KEY_NIGHT_START_MINUTE) ||
+            p.contains(KEY_NIGHT_END_MINUTE) ||
+            p.contains(KEY_NIGHT_ALLOWED_UPS) ||
+            p.contains(KEY_NIGHT_OVERRIDE_UNTIL) ||
+            p.contains(KEY_NIGHT_MANUAL_UNTIL)
+
+        if (!hasLegacy) {
+            return NightModePrefs()
+        }
+
+        val migratedRule = ScheduleRule(
+            id = DEFAULT_SCHEDULE_RULE_ID,
+            name = DEFAULT_LEGACY_RULE_NAME,
+            enabled = true,
             startMinuteOfDay = (p[KEY_NIGHT_START_MINUTE] ?: DEFAULT_NIGHT_START_MINUTE)
                 .coerceIn(0, MINUTES_PER_DAY - 1),
             endMinuteOfDay = (p[KEY_NIGHT_END_MINUTE] ?: DEFAULT_NIGHT_END_MINUTE)
                 .coerceIn(0, MINUTES_PER_DAY - 1),
+            daysOfWeek = emptySet(),
             allowedUps = decodeNightUps(p[KEY_NIGHT_ALLOWED_UPS]),
-            overrideUntilEpochMillis = (p[KEY_NIGHT_OVERRIDE_UNTIL] ?: 0L).coerceAtLeast(0L),
-            manualUntilEpochMillis = (p[KEY_NIGHT_MANUAL_UNTIL] ?: 0L).coerceAtLeast(0L),
+        )
+        return NightModePrefs(
+            enabled = enabled,
+            rules = listOf(migratedRule),
+            overrideUntilEpochMillis = overrideUntil,
+            manualRuleId = storedManualRuleId ?: if (manualUntil > 0L) DEFAULT_SCHEDULE_RULE_ID else null,
+            manualUntilEpochMillis = manualUntil,
         )
     }
 
@@ -552,43 +589,47 @@ class SettingsStore(private val store: DataStore<Preferences>) {
         }
     }
 
-    suspend fun setNightModeSchedule(
-        startMinute: Int,
-        endMinute: Int,
+    suspend fun upsertScheduleRule(
+        rule: ScheduleRule,
         nowEpochMillis: Long = System.currentTimeMillis(),
     ) {
         store.edit { p ->
-            val clampedStart = startMinute.coerceIn(0, MINUTES_PER_DAY - 1)
-            val clampedEnd = endMinute.coerceIn(0, MINUTES_PER_DAY - 1)
-            p[KEY_NIGHT_START_MINUTE] = clampedStart
-            p[KEY_NIGHT_END_MINUTE] = clampedEnd
+            val current = readNightModePrefs(p)
+            val normalized = rule.normalized().copy(
+                allowedUps = rule.allowedUps
+                    .distinctBy { it.mid }
+                    .map { it.copy(faceUrl = it.faceUrl.toHttpsUrl()) },
+            )
+            val idx = current.rules.indexOfFirst { it.id == normalized.id }
+            val nextRules = if (idx >= 0) {
+                current.rules.toMutableList().apply { set(idx, normalized) }
+            } else {
+                current.rules + normalized
+            }
+            p[KEY_SCHEDULE_MODE_RULES] = encodeScheduleRules(nextRules)
             val manualUntil = p[KEY_NIGHT_MANUAL_UNTIL] ?: 0L
-            if (manualUntil > nowEpochMillis) {
-                p[KEY_NIGHT_MANUAL_UNTIL] = computeNextNightEndEpochMillis(clampedEnd, nowEpochMillis)
+            if (manualUntil > nowEpochMillis && current.manualRuleId == normalized.id) {
+                p[KEY_NIGHT_MANUAL_UNTIL] = computeNextNightEndEpochMillis(normalized.endMinuteOfDay, nowEpochMillis)
             }
         }
     }
 
-    suspend fun setNightModeAllowedUps(ups: List<WhitelistedUp>) {
+    suspend fun setScheduleRuleEnabled(ruleId: String, enabled: Boolean) {
         store.edit { p ->
-            val normalized = ups
-                .distinctBy { it.mid }
-                .map { it.copy(faceUrl = it.faceUrl.toHttpsUrl()) }
-            if (normalized.isEmpty()) {
-                p.remove(KEY_NIGHT_ALLOWED_UPS)
-            } else {
-                p[KEY_NIGHT_ALLOWED_UPS] = encodeNightUps(normalized)
-            }
+            val current = readNightModePrefs(p)
+            val nextRules = current.rules.map { if (it.id == ruleId) it.copy(enabled = enabled) else it }
+            p[KEY_SCHEDULE_MODE_RULES] = encodeScheduleRules(nextRules)
         }
     }
 
-    suspend fun removeNightModeAllowedUp(mid: Long) {
+    suspend fun deleteScheduleRule(ruleId: String) {
         store.edit { p ->
-            val remaining = decodeNightUps(p[KEY_NIGHT_ALLOWED_UPS]).filterNot { it.mid == mid }
-            if (remaining.isEmpty()) {
-                p.remove(KEY_NIGHT_ALLOWED_UPS)
-            } else {
-                p[KEY_NIGHT_ALLOWED_UPS] = encodeNightUps(remaining)
+            val current = readNightModePrefs(p)
+            val nextRules = current.rules.filterNot { it.id == ruleId }
+            p[KEY_SCHEDULE_MODE_RULES] = encodeScheduleRules(nextRules)
+            if (current.manualRuleId == ruleId) {
+                p[KEY_NIGHT_MANUAL_UNTIL] = 0L
+                p.remove(KEY_SCHEDULE_MODE_MANUAL_RULE_ID)
             }
         }
     }
@@ -597,31 +638,35 @@ class SettingsStore(private val store: DataStore<Preferences>) {
         store.edit { p ->
             val clamped = epochMillis.coerceAtLeast(0L)
             p[KEY_NIGHT_OVERRIDE_UNTIL] = clamped
-            if (clamped > 0L) p[KEY_NIGHT_MANUAL_UNTIL] = 0L
+            if (clamped > 0L) {
+                p[KEY_NIGHT_MANUAL_UNTIL] = 0L
+                p.remove(KEY_SCHEDULE_MODE_MANUAL_RULE_ID)
+            }
         }
     }
 
-    suspend fun engageNightModeManually(nowEpochMillis: Long = System.currentTimeMillis()) {
+    suspend fun engageNightModeManually(
+        ruleId: String? = null,
+        nowEpochMillis: Long = System.currentTimeMillis(),
+    ) {
         store.edit { p ->
-            val end = (p[KEY_NIGHT_END_MINUTE] ?: DEFAULT_NIGHT_END_MINUTE)
-                .coerceIn(0, MINUTES_PER_DAY - 1)
-            p[KEY_NIGHT_MANUAL_UNTIL] = computeNextNightEndEpochMillis(end, nowEpochMillis)
+            val current = readNightModePrefs(p)
+            val targetRule = current.ruleById(ruleId) ?: current.rules.firstOrNull() ?: return@edit
+            p[KEY_SCHEDULE_MODE_MANUAL_RULE_ID] = targetRule.id
+            p[KEY_NIGHT_MANUAL_UNTIL] = computeNextNightEndEpochMillis(targetRule.endMinuteOfDay, nowEpochMillis)
             p[KEY_NIGHT_OVERRIDE_UNTIL] = 0L
         }
     }
 
     suspend fun exitNightModeTemporarily(nowEpochMillis: Long = System.currentTimeMillis()) {
         store.edit { p ->
+            val current = readNightModePrefs(p)
             p[KEY_NIGHT_MANUAL_UNTIL] = 0L
-            val enabled = p[KEY_NIGHT_ENABLED] ?: false
-            if (enabled) {
-                val start = (p[KEY_NIGHT_START_MINUTE] ?: DEFAULT_NIGHT_START_MINUTE)
-                    .coerceIn(0, MINUTES_PER_DAY - 1)
-                val end = (p[KEY_NIGHT_END_MINUTE] ?: DEFAULT_NIGHT_END_MINUTE)
-                    .coerceIn(0, MINUTES_PER_DAY - 1)
-                val window = findCoveringNightWindow(start, end, nowEpochMillis)
-                if (window != null) {
-                    p[KEY_NIGHT_OVERRIDE_UNTIL] = window.endEpochMillis
+            p.remove(KEY_SCHEDULE_MODE_MANUAL_RULE_ID)
+            if (current.enabled) {
+                val endEpoch = computeTempExitUntilEpochMillis(current, nowEpochMillis)
+                if (endEpoch != null) {
+                    p[KEY_NIGHT_OVERRIDE_UNTIL] = endEpoch
                 }
             }
         }
@@ -630,6 +675,7 @@ class SettingsStore(private val store: DataStore<Preferences>) {
     suspend fun clearNightModeManualUntil() {
         store.edit { p ->
             p[KEY_NIGHT_MANUAL_UNTIL] = 0L
+            p.remove(KEY_SCHEDULE_MODE_MANUAL_RULE_ID)
         }
     }
 
@@ -778,6 +824,8 @@ class SettingsStore(private val store: DataStore<Preferences>) {
         private val KEY_NIGHT_ALLOWED_UPS = stringPreferencesKey("night_mode_allowed_ups")
         private val KEY_NIGHT_OVERRIDE_UNTIL = longPreferencesKey("night_mode_override_until")
         private val KEY_NIGHT_MANUAL_UNTIL = longPreferencesKey("night_mode_manual_until_epoch_ms")
+        private val KEY_SCHEDULE_MODE_RULES = stringPreferencesKey("schedule_mode_rules")
+        private val KEY_SCHEDULE_MODE_MANUAL_RULE_ID = stringPreferencesKey("schedule_mode_manual_rule_id")
 
         /** 见 [excludedFeedMids]。 */
         const val EXCLUDED_SEPARATOR = '|'
@@ -1078,14 +1126,21 @@ private data class WhitelistedUpDto(
     val faceUrl: String = "",
 )
 
+@Serializable
+private data class ScheduleRuleDto(
+    val id: String,
+    val name: String = "",
+    val enabled: Boolean = true,
+    val startMinuteOfDay: Int = DEFAULT_NIGHT_START_MINUTE,
+    val endMinuteOfDay: Int = DEFAULT_NIGHT_END_MINUTE,
+    val daysOfWeek: List<Int> = emptyList(),
+    val allowedUps: List<WhitelistedUpDto> = emptyList(),
+)
+
 private val NightUpsJson = Json { ignoreUnknownKeys = true }
 private val NightUpsSerializer = ListSerializer(WhitelistedUpDto.serializer())
-
-private fun encodeNightUps(ups: List<WhitelistedUp>): String =
-    NightUpsJson.encodeToString(
-        NightUpsSerializer,
-        ups.map { WhitelistedUpDto(mid = it.mid, name = it.name, faceUrl = it.faceUrl.toHttpsUrl()) },
-    )
+private val ScheduleRulesJson = Json { ignoreUnknownKeys = true; encodeDefaults = true }
+private val ScheduleRulesSerializer = ListSerializer(ScheduleRuleDto.serializer())
 
 private fun decodeNightUps(raw: String?): List<WhitelistedUp> {
     if (raw.isNullOrBlank()) return emptyList()
@@ -1094,6 +1149,48 @@ private fun decodeNightUps(raw: String?): List<WhitelistedUp> {
             .distinctBy { it.mid }
             .map { WhitelistedUp(mid = it.mid, name = it.name, faceUrl = it.faceUrl.toHttpsUrl()) }
     }.onFailure {
-        BiliLog.w("夜间模式允许名单解析失败: ${it.message}")
+        BiliLog.w("定时白名单旧版允许名单解析失败: ${it.message}")
+    }.getOrDefault(emptyList())
+}
+
+private fun encodeScheduleRules(rules: List<ScheduleRule>): String =
+    ScheduleRulesJson.encodeToString(
+        ScheduleRulesSerializer,
+        rules.map { rule ->
+            val normalized = rule.normalized()
+            ScheduleRuleDto(
+                id = normalized.id,
+                name = normalized.name,
+                enabled = normalized.enabled,
+                startMinuteOfDay = normalized.startMinuteOfDay,
+                endMinuteOfDay = normalized.endMinuteOfDay,
+                daysOfWeek = normalized.daysOfWeek.sorted(),
+                allowedUps = normalized.allowedUps.map {
+                    WhitelistedUpDto(mid = it.mid, name = it.name, faceUrl = it.faceUrl.toHttpsUrl())
+                },
+            )
+        },
+    )
+
+private fun decodeScheduleRules(raw: String?): List<ScheduleRule> {
+    if (raw.isNullOrBlank()) return emptyList()
+    return runCatching {
+        ScheduleRulesJson.decodeFromString(ScheduleRulesSerializer, raw)
+            .distinctBy { it.id }
+            .map { dto ->
+                ScheduleRule(
+                    id = dto.id,
+                    name = dto.name,
+                    enabled = dto.enabled,
+                    startMinuteOfDay = dto.startMinuteOfDay,
+                    endMinuteOfDay = dto.endMinuteOfDay,
+                    daysOfWeek = dto.daysOfWeek.toSet(),
+                    allowedUps = dto.allowedUps
+                        .distinctBy { it.mid }
+                        .map { WhitelistedUp(mid = it.mid, name = it.name, faceUrl = it.faceUrl.toHttpsUrl()) },
+                ).normalized()
+            }
+    }.onFailure {
+        BiliLog.w("定时白名单规则解析失败: ${it.message}")
     }.getOrDefault(emptyList())
 }

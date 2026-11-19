@@ -26,7 +26,6 @@ import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material.icons.outlined.AutoAwesome
-import androidx.compose.material.icons.outlined.Bedtime
 import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.Explore
 import androidx.compose.material.icons.outlined.Info
@@ -34,6 +33,7 @@ import androidx.compose.material.icons.outlined.Memory
 import androidx.compose.material.icons.outlined.Palette
 import androidx.compose.material.icons.outlined.PlayCircleOutline
 import androidx.compose.material.icons.outlined.Refresh
+import androidx.compose.material.icons.outlined.Schedule
 import androidx.compose.material.icons.outlined.Shield
 import androidx.compose.material.icons.outlined.SystemUpdate
 import androidx.compose.material.icons.outlined.Tune
@@ -88,7 +88,7 @@ import dev.bilby.data.NightModePrefs
 import dev.bilby.data.NightWindowStatus
 import dev.bilby.data.SettingsStore
 import dev.bilby.data.evaluateNightMode
-import dev.bilby.data.formatMinuteOfDay
+import dev.bilby.data.formatEpochTime
 import dev.bilby.data.formatNightRange
 import dev.bilby.data.withScheme
 import dev.bilby.resources.*
@@ -346,33 +346,38 @@ private fun NightModeCategoryRow(
     CategoryRow(
         position = position,
         title = stringResource(Res.string.settings_section_night_mode),
-        icon = Icons.Outlined.Bedtime,
+        icon = Icons.Outlined.Schedule,
         value = loaded.then {
-            val range = formatNightRange(nightPrefs.startMinuteOfDay, nightPrefs.endMinuteOfDay)
             when (val status = evaluateNightMode(nightPrefs, nowMillis)) {
                 is NightWindowStatus.Active -> if (status.manual) {
                     stringResource(
                         Res.string.night_mode_summary_manual_on,
-                        formatMinuteOfDay(nightPrefs.endMinuteOfDay),
-                        nightPrefs.allowedUps.size,
+                        formatEpochTime(status.window.endEpochMillis),
+                        status.allowedUps.size,
                     )
                 } else {
+                    val label = if (status.activeRules.size == 1) {
+                        val rule = status.activeRules.first()
+                        rule.name.ifBlank { formatNightRange(rule.startMinuteOfDay, rule.endMinuteOfDay) }
+                    } else {
+                        stringResource(Res.string.night_mode_multi_active_count, status.activeRules.size)
+                    }
                     stringResource(
-                        Res.string.night_mode_summary_on,
-                        range,
-                        nightPrefs.allowedUps.size,
+                        Res.string.night_mode_summary_active,
+                        label,
+                        status.allowedUps.size,
                     )
                 }
-                is NightWindowStatus.Overridden ->
-                    stringResource(Res.string.night_mode_summary_paused, range)
+                is NightWindowStatus.Overridden -> {
+                    val untilMillis = nightPrefs.overrideUntilEpochMillis
+                        .takeIf { it > nowMillis }
+                        ?: status.window.endEpochMillis
+                    stringResource(Res.string.night_mode_summary_paused, formatEpochTime(untilMillis))
+                }
                 NightWindowStatus.Inactive -> if (!nightPrefs.enabled) {
                     stringResource(Res.string.night_mode_off)
                 } else {
-                    stringResource(
-                        Res.string.night_mode_summary_on,
-                        range,
-                        nightPrefs.allowedUps.size,
-                    )
+                    stringResource(Res.string.night_mode_summary_on, nightPrefs.rules.size)
                 }
             }
         },

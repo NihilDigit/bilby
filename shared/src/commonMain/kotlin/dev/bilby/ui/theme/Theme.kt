@@ -120,37 +120,6 @@ private fun ColorScheme.toPureBlack(): ColorScheme = copy(
     surfaceContainerHighest = lerp(surfaceContainerHigh, surfaceContainerHighest, 0.75f),
 )
 
-/**
- * 夜间静息模式的专属主题封装。
- *
- * 无论外层日间主题是浅色、深色还是壁纸动态色,进入夜间静息视图后统一使用 [NightSanctuaryColorScheme],
- * 并同步提供深色下的 [LocalMentionColor]、[LocalPlayerColorScheme] 与 [LocalIsDarkTheme]。
- */
-@OptIn(ExperimentalMaterial3ExpressiveApi::class)
-@Composable
-fun BilbyNightSanctuaryTheme(content: @Composable () -> Unit) {
-    val reducedMotion = LocalReducedMotion.current ?: rememberPlatformReducedMotion()
-    MaterialExpressiveTheme(
-        colorScheme = NightSanctuaryColorScheme,
-        motionScheme = if (platformUsesStandardMotion) MotionScheme.standard() else MotionScheme.expressive(),
-        typography = BilbyTypography,
-        shapes = BilbyShapes,
-    ) {
-        CompositionLocalProvider(
-            LocalMentionColor provides FixedColors.MentionDark,
-            LocalPlayerColorScheme provides NightSanctuaryColorScheme,
-            LocalIsDarkTheme provides true,
-            LocalReducedMotion provides reducedMotion,
-        ) {
-            Surface(
-                color = NightSanctuaryColorScheme.surface,
-                contentColor = NightSanctuaryColorScheme.onSurface,
-                content = content,
-            )
-        }
-    }
-}
-
 /** 外层主题的深色那一套,[PlayerTheme] 用它:取色来源、纯黑与否都跟外层一致。 */
 private val LocalPlayerColorScheme = staticCompositionLocalOf { BilbyDarkColors }
 

@@ -5,7 +5,6 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dev.bilby.api.BiliResult
 import dev.bilby.data.QueueContext
-import dev.bilby.data.SettingsStore
 import dev.bilby.data.SpaceArchiveOrder
 import dev.bilby.data.SpaceRepository
 import dev.bilby.data.SpaceVideoItem
@@ -22,8 +21,6 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.distinctUntilChanged
-import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import org.jetbrains.compose.resources.StringResource
@@ -62,10 +59,9 @@ data class NightModeUiState(
 )
 
 /**
- * 夜间极简视图的状态管理：仅从白名单 UP 主的点播投稿拉取，不支持动态、直播或全局推荐。
+ * 定时白名单视图的状态管理：仅从当前生效白名单 UP 主的点播投稿拉取，不支持动态、直播或全局推荐。
  */
 class NightModeViewModel(
-    private val settings: SettingsStore,
     private val spaceRepository: SpaceRepository,
     private val toViewRepository: ToViewRepository,
 ) : ViewModel() {
@@ -74,18 +70,15 @@ class NightModeViewModel(
     val state: StateFlow<NightModeUiState> = _state.asStateFlow()
 
     private var userPinnedMid: Long? = null
+    private var activeRuleName: String = ""
     private var generation = 0L
     private var loadJob: Job? = null
     private var session: MergeSession? = null
     private var noticeId = 0L
 
-    init {
-        viewModelScope.launch {
-            settings.nightModePrefs
-                .map { it.allowedUps }
-                .distinctUntilChanged()
-                .collect { ups -> onAllowedUpsChanged(ups) }
-        }
+    fun syncActiveContext(ups: List<WhitelistedUp>, ruleName: String) {
+        activeRuleName = ruleName
+        onAllowedUpsChanged(ups)
     }
 
     fun selectUp(mid: Long?) {
@@ -215,6 +208,7 @@ class NightModeViewModel(
             ups = ups,
             selectedMid = current.selectedMid,
             anchorPage = clicked.page,
+            ruleName = activeRuleName,
         )
     }
 

@@ -19,9 +19,9 @@ import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.Bedtime
 import androidx.compose.material.icons.outlined.DownloadForOffline
 import androidx.compose.material.icons.outlined.MoreVert
+import androidx.compose.material.icons.outlined.Schedule
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.WatchLater
 import androidx.compose.material3.DropdownMenu
@@ -55,14 +55,12 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.drawBehind
-import androidx.compose.ui.graphics.Brush
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import dev.bilby.data.NightModePrefs
+import dev.bilby.data.ScheduleRule
 import dev.bilby.data.WhitelistedUp
+import dev.bilby.data.formatEpochTime
 import dev.bilby.data.formatMinuteOfDay
 import dev.bilby.data.formatNightRange
 import dev.bilby.parseDurationSeconds
@@ -74,9 +72,8 @@ import dev.bilby.resources.night_mode_empty_videos
 import dev.bilby.resources.night_mode_go_settings
 import dev.bilby.resources.night_mode_hold_body
 import dev.bilby.resources.night_mode_hold_title
+import dev.bilby.resources.night_mode_multi_active_subtitle
 import dev.bilby.resources.night_mode_open_space
-import dev.bilby.resources.night_mode_sanctuary_manual
-import dev.bilby.resources.night_mode_sanctuary_scheduled
 import dev.bilby.resources.night_mode_temp_exit
 import dev.bilby.resources.night_mode_until_subtitle
 import dev.bilby.resources.offline_title
@@ -109,9 +106,7 @@ import dev.bilby.ui.formatRelativeTime
 import dev.bilby.ui.isAtLeast
 import dev.bilby.ui.navigationBarsBottom
 import dev.bilby.ui.padScaffoldExceptBottom
-import dev.bilby.ui.readableWidth
 import dev.bilby.ui.rememberBilbyWindowSize
-import dev.bilby.ui.theme.BilbyNightSanctuaryTheme
 import dev.bilby.ui.theme.Dimens
 import dev.bilby.ui.theme.Spacing
 import dev.bilby.ui.theme.tabular
@@ -140,7 +135,7 @@ fun NightReminderBanner(
             horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
         ) {
             Icon(
-                imageVector = Icons.Outlined.Bedtime,
+                imageVector = Icons.Outlined.Schedule,
                 contentDescription = null,
                 modifier = Modifier.size(Dimens.IconInline),
             )
@@ -157,13 +152,14 @@ fun NightReminderBanner(
 }
 
 /**
- * 夜间静息主视图：始终包裹于 [BilbyNightSanctuaryTheme] 低唤醒深色静息色板，
- * 无底栏、无侧边导航、无动态/直播/搜索，仅展示白名单 UP 主的点播投稿与离线缓存入口。
+ * 定时白名单生效主视图：继承全局主题外观，无底栏、无侧边导航、无动态/直播/搜索，
+ * 仅展示当前生效白名单 UP 主的点播投稿与离线缓存入口。
  */
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 fun NightModeScreen(
-    prefs: NightModePrefs,
+    activeRules: List<ScheduleRule>,
+    windowEndEpochMillis: Long?,
     state: NightModeUiState,
     onSelectUp: (Long?) -> Unit,
     onLoadMore: () -> Unit,
@@ -180,284 +176,189 @@ fun NightModeScreen(
     bottomOverlay: @Composable BoxScope.() -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
-    BilbyNightSanctuaryTheme {
-        val scrollBehavior = TopAppBarDefaults.pinnedScrollBehavior()
-        val snackbarHostState = remember { SnackbarHostState() }
-        val currentOnClearNotice by rememberUpdatedState(onClearToViewNotice)
-        var showExitHoldSheet by rememberSaveable { mutableStateOf(false) }
+    val scrollBehavior = TopAppBarDefaults.pinnedScrollBehavior()
+    val snackbarHostState = remember { SnackbarHostState() }
+    val currentOnClearNotice by rememberUpdatedState(onClearToViewNotice)
+    var showExitHoldSheet by rememberSaveable { mutableStateOf(false) }
 
-        state.toViewNotice?.let { notice ->
-            val message = stringResource(notice.message)
-            LaunchedEffect(notice.id) {
-                snackbarHostState.showSnackbar(message)
-                currentOnClearNotice()
-            }
+    state.toViewNotice?.let { notice ->
+        val message = stringResource(notice.message)
+        LaunchedEffect(notice.id) {
+            snackbarHostState.showSnackbar(message)
+            currentOnClearNotice()
         }
+    }
 
-        val endFormatted = formatMinuteOfDay(prefs.endMinuteOfDay)
-        val rangeFormatted = formatNightRange(prefs.startMinuteOfDay, prefs.endMinuteOfDay)
-        val topSubtitle = if (manual) {
+    val singleRule = activeRules.singleOrNull()
+    val topTitle = singleRule?.name?.takeIf { it.isNotBlank() }
+        ?: stringResource(Res.string.settings_section_night_mode)
+    val endFormatted = windowEndEpochMillis?.let { formatEpochTime(it) }
+        ?: singleRule?.let { formatMinuteOfDay(it.endMinuteOfDay) }
+        ?: ""
+    val topSubtitle = when {
+        activeRules.size > 1 && endFormatted.isNotEmpty() ->
+            stringResource(Res.string.night_mode_multi_active_subtitle, activeRules.size, endFormatted)
+        manual && endFormatted.isNotEmpty() ->
             stringResource(Res.string.night_mode_until_subtitle, endFormatted)
-        } else {
-            rangeFormatted
-        }
+        singleRule != null ->
+            formatNightRange(singleRule.startMinuteOfDay, singleRule.endMinuteOfDay)
+        endFormatted.isNotEmpty() ->
+            stringResource(Res.string.night_mode_until_subtitle, endFormatted)
+        else -> null
+    }
 
-        Scaffold(
-            modifier = modifier.nestedScroll(scrollBehavior.nestedScrollConnection),
-            snackbarHost = { SnackbarHost(snackbarHostState) },
-            topBar = {
-                BilbyTopBar(
-                    title = stringResource(Res.string.settings_section_night_mode),
-                    subtitle = topSubtitle,
-                    scrollBehavior = scrollBehavior,
-                    actions = {
-                        TextButton(onClick = { showExitHoldSheet = true }) {
-                            Text(stringResource(Res.string.night_mode_temp_exit))
+    Scaffold(
+        modifier = modifier.nestedScroll(scrollBehavior.nestedScrollConnection),
+        snackbarHost = { SnackbarHost(snackbarHostState) },
+        topBar = {
+            BilbyTopBar(
+                title = topTitle,
+                subtitle = topSubtitle,
+                scrollBehavior = scrollBehavior,
+                actions = {
+                    val offlineLabel = stringResource(Res.string.offline_title)
+                    BilbyTooltip(text = offlineLabel) {
+                        IconButton(onClick = onOpenOffline) {
+                            Icon(Icons.Outlined.DownloadForOffline, contentDescription = offlineLabel)
                         }
-                        if (state.allowedUps.isNotEmpty()) {
-                            val settingsLabel = stringResource(Res.string.settings_title)
-                            BilbyTooltip(text = settingsLabel, shortcut = "Ctrl+,") {
-                                IconButton(onClick = onOpenSettings) {
-                                    Icon(Icons.Outlined.Settings, contentDescription = settingsLabel)
-                                }
-                            }
-                            RefreshAction(
-                                refreshing = state.refreshing,
-                                onRefresh = onRefresh,
-                            )
+                    }
+                    TextButton(onClick = { showExitHoldSheet = true }) {
+                        Text(stringResource(Res.string.night_mode_temp_exit))
+                    }
+                    val settingsLabel = stringResource(Res.string.settings_title)
+                    BilbyTooltip(text = settingsLabel, shortcut = "Ctrl+,") {
+                        IconButton(onClick = onOpenSettings) {
+                            Icon(Icons.Outlined.Settings, contentDescription = settingsLabel)
                         }
-                    },
-                )
-            },
-        ) { insets ->
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padScaffoldExceptBottom(insets),
-            ) {
-                Column(modifier = Modifier.fillMaxSize()) {
-                    if (state.allowedUps.isEmpty()) {
-                        Box(
-                            modifier = Modifier
-                                .readableWidth()
-                                .padding(horizontal = Spacing.Comfortable, vertical = Spacing.Tight),
+                    }
+                    if (state.allowedUps.isNotEmpty()) {
+                        RefreshAction(
+                            refreshing = state.refreshing,
+                            onRefresh = onRefresh,
+                        )
+                    }
+                },
+            )
+        },
+    ) { insets ->
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .padScaffoldExceptBottom(insets),
+        ) {
+            Column(modifier = Modifier.fillMaxSize()) {
+                if (state.allowedUps.isEmpty()) {
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .fillMaxWidth()
+                            .padding(Spacing.Spacious),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(Spacing.Comfortable),
                         ) {
-                            NightSanctuaryHeaderCard(
-                                manual = manual,
-                                endFormatted = endFormatted,
-                                rangeFormatted = rangeFormatted,
-                                onOpenOffline = onOpenOffline,
+                            EmptyState(
+                                message = stringResource(Res.string.night_mode_empty_ups),
+                                icon = Icons.Outlined.Schedule,
+                                modifier = Modifier,
                             )
+                            FilledTonalButton(onClick = onOpenSettings) {
+                                Text(stringResource(Res.string.night_mode_go_settings))
+                            }
                         }
-                        Box(
-                            modifier = Modifier
-                                .weight(1f)
-                                .fillMaxWidth()
-                                .padding(Spacing.Spacious),
-                            contentAlignment = Alignment.Center,
+                    }
+                } else {
+                    val wide = rememberBilbyWindowSize().isAtLeast(BilbyWindowSize.Expanded)
+
+                    AdaptiveVideoGridContent(
+                        modifier = Modifier.weight(1f).fillMaxWidth(),
+                    ) { gridCols ->
+                        val useGrid = gridCols > 1
+                        val effectiveColumns = GridCells.Fixed(gridCols)
+                        val listPadding = if (useGrid) {
+                            PaddingValues(
+                                start = Spacing.Tight - GridCardOuterPadding,
+                                end = Spacing.Tight - GridCardOuterPadding,
+                                top = Spacing.Hair,
+                                bottom = Spacing.Comfortable + navigationBarsBottom(),
+                            )
+                        } else {
+                            PaddingValues(bottom = navigationBarsBottom())
+                        }
+
+                        RefreshBox(
+                            refreshing = state.refreshing,
+                            onRefresh = onRefresh,
+                            modifier = Modifier.fillMaxSize(),
                         ) {
-                            Column(
-                                horizontalAlignment = Alignment.CenterHorizontally,
-                                verticalArrangement = Arrangement.spacedBy(Spacing.Comfortable),
-                            ) {
-                                EmptyState(
-                                    message = stringResource(Res.string.night_mode_empty_ups),
-                                    icon = Icons.Outlined.Bedtime,
-                                    modifier = Modifier,
+                            PagedColumn(
+                                layout = PagedLayout.Grid(effectiveColumns),
+                                items = state.items,
+                                key = { it.bvid },
+                                loading = state.loading,
+                                appending = state.appending,
+                                hasMore = state.hasMore,
+                                error = state.error?.let { stringResource(it) },
+                                emptyText = stringResource(Res.string.night_mode_empty_videos),
+                                onLoadMore = onLoadMore,
+                                onRetry = onRetry,
+                                contentPadding = listPadding,
+                                header = {
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(
+                                                top = Spacing.Tight,
+                                                bottom = Spacing.Hair,
+                                            ),
+                                    ) {
+                                        NightUpFilterBar(
+                                            allowedUps = state.allowedUps,
+                                            selectedMid = state.selectedMid,
+                                            onSelectUp = onSelectUp,
+                                            onOpenSpace = onOpenSpace,
+                                            horizontalInset = if (useGrid) {
+                                                Spacing.Tight + GridCardOuterPadding
+                                            } else {
+                                                Spacing.Comfortable
+                                            },
+                                        )
+                                    }
+                                },
+                            ) { item ->
+                                NightVideoCard(
+                                    item = item,
+                                    showUpName = state.selectedMid == null,
+                                    useGrid = useGrid,
+                                    wide = wide || useGrid,
+                                    onClick = { onVideoClick(item) },
+                                    onOpenSpace = onOpenSpace,
+                                    onAddToView = { onAddToView(item) },
+                                    modifier = if (useGrid) Modifier.padding(GridCardOuterPadding) else Modifier,
                                 )
-                                FilledTonalButton(onClick = onOpenSettings) {
-                                    Text(stringResource(Res.string.night_mode_go_settings))
-                                }
-                            }
-                        }
-                    } else {
-                        val wide = rememberBilbyWindowSize().isAtLeast(BilbyWindowSize.Expanded)
-
-                        AdaptiveVideoGridContent(
-                            modifier = Modifier.weight(1f).fillMaxWidth(),
-                        ) { gridCols ->
-                            val useGrid = gridCols > 1
-                            val effectiveColumns = GridCells.Fixed(gridCols)
-                            val listPadding = if (useGrid) {
-                                PaddingValues(
-                                    start = Spacing.Tight - GridCardOuterPadding,
-                                    end = Spacing.Tight - GridCardOuterPadding,
-                                    top = Spacing.Hair,
-                                    bottom = Spacing.Comfortable + navigationBarsBottom(),
-                                )
-                            } else {
-                                PaddingValues(bottom = navigationBarsBottom())
-                            }
-
-                            RefreshBox(
-                                refreshing = state.refreshing,
-                                onRefresh = onRefresh,
-                                modifier = Modifier.fillMaxSize(),
-                            ) {
-                                PagedColumn(
-                                    layout = PagedLayout.Grid(effectiveColumns),
-                                    items = state.items,
-                                    key = { it.bvid },
-                                    loading = state.loading,
-                                    appending = state.appending,
-                                    hasMore = state.hasMore,
-                                    error = state.error?.let { stringResource(it) },
-                                    emptyText = stringResource(Res.string.night_mode_empty_videos),
-                                    onLoadMore = onLoadMore,
-                                    onRetry = onRetry,
-                                    contentPadding = listPadding,
-                                    header = {
-                                        Column(
-                                            verticalArrangement = Arrangement.spacedBy(Spacing.Tight),
-                                            modifier = Modifier
-                                                .fillMaxWidth()
-                                                .padding(
-                                                    top = Spacing.Tight,
-                                                    bottom = Spacing.Hair,
-                                                ),
-                                        ) {
-                                            NightSanctuaryHeaderCard(
-                                                manual = manual,
-                                                endFormatted = endFormatted,
-                                                rangeFormatted = rangeFormatted,
-                                                onOpenOffline = onOpenOffline,
-                                                modifier = Modifier.padding(
-                                                    horizontal = if (useGrid) {
-                                                        Spacing.Tight + GridCardOuterPadding
-                                                    } else {
-                                                        Spacing.Comfortable
-                                                    },
-                                                ),
-                                            )
-                                            NightUpFilterBar(
-                                                allowedUps = state.allowedUps,
-                                                selectedMid = state.selectedMid,
-                                                onSelectUp = onSelectUp,
-                                                onOpenSpace = onOpenSpace,
-                                                horizontalInset = if (useGrid) {
-                                                    Spacing.Tight + GridCardOuterPadding
-                                                } else {
-                                                    Spacing.Comfortable
-                                                },
-                                            )
-                                        }
-                                    },
-                                ) { item ->
-                                    NightVideoCard(
-                                        item = item,
-                                        showUpName = state.selectedMid == null,
-                                        useGrid = useGrid,
-                                        wide = wide || useGrid,
-                                        onClick = { onVideoClick(item) },
-                                        onOpenSpace = onOpenSpace,
-                                        onAddToView = { onAddToView(item) },
-                                        modifier = if (useGrid) Modifier.padding(GridCardOuterPadding) else Modifier,
-                                    )
-                                }
                             }
                         }
                     }
                 }
-                bottomOverlay()
             }
-        }
-
-        if (showExitHoldSheet) {
-            NightExitHoldSheet(
-                title = stringResource(Res.string.night_mode_hold_title),
-                body = stringResource(Res.string.night_mode_hold_body, endFormatted),
-                onCompleted = {
-                    showExitHoldSheet = false
-                    onTempExit()
-                },
-                onDismiss = { showExitHoldSheet = false },
-            )
+            bottomOverlay()
         }
     }
-}
 
-@OptIn(ExperimentalMaterial3ExpressiveApi::class)
-@Composable
-private fun NightSanctuaryHeaderCard(
-    manual: Boolean,
-    endFormatted: String,
-    rangeFormatted: String,
-    onOpenOffline: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    val label = if (manual) {
-        stringResource(Res.string.night_mode_sanctuary_manual, endFormatted)
-    } else {
-        stringResource(Res.string.night_mode_sanctuary_scheduled, rangeFormatted)
-    }
-    Surface(
-        shape = MaterialTheme.shapes.largeIncreased,
-        color = MaterialTheme.colorScheme.surfaceContainer,
-        contentColor = MaterialTheme.colorScheme.onSurface,
-        modifier = modifier.fillMaxWidth(),
-    ) {
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(Spacing.Cozy),
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = Spacing.Comfortable, vertical = Spacing.Cozy),
-        ) {
-            val badgeHaloColor = MaterialTheme.colorScheme.primary
-            Surface(
-                shape = CircleShape,
-                color = MaterialTheme.colorScheme.surfaceContainerHigh,
-                contentColor = badgeHaloColor,
-            ) {
-                // Static calm nocturnal radial halo behind the circular moon badge (no idle animation loop).
-                Box(
-                    contentAlignment = Alignment.Center,
-                    modifier = Modifier
-                        .size(SanctuaryBadgeSize)
-                        .drawBehind {
-                            drawCircle(
-                                brush = Brush.radialGradient(
-                                    colors = listOf(
-                                        badgeHaloColor.copy(alpha = 0.22f),
-                                        Color.Transparent,
-                                    ),
-                                ),
-                            )
-                        },
-                ) {
-                    Icon(
-                        imageVector = Icons.Outlined.Bedtime,
-                        contentDescription = null,
-                        modifier = Modifier.size(Dimens.IconInline),
-                    )
-                }
-            }
-            Text(
-                text = label,
-                style = MaterialTheme.typography.titleSmallEmphasized.tabular,
-                color = MaterialTheme.colorScheme.onSurface,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.weight(1f),
-            )
-            FilledTonalButton(
-                onClick = onOpenOffline,
-                shape = CircleShape,
-                contentPadding = PaddingValues(horizontal = Spacing.Cozy, vertical = Spacing.Hair),
-            ) {
-                Icon(
-                    imageVector = Icons.Outlined.DownloadForOffline,
-                    contentDescription = null,
-                    modifier = Modifier.size(Dimens.IconInline),
-                )
-                Text(
-                    text = stringResource(Res.string.offline_title),
-                    style = MaterialTheme.typography.labelLargeEmphasized,
-                    maxLines = 1,
-                    modifier = Modifier.padding(start = Spacing.Hair),
-                )
-            }
-        }
+    if (showExitHoldSheet) {
+        NightExitHoldSheet(
+            title = stringResource(Res.string.night_mode_hold_title),
+            body = endFormatted.takeIf { it.isNotEmpty() }?.let {
+                stringResource(Res.string.night_mode_hold_body, it)
+            },
+            onCompleted = {
+                showExitHoldSheet = false
+                onTempExit()
+            },
+            onDismiss = { showExitHoldSheet = false },
+        )
     }
 }
 
@@ -661,5 +562,4 @@ private object NightDesktopMenuMotionScheme : MotionScheme {
     override fun <T> slowEffectsSpec(): FiniteAnimationSpec<T> = tween(80)
 }
 
-private val SanctuaryBadgeSize = 36.dp
 private val GridCardOuterPadding = 2.dp

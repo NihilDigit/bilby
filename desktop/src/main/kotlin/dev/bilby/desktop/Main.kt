@@ -1,18 +1,7 @@
 package dev.bilby.desktop
 
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.widthIn
-import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Text
-import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -23,11 +12,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import dev.bilby.ui.DesktopLanguageStore
 import androidx.compose.ui.MotionDurationScale
@@ -43,7 +28,6 @@ import dev.bilby.data.AppearancePrefs
 import dev.bilby.ui.AppFullscreenController
 import dev.bilby.ui.BilbyRoot
 import dev.bilby.ui.DesktopSystemActions
-import dev.bilby.ui.DesktopToastEvent
 import dev.bilby.ui.LocalAppFullscreen
 import dev.bilby.ui.LocalPlaybackHost
 import dev.bilby.ui.LocalSystemActions
@@ -52,12 +36,10 @@ import dev.bilby.ui.components.SkiaAnimatedImageDecoder
 import dev.bilby.ui.player.LocalWindowFullscreen
 import dev.bilby.ui.player.LocalDesktopPip
 import dev.bilby.ui.theme.BilbyTheme
-import dev.bilby.ui.theme.Spacing
 import dev.bilby.ui.theme.SystemReducedMotion
 import dev.bilby.update.DesktopAppUpdater
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.runBlocking
 import androidx.compose.ui.graphics.painter.BitmapPainter
 import androidx.compose.ui.graphics.painter.Painter
@@ -316,11 +298,6 @@ fun main(args: Array<String>) {
                                 SideEffect { composedLanguage = language }
                             }
                         }
-                        DesktopToastOverlay(
-                            toastState = systemActions.toastState,
-                            onDismiss = systemActions::dismissToast,
-                            modifier = Modifier.align(Alignment.BottomCenter),
-                        )
                     }
                 }
             }
@@ -335,57 +312,6 @@ fun main(args: Array<String>) {
 internal object AppMotionScale : MotionDurationScale {
     override val scaleFactor: Float
         get() = if (SystemReducedMotion.reduced) 0f else 1f
-}
-
-private const val DesktopToastDurationMillis = 2_200L
-private val DesktopToastMaxWidth = 420.dp
-private val DesktopToastBottomMargin = 48.dp
-
-/**
- * 桌面端轻量级非阻塞提示胶囊:不挂任何 `pointerInput` 或 `clickable`,指针点击与滚轮直接穿透到下层界面,
- * 不抢焦点、不触发系统通知铃声或操作中心卡片。
- */
-@OptIn(ExperimentalMaterial3ExpressiveApi::class)
-@Composable
-internal fun DesktopToastOverlay(
-    toastState: StateFlow<DesktopToastEvent?>,
-    onDismiss: (Long) -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    val event by toastState.collectAsState()
-    var lastShown by remember { mutableStateOf<DesktopToastEvent?>(null) }
-    if (event != null) {
-        lastShown = event
-    }
-    LaunchedEffect(event?.id) {
-        val current = event ?: return@LaunchedEffect
-        delay(DesktopToastDurationMillis)
-        onDismiss(current.id)
-    }
-    AnimatedVisibility(
-        visible = event != null,
-        enter = fadeIn(MaterialTheme.motionScheme.defaultEffectsSpec()),
-        exit = fadeOut(MaterialTheme.motionScheme.fastEffectsSpec()),
-        modifier = modifier.padding(horizontal = Spacing.Loose, vertical = DesktopToastBottomMargin),
-    ) {
-        val shown = lastShown ?: return@AnimatedVisibility
-        Box(
-            modifier = Modifier
-                .widthIn(max = DesktopToastMaxWidth)
-                .clip(CircleShape)
-                .background(MaterialTheme.colorScheme.inverseSurface)
-                .padding(horizontal = Spacing.Comfortable, vertical = Spacing.Tight),
-        ) {
-            Text(
-                text = shown.message,
-                color = MaterialTheme.colorScheme.inverseOnSurface,
-                style = MaterialTheme.typography.bodyMedium,
-                textAlign = TextAlign.Center,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-            )
-        }
-    }
 }
 
 internal fun loadDevLocalProperties(): Properties? {
