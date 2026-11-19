@@ -1167,15 +1167,18 @@ private fun BilbyApp(
             .focusable(),
     ) {
     val navFramedBackdrop = LocalWindowCaption.current != null
+    // 用 State 持有最新的开关值与 popBack，并在 remember(backStack) 之外更新：
+    // 若在 remember(backStack) 内部直接捕获 Boolean 参数 predictiveBack，decorate 闭包会永久停在
+    // 首帧默认值（true），设置页切换或 DataStore 异步回填后 BackHandler 永远不会启用。
+    val predictiveBackState = rememberUpdatedState(predictiveBack)
+    val popBackState = rememberUpdatedState(popBack)
     val predictiveBackToggleDecorator = remember(backStack) {
         NavEntryDecorator<NavKey>(
             decorate = { entry ->
                 // 关闭预测性返回时由标准 BackHandler 兜底拦截页级返回，跳过系统手势实时缩放预览，
-                // 松手后触发 popTransitionSpec；页面内部先注册的 BackHandler 仍优先响应。
-                val currentPredictiveBack by rememberUpdatedState(predictiveBack)
-                val currentPopBack by rememberUpdatedState(popBack)
-                BackHandler(enabled = !currentPredictiveBack && backStack.size > 1) {
-                    currentPopBack()
+                // 松手后触发 popTransitionSpec；页面内部后注册的 BackHandler 仍优先响应。
+                BackHandler(enabled = !predictiveBackState.value && backStack.size > 1) {
+                    popBackState.value()
                 }
                 entry.Content()
             },
