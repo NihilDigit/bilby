@@ -2,8 +2,10 @@ package dev.bilby.ui.player
 
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.ImageComposeScene
 import androidx.compose.ui.Modifier
@@ -16,6 +18,7 @@ import androidx.navigationevent.NavigationEventDispatcherOwner
 import androidx.navigationevent.compose.LocalNavigationEventDispatcherOwner
 import dev.bilby.player.*
 import dev.bilby.ui.LocalPlaybackHost
+import dev.bilby.ui.components.SeekBar
 import dev.bilby.ui.theme.BilbyTheme
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -252,25 +255,271 @@ class SpeedSelectionPointerTest {
             assertEquals(0, player.playPauseCalls)
         } finally { scene.close() }
     }
+
+    @Test(timeout = 30000)
+    fun longPressThenDragNeverTriggersSeek() = runBlocking(Dispatchers.Swing) {
+        val player = PointerTestPlayer().apply { setPlaybackSpeed(1f) }
+        val host = PointerTestPlaybackHost(player)
+        val navigation = object : NavigationEventDispatcherOwner {
+            override val navigationEventDispatcher = NavigationEventDispatcher()
+        }
+        lateinit var selector: PlaybackSpeedController
+        var controls = true
+        val scene = ImageComposeScene(390, 844, coroutineContext = coroutineContext) {
+            BilbyTheme {
+                CompositionLocalProvider(LocalPlaybackHost provides host, LocalNavigationEventDispatcherOwner provides navigation) {
+                    selector = rememberPlaybackSpeedController(player, "conflict-lp", defaultHoldSpeed = 2.5f)
+                    Box(Modifier.fillMaxSize()) {
+                        PlayerShell(
+                            player = player, attached = false, placeholderCoverUrl = "",
+                            isFullscreen = false, onFullscreenChange = {}, locked = false, onLockedChange = {}, title = "",
+                            speedController = selector,
+                            showSpeedOverlay = false,
+                            modifier = Modifier.size(390.dp, 220.dp),
+                            overlay = { controls = controlsVisible },
+                        )
+                    }
+                }
+            }
+        }
+        suspend fun frame() { repeat(3) { scene.render(System.nanoTime()).close(); delay(20) } }
+        fun event(type: PointerEventType, x: Float, y: Float) = scene.sendPointerEvent(type, Offset(x, y), type = PointerType.Touch)
+        try {
+            frame()
+            // 长按后大幅横滑 + 纵滑,绝不能触发 seek
+            event(PointerEventType.Press, 200f, 110f)
+            delay(650)
+            frame()
+            assertTrue(selector.active)
+            event(PointerEventType.Move, 120f, 110f)
+            event(PointerEventType.Move, 300f, 110f)
+            event(PointerEventType.Move, 300f, 160f)
+            frame()
+            assertTrue(selector.active)
+            event(PointerEventType.Release, 300f, 160f)
+            frame()
+            assertFalse(selector.active)
+            assertEquals("long-press drag must never trigger seek", 0, player.seeks)
+            assertEquals(0, player.playPauseCalls)
+
+            // 竖屏内嵌 showSpeedOverlay = false 时,倍速选档处于激活态期间画面拖拽与点按必须被屏蔽
+            selector.open(dockTop = false)
+            frame()
+            assertTrue(selector.active)
+            assertFalse(controls)
+            event(PointerEventType.Press, 80f, 110f)
+            event(PointerEventType.Move, 130f, 110f)
+            event(PointerEventType.Move, 260f, 110f)
+            event(PointerEventType.Release, 260f, 110f)
+            frame()
+            assertEquals("surface drag while speedController is active must not seek", 0, player.seeks)
+            event(PointerEventType.Press, 195f, 110f)
+            event(PointerEventType.Release, 195f, 110f)
+            delay(350)
+            frame()
+            assertFalse("surface tap while speedController is active must not show controls", controls)
+            selector.cancel()
+        } finally { scene.close() }
+    }
+
+    @Test(timeout = 30000)
+    fun immediateHorizontalDragThenPauseNeverOpensSpeedDial() = runBlocking(Dispatchers.Swing) {
+        val player = PointerTestPlayer().apply { setPlaybackSpeed(1f) }
+        val host = PointerTestPlaybackHost(player)
+        val navigation = object : NavigationEventDispatcherOwner {
+            override val navigationEventDispatcher = NavigationEventDispatcher()
+        }
+        lateinit var selector: PlaybackSpeedController
+        val scene = ImageComposeScene(390, 844, coroutineContext = coroutineContext) {
+            BilbyTheme {
+                CompositionLocalProvider(LocalPlaybackHost provides host, LocalNavigationEventDispatcherOwner provides navigation) {
+                    selector = rememberPlaybackSpeedController(player, "conflict-drag", defaultHoldSpeed = 2.5f)
+                    Box(Modifier.fillMaxSize()) {
+                        PlayerShell(
+                            player = player, attached = false, placeholderCoverUrl = "",
+                            isFullscreen = false, onFullscreenChange = {}, locked = false, onLockedChange = {}, title = "",
+                            speedController = selector,
+                            modifier = Modifier.size(390.dp, 220.dp),
+                        )
+                    }
+                }
+            }
+        }
+        suspend fun frame() { repeat(3) { scene.render(System.nanoTime()).close(); delay(20) } }
+        fun event(type: PointerEventType, x: Float, y: Float) = scene.sendPointerEvent(type, Offset(x, y), type = PointerType.Touch)
+        try {
+            frame()
+            // 按下后立即横向拖动超过 touchSlop,然后按住停顿超过 longPressTimeoutMillis
+            event(PointerEventType.Press, 100f, 120f)
+            event(PointerEventType.Move, 140f, 120f)
+            event(PointerEventType.Move, 220f, 120f)
+            frame()
+            delay(650)
+            frame()
+            assertFalse("drag mode must never open speed dial after pausing", selector.active)
+            assertEquals(1f, player.playbackSpeed, 0f)
+            event(PointerEventType.Release, 220f, 120f)
+            frame()
+            assertFalse(selector.active)
+            assertEquals("horizontal drag must commit seek on release", 1, player.seeks)
+        } finally { scene.close() }
+    }
+
+    @Test(timeout = 30000)
+    fun shortVideoSwipeSeekUsesFullDurationSpan() = runBlocking(Dispatchers.Swing) {
+        val player = PointerTestPlayer(initialPosition = 0L, initialDuration = 30_000L)
+        val host = PointerTestPlaybackHost(player)
+        val navigation = object : NavigationEventDispatcherOwner {
+            override val navigationEventDispatcher = NavigationEventDispatcher()
+        }
+        val scene = ImageComposeScene(390, 844, coroutineContext = coroutineContext) {
+            BilbyTheme {
+                CompositionLocalProvider(LocalPlaybackHost provides host, LocalNavigationEventDispatcherOwner provides navigation) {
+                    Box(Modifier.fillMaxSize()) {
+                        PlayerShell(
+                            player = player, attached = false, placeholderCoverUrl = "",
+                            isFullscreen = false, onFullscreenChange = {}, locked = false, onLockedChange = {}, title = "",
+                            modifier = Modifier.size(390.dp, 220.dp),
+                        )
+                    }
+                }
+            }
+        }
+        suspend fun frame() { repeat(3) { scene.render(System.nanoTime()).close(); delay(20) } }
+        fun event(type: PointerEventType, x: Float, y: Float) = scene.sendPointerEvent(type, Offset(x, y), type = PointerType.Touch)
+        try {
+            frame()
+            // 30s 短视频划过半屏(195px / 390px = 50%),目标应约 15s 而不是顶到 30s 结尾
+            event(PointerEventType.Press, 100f, 120f)
+            event(PointerEventType.Move, 130f, 120f)
+            event(PointerEventType.Move, 295f, 120f)
+            event(PointerEventType.Release, 295f, 120f)
+            frame()
+            assertEquals(1, player.seeks)
+            val target = player.seekTargets.last()
+            assertTrue("expected ~15000ms for half-width swipe on 30s video, got $target", target in 14_000L..16_000L)
+        } finally { scene.close() }
+    }
+
+    @Test(timeout = 30000)
+    fun rapidDoubleTapNudgeAccumulatesAndPreventsSnapBack() = runBlocking(Dispatchers.Swing) {
+        val player = PointerTestPlayer(initialPosition = 10_000L, initialDuration = 120_000L)
+        val host = PointerTestPlaybackHost(player)
+        val navigation = object : NavigationEventDispatcherOwner {
+            override val navigationEventDispatcher = NavigationEventDispatcher()
+        }
+        lateinit var capturedProgress: PlayerProgressState
+        val scene = ImageComposeScene(390, 844, coroutineContext = coroutineContext) {
+            BilbyTheme {
+                CompositionLocalProvider(LocalPlaybackHost provides host, LocalNavigationEventDispatcherOwner provides navigation) {
+                    Box(Modifier.fillMaxSize()) {
+                        PlayerShell(
+                            player = player, attached = false, placeholderCoverUrl = "",
+                            isFullscreen = false, onFullscreenChange = {}, locked = false, onLockedChange = {}, title = "",
+                            modifier = Modifier.size(390.dp, 220.dp),
+                            overlay = { capturedProgress = progressState },
+                        )
+                    }
+                }
+            }
+        }
+        suspend fun frame() { repeat(3) { scene.render(System.nanoTime()).close(); delay(20) } }
+        fun event(type: PointerEventType, x: Float, y: Float) = scene.sendPointerEvent(type, Offset(x, y), type = PointerType.Touch)
+        suspend fun doubleTapRight() {
+            event(PointerEventType.Press, 350f, 110f)
+            event(PointerEventType.Release, 350f, 110f)
+            delay(60)
+            event(PointerEventType.Press, 350f, 110f)
+            event(PointerEventType.Release, 350f, 110f)
+            frame()
+        }
+        try {
+            frame()
+            doubleTapRight()
+            delay(60)
+            doubleTapRight()
+            delay(60)
+            doubleTapRight()
+            assertEquals(listOf(20_000L, 30_000L, 40_000L), player.seekTargets)
+            assertEquals(40_000L, capturedProgress.positionMillis)
+            // 等待超过一次 200ms 轮询,确认不会被尚未更新的 player.currentPosition(10s) 回弹覆盖
+            delay(260)
+            frame()
+            assertEquals("pending seek must prevent snap-back before player catches up", 40_000L, capturedProgress.positionMillis)
+            // 播放器回报 seek discontinuity 后解除锁定
+            player.notifySeekDiscontinuity(10_000L, 40_000L)
+            assertNull(capturedProgress.pendingSeekTargetMillis)
+        } finally { scene.close() }
+    }
+
+    @Test(timeout = 30000)
+    fun seekBarTapDoesNotPauseOrResume() = runBlocking(Dispatchers.Swing) {
+        val player = PointerTestPlayer(initialPosition = 10_000L, initialDuration = 120_000L)
+        val host = PointerTestPlaybackHost(player)
+        val navigation = object : NavigationEventDispatcherOwner {
+            override val navigationEventDispatcher = NavigationEventDispatcher()
+        }
+        val scene = ImageComposeScene(390, 220, coroutineContext = coroutineContext) {
+            BilbyTheme {
+                CompositionLocalProvider(LocalPlaybackHost provides host, LocalNavigationEventDispatcherOwner provides navigation) {
+                    PlayerShell(
+                        player = player, attached = false, placeholderCoverUrl = "",
+                        isFullscreen = false, onFullscreenChange = {}, locked = false, onLockedChange = {}, title = "",
+                        modifier = Modifier.fillMaxSize(),
+                        controlBar = {
+                            SeekBar(
+                                position = positionMillis,
+                                duration = durationMillis,
+                                onSeekStart = { onSeekStart() },
+                                onSeekTo = { onSeekTo(it) },
+                                onSeekFinished = { onSeekFinished() },
+                                onTapSeek = { onTapSeek(it) },
+                                modifier = Modifier.fillMaxWidth().align(Alignment.BottomCenter),
+                            )
+                        },
+                    )
+                }
+            }
+        }
+        suspend fun frame() { repeat(3) { scene.render(System.nanoTime()).close(); delay(20) } }
+        fun event(type: PointerEventType, x: Float, y: Float) = scene.sendPointerEvent(type, Offset(x, y), type = PointerType.Touch)
+        try {
+            frame()
+            // 点击底部进度条中点
+            event(PointerEventType.Press, 195f, 196f)
+            event(PointerEventType.Release, 195f, 196f)
+            frame()
+            assertEquals(1, player.seeks)
+            assertEquals("tapping SeekBar must not trigger pause/play cycle", 0, player.playPauseCalls)
+            assertTrue("expected seek near 60000ms, got ${player.seekTargets.last()}", player.seekTargets.last() in 55_000L..65_000L)
+        } finally { scene.close() }
+    }
 }
 
-private class PointerTestPlayer : PlayerHandle {
+private class PointerTestPlayer(
+    initialPosition: Long = 10000L,
+    initialDuration: Long = 120000L,
+) : PlayerHandle {
     private var actualSpeed = 1f
     private val listeners = mutableSetOf<PlayerListener>()
     var playPauseCalls = 0
     var seeks = 0
+    val seekTargets = mutableListOf<Long>()
     override val isPlaying = true
     override val playWhenReady = true
     override val playbackState = PlayerPhase.READY
-    override val currentPosition = 10000L
+    override val currentPosition = initialPosition
     override val bufferedPosition = 80000L
-    override val duration = 120000L
+    override val duration = initialDuration
     override val playbackSpeed get() = actualSpeed
     override val videoSize = VideoDimensions(1920, 1080)
     override fun play() { playPauseCalls++ }
     override fun pause() { playPauseCalls++ }
-    override fun seekTo(positionMillis: Long) { seeks++ }
-    override fun seekTo(index: Int, positionMillis: Long) { seeks++ }
+    override fun seekTo(positionMillis: Long) { seeks++; seekTargets += positionMillis }
+    override fun seekTo(index: Int, positionMillis: Long) { seeks++; seekTargets += positionMillis }
+    fun notifySeekDiscontinuity(oldPositionMillis: Long, newPositionMillis: Long) {
+        listeners.toList().forEach { it.onPositionDiscontinuity(oldPositionMillis, newPositionMillis, isSeek = true) }
+    }
     override fun seekToNext() = Unit
     override fun seekToPrevious() = Unit
     override fun setPlaybackSpeed(speed: Float) { actualSpeed = speed; listeners.toList().forEach { it.onPlaybackSpeedChanged(speed) } }

@@ -16,7 +16,6 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -160,6 +159,59 @@ class PlayerProgressState {
     var durationMillis by mutableLongStateOf(0L)
     var dragPositionMillis by mutableStateOf<Long?>(null)
     val displayPositionMillis: Long get() = dragPositionMillis ?: positionMillis
+
+    /**
+     * 最近一次已提交 seek 的目标位置与锁定期截止时刻(单调时钟)。
+     * 播放器异步完成 seek 前,200ms/500ms 轮询读到的仍是旧位置;锁定期内跳过旧位置避免进度条回弹。
+     */
+    internal var pendingSeekTargetMillis: Long? = null
+        private set
+    internal var pendingSeekUntilMillis: Long = 0L
+        private set
+
+    internal fun markPendingSeek(targetMillis: Long, nowMillis: Long = elapsedRealtimeMillis()) {
+        positionMillis = targetMillis
+        pendingSeekTargetMillis = targetMillis
+        pendingSeekUntilMillis = nowMillis + PENDING_SEEK_LOCK_MILLIS
+    }
+
+    internal fun clearPendingSeek() {
+        pendingSeekTargetMillis = null
+        pendingSeekUntilMillis = 0L
+    }
+
+    internal fun activePendingTarget(nowMillis: Long = elapsedRealtimeMillis()): Long? {
+        val target = pendingSeekTargetMillis ?: return null
+        if (nowMillis >= pendingSeekUntilMillis) {
+            clearPendingSeek()
+            return null
+        }
+        return target
+    }
+
+    internal fun syncPolledPosition(polledMillis: Long, nowMillis: Long = elapsedRealtimeMillis()) {
+        val target = pendingSeekTargetMillis
+        if (target != null) {
+            val expired = nowMillis >= pendingSeekUntilMillis
+            val reached = abs(polledMillis - target) <= PENDING_SEEK_SETTLE_TOLERANCE_MILLIS
+            if (!expired && !reached) return
+            clearPendingSeek()
+        }
+        positionMillis = polledMillis
+    }
+
+    internal fun onSeekDiscontinuity(newPositionMillis: Long) {
+        val clamped = newPositionMillis.coerceAtLeast(0L)
+        val target = pendingSeekTargetMillis
+        if (target != null && abs(clamped - target) > PENDING_SEEK_SETTLE_TOLERANCE_MILLIS) {
+            // 连续快进/快退时前一次 seek 的迟到回调,保留更新的 pending 目标。
+            return
+        }
+        clearPendingSeek()
+        if (dragPositionMillis == null) {
+            positionMillis = clamped
+        }
+    }
 }
 
 /**
@@ -215,6 +267,9 @@ class PlayerShellScope internal constructor(
 
     fun onSeekFinished() = actions.seekFinished()
 
+    /** 单击进度条直接 seek,不走暂停/恢复周期。 */
+    fun onTapSeek(positionMillis: Long) = actions.tapSeek(positionMillis)
+
     fun toggleFullscreen() = actions.toggleFullscreen()
 }
 
@@ -227,6 +282,7 @@ internal class PlayerShellActions(
     val seekStart: () -> Unit,
     val seekTo: (Long) -> Unit,
     val seekFinished: () -> Unit,
+    val tapSeek: (Long) -> Unit,
     val toggleFullscreen: () -> Unit,
 )
 
@@ -358,8 +414,10 @@ fun PlayerShell(
      * 见下面 loadingVisible 的说明。
      */
     var everReady by remember { mutableStateOf(player.playbackState == PlayerPhase.READY) }
+    val progress = remember { PlayerProgressState() }
 
     DisposableEffect(player, attached) {
+        progress.clearPendingSeek()
         val listener = object : PlayerListener {
             @Suppress("PARAMETER_NAME_CHANGED_ON_OVERRIDE")
             override fun onIsPlayingChanged(playing: Boolean) {
@@ -377,7 +435,9 @@ fun PlayerShell(
             }
 
             override fun onPositionDiscontinuity(oldPositionMillis: Long, newPositionMillis: Long, isSeek: Boolean) {
-                if (!isSeek) {
+                if (isSeek) {
+                    progress.onSeekDiscontinuity(newPositionMillis)
+                } else {
                     videoAspect = player.videoSize.displayAspect()
                 }
             }
@@ -393,7 +453,10 @@ fun PlayerShell(
         isPlaying = player.isPlaying
         buffering = player.playbackState == PlayerPhase.BUFFERING
         playWhenReady = player.playWhenReady
-        onDispose { player.removeListener(listener) }
+        onDispose {
+            progress.clearPendingSeek()
+            player.removeListener(listener)
+        }
     }
 
     // 常亮的条件是**此刻真的挂着画面**,不只是在出声,更不是"页面在前台"。有画面才有理由
@@ -404,7 +467,6 @@ fun PlayerShell(
     // 接着听。听视频不受影响:那条分支上这个壳根本不会被组合。
     KeepScreenOn(isPlaying && attached)
 
-    val progress = remember { PlayerProgressState() }
     val isSeeking by remember { derivedStateOf { progress.dragPositionMillis != null } }
     var resumeAfterDrag by remember { mutableStateOf(false) }
     var controlBarHeight by remember(isFullscreen, pip) { mutableStateOf(0.dp) }
@@ -439,6 +501,7 @@ fun PlayerShell(
     var gesture by remember { mutableStateOf<PlayerGesture?>(null) }
     var dragging by remember { mutableStateOf(false) }
     var dragStartX by remember { mutableFloatStateOf(0f) }
+    val dragAccumulated = remember { object { var value = Offset.Zero } }
 
     /** 纵划时浮层要显示的百分比。 */
     var adjustValue by remember { mutableFloatStateOf(0f) }
@@ -549,7 +612,7 @@ fun PlayerShell(
         else POSITION_POLL_IDLE_MILLIS
     LaunchedEffect(player, pollInterval) {
         while (true) {
-            if (progress.dragPositionMillis == null) progress.positionMillis = player.currentPosition
+            if (progress.dragPositionMillis == null) progress.syncPolledPosition(player.currentPosition)
             progress.bufferedPositionMillis = player.bufferedPosition
             progress.durationMillis = player.duration.coerceAtLeast(0)
             if (attached) videoAspect = player.videoSize.displayAspect()
@@ -623,12 +686,18 @@ fun PlayerShell(
         },
         seekTo = { progress.dragPositionMillis = it },
         seekFinished = {
+            val shouldResume = resumeAfterDrag
+            resumeAfterDrag = false
             progress.dragPositionMillis?.let { target ->
-                player.seekTo(target)
-                progress.positionMillis = target
+                commitSeek(player, progress, target)
                 progress.dragPositionMillis = null
-                if (resumeAfterDrag) player.play()
+                if (shouldResume) player.play()
             }
+            keepAwake()
+        },
+        tapSeek = { target ->
+            progress.dragPositionMillis = null
+            commitSeek(player, progress, target)
             keepAwake()
         },
         toggleFullscreen = {
@@ -779,8 +848,7 @@ fun PlayerShell(
                         val dur = progress.durationMillis
                         if (event.isShiftPressed || !gestures.seek || dur <= 0L) return@onKeyEvent false
                         val target = (dur * digit / 10L).coerceIn(0L, dur)
-                        player.seekTo(target)
-                        progress.positionMillis = target
+                        commitSeek(player, progress, target)
                         keepAwake()
                         return@onKeyEvent true
                     }
@@ -793,7 +861,7 @@ fun PlayerShell(
                             if (!gestures.seek) return@onKeyEvent false
                             val step = if (event.isShiftPressed) LONG_SEEK_MILLIS else DOUBLE_TAP_SEEK_MILLIS
                             val delta = if (event.key == Key.DirectionLeft) -step else step
-                            nudgeSeek(player, delta)
+                            nudgeSeek(player, progress, delta)
                             seekNudgeMillis = accumulateNudge(seekNudgeMillis, delta)
                         }
                         Key.DirectionUp -> nudgeVolume(VOLUME_STEP)
@@ -851,7 +919,105 @@ fun PlayerShell(
                 }
                 // 用鼠标看、控件收起且在播放时,光标跟着藏起来,不留一个箭头钉在画面上。
                 .playerCursor(hidden = !pointerSource.isTouchLike && !controlsVisible && isPlaying && speedController?.active != true)
-                .pointerInput(player, locked, gestures, pipWindow) {
+                // 统一互斥的拖拽(横划 seek / 纵划亮度音量 / 小窗拖动)与长按倍速选档状态机,
+                // 放在点按检测之前:拖拽或长按一旦认领便消费后续事件(含抬手),不会漏给 detectTapGestures。
+                .playerSurfaceGestures(
+                    key1 = player,
+                    locked = locked,
+                    pipWindow = pipWindow,
+                    speedController = speedController,
+                    speedEnabled = gestures.fastForward && !locked && !pip,
+                    dialEnabled = gestures.fastForwardDial,
+                    forceHorizontalBelow = !showSpeedOverlay && gestures.fastForwardDial,
+                    onSpeedStart = {
+                        controlsVisible = false
+                        gesture = null
+                        progress.dragPositionMillis = null
+                        keepAwake()
+                    },
+                    onDragStart = { start, width, height ->
+                        dragging = true
+                        gesture = null
+                        dragAccumulated.value = Offset.Zero
+                        dragStartX = start.x / width
+                        // **起手就在取消区里的话,这次拖拽不给取消。** 顶部两角本来就是
+                        // 横屏握持时拇指容易搭上去的地方;不排除的话,从那儿起手的 seek
+                        // 一动就被判成"要取消",而用户根本没往哪儿拖。
+                        seekCancelArmed =
+                            if (inSeekCancelZone(start, width, height)) null else false
+                    },
+                    onDrag = drag@{ position, delta, width, height ->
+                        dragAccumulated.value += delta
+                        if (seekCancelArmed != null) {
+                            val inZone = inSeekCancelZone(position, width, height)
+                            // 进区的那一下给触感,出区不给:取消区没有边框,手指还压在画面上,
+                            // 浮层上那行字改成"松手取消"是唯一的提示,而手指正挡在它附近。
+                            // 只报"越过了门槛"这一次,所以判的是 false → true 那一次跳变。
+                            if (inZone && seekCancelArmed == false) {
+                                haptics.performHapticFeedback(
+                                    HapticFeedbackType.GestureThresholdActivate,
+                                )
+                            }
+                            seekCancelArmed = inZone
+                        }
+
+                        // 方向在第一段位移里定下,之后不再改判:不锁轴的话,横划途中手指
+                        // 稍微飘一点就会跳去改音量。
+                        val accumulated = dragAccumulated.value
+                        val current = gesture ?: startGesture(
+                            abs(accumulated.x) >= abs(accumulated.y),
+                            progress.activePendingTarget() ?: player.currentPosition,
+                        )?.also { gesture = it } ?: return@drag
+
+                        when (current) {
+                            is PlayerGesture.Seek -> {
+                                // 整屏宽对应多长:不超过 1 分钟的短视频按全长映射,避免半屏划到头;
+                                // 更长视频按时长的四分之一取,夹在 1 到 5 分钟之间。
+                                val dur = progress.durationMillis
+                                val span = if (dur <= 60_000L) {
+                                    dur.coerceAtLeast(1L)
+                                } else {
+                                    (dur / 4).coerceIn(60_000L, 300_000L)
+                                }
+                                val target = current.startPositionMillis +
+                                    (accumulated.x / width * span).toLong()
+                                progress.dragPositionMillis = target.coerceIn(0L, dur.coerceAtLeast(0L))
+                            }
+
+                            is PlayerGesture.Adjust -> {
+                                // 向上是变大,所以减去 y 的位移(屏幕坐标向下为正)。
+                                val value = (current.startValue - accumulated.y / height)
+                                    .coerceIn(0f, 1f)
+                                adjustValue = value
+                                when (current.kind) {
+                                    VerticalAdjust.Brightness -> brightness?.set(value)
+                                    VerticalAdjust.Volume -> volume?.set(value)
+                                }
+                            }
+                        }
+                    },
+                    onDragEnd = {
+                        dragging = false
+                        // 拖拽期间只动本地位置,松手才真 seek:每帧 seek 会让播放器不停丢
+                        // 缓冲重新起播,表现为拖不动。和进度条的处理是同一套。
+                        if (gesture is PlayerGesture.Seek && seekCancelArmed != true) {
+                            progress.dragPositionMillis?.let { target ->
+                                commitSeek(player, progress, target)
+                            }
+                        }
+                        gesture = null
+                        progress.dragPositionMillis = null
+                        seekCancelArmed = null
+                        keepAwake()
+                    },
+                    onDragCancel = {
+                        dragging = false
+                        gesture = null
+                        progress.dragPositionMillis = null
+                        seekCancelArmed = null
+                    },
+                )
+                .pointerInput(player, locked, gestures, pipWindow, speedController) {
                     if (locked) {
                         // 锁上时只留"点一下把解锁按钮唤出来",其余手势一概不接。
                         detectTapGestures(onTap = { controlsVisible = !controlsVisible })
@@ -859,6 +1025,7 @@ fun PlayerShell(
                     }
                     detectTapGestures(
                         onTap = {
+                            if (speedController?.active == true) return@detectTapGestures
                             if (latestMenuOpen) {
                                 focusManager.clearFocus()
                                 keepAwake()
@@ -879,6 +1046,7 @@ fun PlayerShell(
                         // 操作;而三分法是 YouTube 立起来的惯例,两侧那两块也正是横屏握持时
                         // 拇指自然落到的位置。关掉 seek 的场景(直播)下四段退化成整屏播放/暂停。
                         onDoubleTap = double@{ offset ->
+                            if (speedController?.active == true) return@double
                             // 窗口里双击进全屏,小窗里双击回窗口:同一个手势,放大一档。
                             if (pipWindow != null) {
                                 pipWindow.exit()
@@ -891,11 +1059,11 @@ fun PlayerShell(
                             val quarter = size.width / 4f
                             when {
                                 gestures.seek && gestures.doubleTapSeek && offset.x < quarter ->
-                                    nudgeSeek(player, -DOUBLE_TAP_SEEK_MILLIS)
+                                    nudgeSeek(player, progress, -DOUBLE_TAP_SEEK_MILLIS)
                                         .also { seekNudgeMillis = accumulateNudge(seekNudgeMillis, -DOUBLE_TAP_SEEK_MILLIS) }
 
                                 gestures.seek && gestures.doubleTapSeek && offset.x > size.width - quarter ->
-                                    nudgeSeek(player, DOUBLE_TAP_SEEK_MILLIS)
+                                    nudgeSeek(player, progress, DOUBLE_TAP_SEEK_MILLIS)
                                         .also { seekNudgeMillis = accumulateNudge(seekNudgeMillis, DOUBLE_TAP_SEEK_MILLIS) }
 
                                 else -> {
@@ -906,127 +1074,7 @@ fun PlayerShell(
                             keepAwake()
                         },
                     )
-                }
-                // 拖拽单独一个 pointerInput:和上面的点按检测并列而不是塞进同一个块。
-                // 两者天然互斥 —— 位移超过 touch slop 之后点按检测就不会触发了。
-                .pointerInput(player, locked, gestures, pipWindow) {
-                    if (locked) return@pointerInput
-                    // 小窗没有标题栏,拖画面就是拖窗口;小窗里也用不着横划 seek,底下有进度条。
-                    if (pipWindow != null) {
-                        detectDragGestures(onDragStart = { pipWindow.startMove() }) { change, _ ->
-                            change.consume()
-                            pipWindow.move()
-                        }
-                        return@pointerInput
-                    }
-                    var accumulated = Offset.Zero
-
-                    // 直播时间线会持续更新时长,不能用它重启拖拽监听;时长在 onDrag 里现读。
-                    // 监听因锁定或离开页面被取消时也要清理浮层,此时不保证调用 onDragCancel。
-                    try {
-                        detectDragGestures(
-                            onDragStart = { start ->
-                                dragging = true
-                                gesture = null
-                                val width = size.width.toFloat().coerceAtLeast(1f)
-                                val height = size.height.toFloat().coerceAtLeast(1f)
-                                accumulated = Offset.Zero
-                                dragStartX = start.x / width
-                                // **起手就在取消区里的话,这次拖拽不给取消。** 顶部两角本来就是
-                                // 横屏握持时拇指容易搭上去的地方;不排除的话,从那儿起手的 seek
-                                // 一动就被判成"要取消",而用户根本没往哪儿拖。
-                                seekCancelArmed =
-                                    if (inSeekCancelZone(start, width, height)) null else false
-                            },
-                            onDragEnd = {
-                                dragging = false
-                                // 拖拽期间只动本地位置,松手才真 seek:每帧 seek 会让播放器不停丢
-                                // 缓冲重新起播,表现为拖不动。和进度条的处理是同一套。
-                                if (gesture is PlayerGesture.Seek && seekCancelArmed != true) {
-                                    progress.dragPositionMillis?.let { target ->
-                                        player.seekTo(target)
-                                        progress.positionMillis = target
-                                    }
-                                }
-                                gesture = null
-                                progress.dragPositionMillis = null
-                                seekCancelArmed = null
-                                keepAwake()
-                            },
-                            onDragCancel = {
-                                dragging = false
-                                gesture = null
-                                progress.dragPositionMillis = null
-                                seekCancelArmed = null
-                            },
-                        ) { change, delta ->
-                            val width = size.width.toFloat().coerceAtLeast(1f)
-                            val height = size.height.toFloat().coerceAtLeast(1f)
-                            change.consume()
-                            accumulated += delta
-                            if (seekCancelArmed != null) {
-                                val inZone = inSeekCancelZone(change.position, width, height)
-                                // 进区的那一下给触感,出区不给:取消区没有边框,手指还压在画面上,
-                                // 浮层上那行字改成"松手取消"是唯一的提示,而手指正挡在它附近。
-                                // 只报"越过了门槛"这一次,所以判的是 false → true 那一次跳变。
-                                if (inZone && seekCancelArmed == false) {
-                                    haptics.performHapticFeedback(
-                                        HapticFeedbackType.GestureThresholdActivate,
-                                    )
-                                }
-                                seekCancelArmed = inZone
-                            }
-
-                            // 方向在第一段位移里定下,之后不再改判:不锁轴的话,横划途中手指
-                            // 稍微飘一点就会跳去改音量。
-                            val current = gesture ?: startGesture(
-                                abs(accumulated.x) >= abs(accumulated.y),
-                                player.currentPosition,
-                            )?.also { gesture = it } ?: return@detectDragGestures
-
-                            when (current) {
-                                is PlayerGesture.Seek -> {
-                                    // 整屏宽对应多长:按时长的四分之一取,夹在 1 到 5 分钟之间。
-                                    // 定长(比如恒定 2 分钟)在长视频里要划很多次;按整段时长又会让
-                                    // 长视频一格几十秒,微调不了。
-                                    val dur = progress.durationMillis
-                                    val span = (dur / 4).coerceIn(60_000L, 300_000L)
-                                    val target = current.startPositionMillis +
-                                        (accumulated.x / width * span).toLong()
-                                    progress.dragPositionMillis = target.coerceIn(0L, dur.coerceAtLeast(0L))
-                                }
-
-                                is PlayerGesture.Adjust -> {
-                                    // 向上是变大,所以减去 y 的位移(屏幕坐标向下为正)。
-                                    val value = (current.startValue - accumulated.y / height)
-                                        .coerceIn(0f, 1f)
-                                    adjustValue = value
-                                    when (current.kind) {
-                                        VerticalAdjust.Brightness -> brightness?.set(value)
-                                        VerticalAdjust.Volume -> volume?.set(value)
-                                    }
-                                }
-                            }
-                        }
-                    } finally {
-                        dragging = false
-                        gesture = null
-                        progress.dragPositionMillis = null
-                        seekCancelArmed = null
-                    }
-                }
-                .speedSelectionLongPress(
-                    speedController,
-                    enabled = gestures.fastForward && !locked && !pip,
-                    dialEnabled = gestures.fastForwardDial,
-                    forceHorizontalBelow = !showSpeedOverlay && gestures.fastForwardDial,
-                    onStart = {
-                        controlsVisible = false
-                        gesture = null
-                        progress.dragPositionMillis = null
-                        keepAwake()
-                    },
-                ),
+                },
         )
 
         // 顶部渐变在 overlay **之前**,于是弹幕落在它上面而不是底下。托的是页面画在壳外面的
@@ -1594,12 +1642,22 @@ private fun BatteryGlyph(
     }
 }
 
-/** 双击 ±N 秒。夹在 [0, duration] 内:越界 seek 在部分实现上会直接把播放器打到 IDLE。 */
-private fun nudgeSeek(player: PlayerHandle, deltaMillis: Long) {
-    val duration = player.duration.coerceAtLeast(0)
-    val target = player.currentPosition + deltaMillis
-    player.seekTo(if (duration > 0) target.coerceIn(0L, duration) else target.coerceAtLeast(0L))
+/** 提交一次 seek 并锁定本地进度读数,防止异步 seek 落定前被轮询回写旧位置。 */
+private fun commitSeek(player: PlayerHandle, progress: PlayerProgressState, targetMillis: Long) {
+    val duration = player.duration.coerceAtLeast(progress.durationMillis).coerceAtLeast(0L)
+    val clamped = if (duration > 0L) targetMillis.coerceIn(0L, duration) else targetMillis.coerceAtLeast(0L)
+    progress.markPendingSeek(clamped)
+    player.seekTo(clamped)
 }
+
+/** 双击 / 方向键 ±N 秒。基于未落定的 pending 目标累加,连续快按不丢步;夹在 [0, duration] 内。 */
+private fun nudgeSeek(player: PlayerHandle, progress: PlayerProgressState, deltaMillis: Long) {
+    val base = progress.activePendingTarget() ?: player.currentPosition
+    commitSeek(player, progress, base + deltaMillis)
+}
+
+private const val PENDING_SEEK_LOCK_MILLIS = 1_200L
+private const val PENDING_SEEK_SETTLE_TOLERANCE_MILLIS = 750L
 
 private const val CONTROLS_HIDE_DELAY_MILLIS = 3_000L
 

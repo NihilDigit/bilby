@@ -112,6 +112,7 @@ fun SeekBar(
     playing: Boolean = false,
     speed: Float = 1f,
     segments: List<SeekBarSegment> = emptyList(),
+    onTapSeek: ((Long) -> Unit)? = null,
 ) {
     SeekBar(
         positionProvider = { position },
@@ -129,6 +130,7 @@ fun SeekBar(
         playing = playing,
         speed = speed,
         segments = segments,
+        onTapSeek = onTapSeek,
     )
 }
 
@@ -181,6 +183,11 @@ fun SeekBar(
      * 会被自动跳过的片段(SponsorBlock)。**只染色,不可交互。**
      */
     segments: List<SeekBarSegment> = emptyList(),
+    /**
+     * 单击进度条直接跳转。不走 [onSeekStart] 暂停再恢复的拖拽周期,避免点击进度条时出现一次短暂卡顿;
+     * 未提供时也直接调用 [onSeekTo] + [onSeekFinished] 而不触发 [onSeekStart]。
+     */
+    onTapSeek: ((Long) -> Unit)? = null,
 ) {
     val reducedMotion = rememberReducedMotion()
     var dragging by remember { mutableStateOf(false) }
@@ -231,10 +238,23 @@ fun SeekBar(
     }
     val latestPositionProvider by rememberUpdatedState(positionProvider)
     val latestBufferedProvider by rememberUpdatedState(bufferedPositionProvider)
+    val latestOnSeekStart by rememberUpdatedState(onSeekStart)
+    val latestOnSeekTo by rememberUpdatedState(onSeekTo)
+    val latestOnSeekFinished by rememberUpdatedState(onSeekFinished)
+    val latestOnTapSeek by rememberUpdatedState(onTapSeek)
     fun currentFraction(): Float =
         if (duration > 0) (latestPositionProvider().toFloat() / duration).coerceIn(0f, 1f) else 0f
     fun currentBufferedFraction(): Float =
         if (duration > 0) (latestBufferedProvider().toFloat() / duration).coerceIn(0f, 1f) else 0f
+    fun commitTapSeek(targetMillis: Long) {
+        val tapSeek = latestOnTapSeek
+        if (tapSeek != null) {
+            tapSeek(targetMillis)
+        } else {
+            latestOnSeekTo(targetMillis)
+            latestOnSeekFinished()
+        }
+    }
 
     val isTouchLike by rememberUpdatedState(LocalPointerSource.current.isTouchLike)
     val label = stringResource(Res.string.player_progress)
@@ -274,9 +294,7 @@ fun SeekBar(
                     if (duration <= 0) {
                         false
                     } else {
-                        onSeekStart()
-                        onSeekTo(target.coerceIn(0f, 1f).toPosition(duration))
-                        onSeekFinished()
+                        commitTapSeek(target.coerceIn(0f, 1f).toPosition(duration))
                         true
                     }
                 }
@@ -289,20 +307,20 @@ fun SeekBar(
                     onDragStart = { offset ->
                         dragging = true
                         relativeMode = isTouchLike
-                        onSeekStart()
+                        latestOnSeekStart()
                         if (relativeMode) {
                             dragFraction = currentFraction()
                         } else {
-                            onSeekTo(offset.x.toFraction().toPosition(duration))
+                            latestOnSeekTo(offset.x.toFraction().toPosition(duration))
                         }
                     },
                     onDragEnd = {
                         dragging = false
-                        onSeekFinished()
+                        latestOnSeekFinished()
                     },
                     onDragCancel = {
                         dragging = false
-                        onSeekFinished()
+                        latestOnSeekFinished()
                     },
                     onHorizontalDrag = { change, dragAmount ->
                         change.consume()
@@ -310,10 +328,10 @@ fun SeekBar(
                             val usable = widthPx - insetPx * 2
                             if (usable > 0f) {
                                 dragFraction = (dragFraction + dragAmount / usable).coerceIn(0f, 1f)
-                                onSeekTo(dragFraction.toPosition(duration))
+                                latestOnSeekTo(dragFraction.toPosition(duration))
                             }
                         } else {
-                            onSeekTo(change.position.x.toFraction().toPosition(duration))
+                            latestOnSeekTo(change.position.x.toFraction().toPosition(duration))
                         }
                     },
                 )
@@ -323,9 +341,7 @@ fun SeekBar(
             .pointerInput(duration) {
                 if (duration <= 0) return@pointerInput
                 detectTapGestures { offset ->
-                    onSeekStart()
-                    onSeekTo(offset.x.toFraction().toPosition(duration))
-                    onSeekFinished()
+                    commitTapSeek(offset.x.toFraction().toPosition(duration))
                 }
             },
         contentAlignment = Alignment.Center,
