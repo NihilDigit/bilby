@@ -1139,6 +1139,7 @@ private fun TabIndicatorScope.SpacePagerTabIndicator(pagerState: PagerState) {
             if (tabPositions.isEmpty()) {
                 layout(0, 0) {}
             } else {
+                val selectedIndex = pagerState.currentPage.coerceIn(0, tabPositions.lastIndex)
                 val pos = (pagerState.currentPage + pagerState.currentPageOffsetFraction)
                     .coerceIn(0f, tabPositions.lastIndex.toFloat())
                 val low = pos.toInt().coerceIn(0, tabPositions.lastIndex)
@@ -1153,8 +1154,9 @@ private fun TabIndicatorScope.SpacePagerTabIndicator(pagerState: PagerState) {
                 val placeable = measurable.measure(
                     constraints.copy(minWidth = indicatorWidth, maxWidth = indicatorWidth),
                 )
-                layout(constraints.maxWidth, constraints.maxHeight) {
-                    placeable.placeRelative(indicatorX, constraints.maxHeight - placeable.height)
+                val parentX = ((tabPositions[selectedIndex].width.roundToPx() - indicatorWidth) / 2).coerceAtLeast(0)
+                layout(placeable.width, placeable.height) {
+                    placeable.placeRelative(indicatorX - parentX, 0)
                 }
             }
         },

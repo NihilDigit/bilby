@@ -1,6 +1,8 @@
 package dev.bilby.ui.player
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.indication
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -18,7 +20,9 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.outlined.PlaylistPlay
 import androidx.compose.material.icons.filled.ArrowDownward
 import androidx.compose.material.icons.filled.ArrowUpward
@@ -40,8 +44,10 @@ import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ProvideTextStyle
 import androidx.compose.material3.SegmentedListItem
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.ripple
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.LaunchedEffect
@@ -74,10 +80,12 @@ import dev.bilby.stringResource
 import dev.bilby.ui.components.InlineProgress
 import dev.bilby.ui.components.ListCover
 import dev.bilby.ui.components.ListScrollbar
+import dev.bilby.ui.components.LoadingSpinner
 import dev.bilby.ui.components.PlayingIndicator
 import dev.bilby.ui.components.menuItemShape
 import dev.bilby.ui.theme.Dimens
 import dev.bilby.ui.theme.Spacing
+import dev.bilby.ui.theme.interactiveCard
 import dev.bilby.ui.theme.tabular
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
@@ -153,30 +161,120 @@ private fun EpisodeRow.toQueueItem(): QueueItem = QueueItem(
 )
 
 /**
- * 统一格式化队列位置读数(`X / N`)。
- * - 已知精确来源偏移与总数时输出 `sourcePosition / sourceTotal`;
- * - 仅知总数的中间窗口态输出 `queue_position_windowed`(`%1$d/%2$d  共 %3$d`,不含 `·`);
- * - 其余可定位情形回退为 `displayPosition / displayTotal`。
+ * 统一格式化队列位置读数(`X / N`),始终反映本地已加载列表的真实位置与条数。
+ * 随用户滚动懒加载前后页,`X / N` 实时递增。`sourcePosition` / `sourceTotal` 保留于领域模型内,
+ * 继续驱动 [EpisodeList] 的前后边界加载提示。
  */
-@Composable
 fun QueuePositionText(queue: QueueState): String? {
-    val srcPos = queue.sourcePosition
-    val srcTotal = queue.sourceTotal
-    if (srcPos != null && srcTotal != null) {
-        return "$srcPos / $srcTotal"
-    }
     val idx = queue.currentIndex
-    if (srcTotal != null && idx in queue.items.indices) {
-        return stringResource(Res.string.queue_position_windowed, idx + 1, queue.items.size, srcTotal)
-    }
-    val dispPos = queue.displayPosition
-    val dispTotal = queue.displayTotal
-    return if (dispPos != null && dispTotal != null) {
-        "$dispPos / $dispTotal"
+    return if (idx in queue.items.indices && queue.items.isNotEmpty()) {
+        "${idx + 1} / ${queue.items.size}"
     } else {
         null
     }
 }
+
+/**
+ * 统一队列来源胶囊:独占一行展示来源名称、`X / N` 真实已加载位置徽章与边界加载/可点箭头。
+ *
+ * - 视觉形态:`CircleShape`、`surfaceContainerHigh` 静息底色,高至少 `36.dp`,外层保底 `48.dp` 触控热区;
+ * - 可点态叠加 [interactiveCard](悬停升至 `surfaceContainerHighest`,按下轻缩)与右箭头,
+ *   不可点态(如详情页同 UP 兜底队列)隐藏右箭头。
+ */
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
+@Composable
+fun QueueSourceCapsule(
+    sourceLabel: String,
+    positionText: String?,
+    edgeLoading: Boolean,
+    onClick: (() -> Unit)?,
+    modifier: Modifier = Modifier,
+) {
+    val clickable = onClick != null
+    val interactionSource = remember { MutableInteractionSource() }
+    Box(
+        modifier = modifier
+            .heightIn(min = Dimens.MinTouchTarget)
+            .then(
+                if (onClick != null) {
+                    Modifier
+                        .pointerHoverIcon(PointerIcon.Hand)
+                        .clickable(
+                            interactionSource = interactionSource,
+                            indication = null,
+                            role = Role.Button,
+                            onClick = onClick,
+                        )
+                } else {
+                    Modifier
+                },
+            ),
+        contentAlignment = Alignment.CenterStart,
+    ) {
+        val capsuleModifier = if (clickable) {
+            Modifier
+                .heightIn(min = QueueSourceCapsuleMinHeight)
+                .interactiveCard(
+                    shape = CircleShape,
+                    baseColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+                    hoverColor = MaterialTheme.colorScheme.surfaceContainerHighest,
+                    enableScale = true,
+                )
+                .indication(interactionSource = interactionSource, indication = ripple())
+        } else {
+            Modifier
+                .heightIn(min = QueueSourceCapsuleMinHeight)
+                .clip(CircleShape)
+                .background(MaterialTheme.colorScheme.surfaceContainerHigh, CircleShape)
+        }
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
+            modifier = capsuleModifier
+                .padding(horizontal = Spacing.Cozy, vertical = Spacing.Hair),
+        ) {
+            Text(
+                text = sourceLabel,
+                style = MaterialTheme.typography.titleSmallEmphasized,
+                color = MaterialTheme.colorScheme.onSurface,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f, fill = false),
+            )
+            if (!positionText.isNullOrBlank()) {
+                Surface(
+                    color = MaterialTheme.colorScheme.secondaryContainer,
+                    contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+                    shape = CircleShape,
+                ) {
+                    Text(
+                        text = positionText,
+                        style = MaterialTheme.typography.labelSmallEmphasized.tabular,
+                        maxLines = 1,
+                        softWrap = false,
+                        modifier = Modifier.padding(
+                            horizontal = Spacing.Tight,
+                            vertical = QueueSourceBadgeVerticalPadding,
+                        ),
+                    )
+                }
+            }
+            if (edgeLoading) {
+                LoadingSpinner()
+            } else if (clickable) {
+                Icon(
+                    imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(Dimens.IconInline),
+                )
+            }
+        }
+    }
+}
+
+private val QueueSourceCapsuleMinHeight = 36.dp
+private val QueueSourceBadgeVerticalPadding = 2.dp
 
 /**
  * 把队列与当前这条的分 P 拼成一份切集清单。**三种形态(详情页、听视频、全屏)共用这一份**,

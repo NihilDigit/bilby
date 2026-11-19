@@ -8,8 +8,11 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -206,6 +209,7 @@ import dev.bilby.ui.components.LoadingSpinner
 import dev.bilby.ui.components.menuItemShape
 import dev.bilby.ui.components.rememberCopyAction
 import dev.bilby.ui.player.QueuePositionText
+import dev.bilby.ui.player.QueueSourceCapsule
 import dev.bilby.ui.theme.Breakpoints
 import dev.bilby.ui.theme.Dimens
 import dev.bilby.ui.theme.FixedColors
@@ -261,7 +265,7 @@ private const val LeadInKey = "lyrics_lead_in"
  * 才知道下面是什么。露出半条封面和标题不用读:它自己就说明了下面是一列视频,顺带也说明了
  * 它能拉。删掉那行标签腾出来的高度正好给这件事。
  */
-private val QueueHandleHeight = 132.dp
+private val QueueHandleHeight = 156.dp
 
 /** 宽屏右栏的宽度:队列条目的封面加两行标题排得开,同空间页动态侧栏的默认宽。 */
 private val QueuePaneWidth = 400.dp
@@ -832,8 +836,8 @@ fun ListenScreen(
                             state = state,
                             queue = queue,
                             onOpenQueueSource = onOpenQueueSource,
-                            // 双栏模式下右侧队列标题已常驻展示来源与位置，左侧唱片下方省略重复胶囊。
-                            showSourcePill = !(expandedWindow && hasQueue),
+                            // 有队列时队列头已独占展示来源胶囊，单栏与双栏均隐藏唱片下方的重复胶囊。
+                            showSourcePill = !hasQueue,
                             speed = speed,
                             progress = progress,
                             onScrubStart = seekStart,
@@ -1018,7 +1022,6 @@ private const val DiscHaloRadiusRatio = 1.18f
 private val SheetTopCornerRadius = 28.dp
 private val SheetDragHandleWidth = 32.dp
 private val SheetDragHandleHeight = 4.dp
-private val QueueBadgeVerticalPadding = 2.dp
 
 /**
  * 没有字幕、或还没点开歌词页时的默认呈现:圆形唱片居中 + 标题 + UP 名/队列来源与位置胶囊。
@@ -1797,7 +1800,7 @@ private fun FailureRow(message: String, retrying: Boolean, onRetry: () -> Unit) 
  * 收起状态下只露出这里的第一行文字(见 [QueueHandleHeight]),内容本身不需要为收起态
  * 另写一份——`BottomSheetScaffold` 只是把超出 peek 高度的部分裁掉。
  */
-@OptIn(ExperimentalMaterial3ExpressiveApi::class)
+@OptIn(ExperimentalMaterial3ExpressiveApi::class, ExperimentalLayoutApi::class)
 @Composable
 private fun QueueSheetContent(
     queue: QueueUiState,
@@ -1821,136 +1824,105 @@ private fun QueueSheetContent(
     val edgeLoading = queueState?.let { it.loadingBefore || it.loadingAfter } == true
     val navBottom = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
     val sourceClick = queue.source?.let { source -> { onOpenQueueSource(source) } }
-    // 标题只负责打开真实集合来源；Sheet 展开/收起由右侧唯一尖角按钮与把手承担，消除重复触点。
-    val headerPrimaryClick = sourceClick
+    val showReset = queue.editActions?.onReset != null
+    val showClearOthers = editing && queue.editActions?.onClearOthers != null && queue.rows.size > 1
+    val canEdit = queue.editActions != null && queue.rows.size > 1
 
     Column(modifier = if (fillHeight) Modifier.fillMaxSize() else Modifier.fillMaxWidth()) {
-        // 标题是这份队列的来源,配「X / N」等宽胶囊。
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
+        // 第 1 行:独立队列来源胶囊独占整行,配真实已加载「X / N」徽章,避免与控制行互相挤压截断。
+        Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .heightIn(min = Dimens.MinTouchTarget)
-                .padding(start = Spacing.Comfortable, end = Spacing.Tight),
+                .padding(horizontal = Spacing.Comfortable),
+            contentAlignment = Alignment.CenterStart,
         ) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
-                modifier = Modifier
-                    .weight(1f)
-                    .heightIn(min = Dimens.MinTouchTarget)
-                    .clip(MaterialTheme.shapes.small)
-                    .then(
-                        if (headerPrimaryClick != null) {
-                            Modifier
-                                .pointerHoverIcon(PointerIcon.Hand)
-                                .clickable(role = Role.Button, onClick = headerPrimaryClick)
-                        } else {
-                            Modifier
-                        },
-                    )
-                    .padding(vertical = Spacing.Hair),
-            ) {
-                Text(
-                    text = queue.sourceLabel.ifEmpty { stringResource(Res.string.listen_queue_title) },
-                    style = MaterialTheme.typography.titleSmallEmphasized,
-                    color = MaterialTheme.colorScheme.onSurface,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f, fill = false),
-                )
-                if (sourceClick != null) {
-                    Icon(
-                        imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.size(Dimens.IconInline),
-                    )
-                }
-                if (!posText.isNullOrBlank()) {
-                    Surface(
-                        color = MaterialTheme.colorScheme.secondaryContainer,
-                        contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
-                        shape = CircleShape,
-                    ) {
-                        Text(
-                            text = posText,
-                            style = MaterialTheme.typography.labelSmallEmphasized.tabular,
-                            maxLines = 1,
-                            softWrap = false,
-                            modifier = Modifier.padding(
-                                horizontal = Spacing.Tight,
-                                vertical = QueueBadgeVerticalPadding,
-                            ),
-                        )
-                    }
-                }
-                if (edgeLoading) {
-                    LoadingSpinner()
-                }
-            }
-            QueuePlaybackControls(
-                endMode = queue.endMode,
-                order = queue.order,
-                onCycleEndMode = onCycleEndMode,
-                onCycleOrder = onCycleOrder,
-                showOrder = queue.rows.size > 1,
+            QueueSourceCapsule(
+                sourceLabel = queue.sourceLabel.ifEmpty { stringResource(Res.string.listen_queue_title) },
+                positionText = posText,
+                edgeLoading = edgeLoading,
+                onClick = sourceClick,
             )
-            if (queue.editActions != null && queue.rows.size > 1) {
-                val editLabel = stringResource(if (editing) Res.string.action_done else Res.string.queue_edit)
-                IconButton(
-                    onClick = { editing = !editing },
-                    modifier = Modifier.pointerHoverIcon(PointerIcon.Hand),
-                ) {
-                    Icon(
-                        imageVector = if (editing) Icons.Filled.Check else Icons.Outlined.Edit,
-                        contentDescription = editLabel,
-                        modifier = Modifier.size(Dimens.IconInline),
-                    )
-                }
-            }
-            if (onToggleSheet != null) {
-                val toggleLabel = stringResource(
-                    if (sheetExpanded) Res.string.feed_burst_collapse else Res.string.dynamic_text_expand,
-                )
-                IconButton(
-                    onClick = onToggleSheet,
-                    modifier = Modifier.pointerHoverIcon(PointerIcon.Hand),
-                ) {
-                    Icon(
-                        imageVector = if (sheetExpanded) Icons.Filled.ExpandMore else Icons.Filled.ExpandLess,
-                        contentDescription = toggleLabel,
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.size(Dimens.IconInline),
-                    )
-                }
-            }
         }
-        val showReset = queue.editActions?.onReset != null
-        val showClearOthers = editing && queue.editActions?.onClearOthers != null && queue.rows.size > 1
-        if (showReset || showClearOthers) {
-            Row(
-                modifier = Modifier.fillMaxWidth().padding(horizontal = Spacing.Comfortable),
-                horizontalArrangement = Arrangement.spacedBy(Spacing.Tight, Alignment.End),
-            ) {
-                if (showReset) {
-                    TextButton(
-                        onClick = {
-                            queue.editActions.onReset()
-                            editing = false
-                        },
-                    ) {
-                        Text(stringResource(Res.string.queue_reset))
+        // 第 2 行:左侧播放策略控制,右侧编辑/重置/清空其他与展开收起。
+        FlowRow(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(start = Spacing.Comfortable, end = Spacing.Tight),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalArrangement = Arrangement.spacedBy(Spacing.Hair),
+            itemVerticalAlignment = Alignment.CenterVertically,
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                QueuePlaybackControls(
+                    endMode = queue.endMode,
+                    order = queue.order,
+                    onCycleEndMode = onCycleEndMode,
+                    onCycleOrder = onCycleOrder,
+                    showOrder = queue.rows.size > 1,
+                )
+            }
+            if (showReset || showClearOthers || canEdit || onToggleSheet != null) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    if (showReset) {
+                        TextButton(
+                            onClick = {
+                                queue.editActions?.onReset?.invoke()
+                                editing = false
+                            },
+                            contentPadding = PaddingValues(horizontal = Spacing.Tight),
+                            modifier = Modifier.defaultMinSize(minWidth = 1.dp),
+                        ) {
+                            Text(
+                                text = stringResource(Res.string.queue_reset),
+                                maxLines = 1,
+                                softWrap = false,
+                            )
+                        }
                     }
-                }
-                if (showClearOthers) {
-                    TextButton(
-                        onClick = {
-                            queue.editActions.onClearOthers()
-                            editing = false
-                        },
-                    ) {
-                        Text(stringResource(Res.string.queue_clear_others))
+                    if (showClearOthers) {
+                        TextButton(
+                            onClick = {
+                                queue.editActions?.onClearOthers?.invoke()
+                                editing = false
+                            },
+                            contentPadding = PaddingValues(horizontal = Spacing.Tight),
+                            modifier = Modifier.defaultMinSize(minWidth = 1.dp),
+                        ) {
+                            Text(
+                                text = stringResource(Res.string.queue_clear_others),
+                                maxLines = 1,
+                                softWrap = false,
+                            )
+                        }
+                    }
+                    if (canEdit) {
+                        val editLabel = stringResource(if (editing) Res.string.action_done else Res.string.queue_edit)
+                        IconButton(
+                            onClick = { editing = !editing },
+                            modifier = Modifier.pointerHoverIcon(PointerIcon.Hand),
+                        ) {
+                            Icon(
+                                imageVector = if (editing) Icons.Filled.Check else Icons.Outlined.Edit,
+                                contentDescription = editLabel,
+                                modifier = Modifier.size(Dimens.IconInline),
+                            )
+                        }
+                    }
+                    if (onToggleSheet != null) {
+                        val toggleLabel = stringResource(
+                            if (sheetExpanded) Res.string.feed_burst_collapse else Res.string.dynamic_text_expand,
+                        )
+                        IconButton(
+                            onClick = onToggleSheet,
+                            modifier = Modifier.pointerHoverIcon(PointerIcon.Hand),
+                        ) {
+                            Icon(
+                                imageVector = if (sheetExpanded) Icons.Filled.ExpandMore else Icons.Filled.ExpandLess,
+                                contentDescription = toggleLabel,
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.size(Dimens.IconInline),
+                            )
+                        }
                     }
                 }
             }

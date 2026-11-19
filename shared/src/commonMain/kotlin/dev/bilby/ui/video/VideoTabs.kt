@@ -248,6 +248,7 @@ import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.foundation.layout.fillMaxHeight
 import dev.bilby.ui.player.EpisodeList
 import dev.bilby.ui.player.QueuePositionText
+import dev.bilby.ui.player.QueueSourceCapsule
 import dev.bilby.ui.components.BiliRichText
 import dev.bilby.ui.theme.interactiveCard
 import dev.bilby.ui.theme.rememberReducedMotion
@@ -1315,191 +1316,185 @@ private fun UpRow(
     val copyUidLabel = stringResource(Res.string.action_copy_uid)
     val menuLabel = stringResource(Res.string.menu_item_actions)
 
-    Surface(
-        color = MaterialTheme.colorScheme.surfaceContainer,
-        shape = MaterialTheme.shapes.large,
-        modifier = Modifier.fillMaxWidth(),
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
+        modifier = Modifier
+            .fillMaxWidth()
+            .heightIn(min = Dimens.MinTouchTarget)
+            .padding(vertical = Spacing.Hair),
     ) {
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = Spacing.Cozy, vertical = UpCardVerticalPadding),
-        ) {
-            if (staff.isEmpty()) {
-                val itemCount = (if (name.isNotBlank()) 1 else 0) + (if (mid > 0L) 1 else 0)
-                ContextMenuBox(
-                    onClick = { onUpClick(mid) },
-                    menuLabel = menuLabel,
-                    modifier = Modifier
-                        .weight(1f)
-                        .interactiveCard(
-                            shape = MaterialTheme.shapes.medium,
-                            baseColor = Color.Transparent,
-                            hoverColor = MaterialTheme.colorScheme.surfaceContainerHigh,
-                        ),
-                    menu = { close ->
-                        var cursor = 0
-                        if (name.isNotBlank()) {
-                            DropdownMenuItem(
-                                onClick = {
-                                    close()
-                                    copyText(name)
-                                },
-                                text = { Text(copyUpNameLabel) },
-                                leadingIcon = { Icon(Icons.Outlined.ContentCopy, contentDescription = null) },
-                                shape = menuItemShape(cursor++, itemCount),
-                            )
-                        }
-                        if (mid > 0L) {
-                            DropdownMenuItem(
-                                onClick = {
-                                    close()
-                                    copyText(mid.toString())
-                                },
-                                text = { Text(copyUidLabel) },
-                                leadingIcon = { Icon(Icons.Outlined.ContentCopy, contentDescription = null) },
-                                shape = menuItemShape(cursor++, itemCount),
-                            )
-                        }
-                    },
-                ) { _ ->
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .heightIn(min = Dimens.MinTouchTarget)
-                            .padding(horizontal = Spacing.Hair / 2),
-                    ) {
-                        Avatar(url = faceUrl, size = UpAvatarSize)
-                        Column(modifier = Modifier.weight(1f)) {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
-                            ) {
-                                Text(
-                                    text = name,
-                                    style = MaterialTheme.typography.titleSmall,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                    modifier = Modifier.weight(1f, fill = false),
-                                )
-                                upCard?.let {
-                                    LevelBadge(
-                                        level = it.level,
-                                        senior = it.isSeniorMember,
-                                        height = Dimens.LevelBadgeHeight,
-                                    )
-                                }
-                            }
-                            upCard?.let {
-                                Text(
-                                    text = stringResource(Res.string.space_followers, formatCount(it.follower)),
-                                    style = MaterialTheme.typography.labelSmall.tabular,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    maxLines = 1,
-                                )
-                            }
-                        }
-                    }
-                }
-            } else {
-                val staffState = rememberLazyListState()
-                LazyRow(
-                    state = staffState,
-                    modifier = Modifier.weight(1f).verticalWheelScrollsRow(staffState),
-                    horizontalArrangement = Arrangement.spacedBy(Spacing.Hair),
-                ) {
-                    items(participants, key = { "${it.mid}-${it.name}" }) { participant ->
-                        val itemCount = (if (participant.name.isNotBlank()) 1 else 0) +
-                            (if (participant.mid > 0L) 1 else 0)
-                        ContextMenuBox(
-                            onClick = { onUpClick(participant.mid) },
-                            menuLabel = menuLabel,
-                            modifier = Modifier
-                                .width(StaffCellWidth)
-                                .interactiveCard(
-                                    shape = MaterialTheme.shapes.small,
-                                    baseColor = Color.Transparent,
-                                    hoverColor = MaterialTheme.colorScheme.surfaceContainerHigh,
-                                ),
-                            menu = { close ->
-                                var cursor = 0
-                                if (participant.name.isNotBlank()) {
-                                    DropdownMenuItem(
-                                        onClick = {
-                                            close()
-                                            copyText(participant.name)
-                                        },
-                                        text = { Text(copyUpNameLabel) },
-                                        leadingIcon = { Icon(Icons.Outlined.ContentCopy, contentDescription = null) },
-                                        shape = menuItemShape(cursor++, itemCount),
-                                    )
-                                }
-                                if (participant.mid > 0L) {
-                                    DropdownMenuItem(
-                                        onClick = {
-                                            close()
-                                            copyText(participant.mid.toString())
-                                        },
-                                        text = { Text(copyUidLabel) },
-                                        leadingIcon = { Icon(Icons.Outlined.ContentCopy, contentDescription = null) },
-                                        shape = menuItemShape(cursor++, itemCount),
-                                    )
-                                }
+        if (staff.isEmpty()) {
+            val itemCount = (if (name.isNotBlank()) 1 else 0) + (if (mid > 0L) 1 else 0)
+            ContextMenuBox(
+                onClick = { onUpClick(mid) },
+                menuLabel = menuLabel,
+                modifier = Modifier
+                    .weight(1f)
+                    .interactiveCard(
+                        shape = MaterialTheme.shapes.medium,
+                        baseColor = Color.Transparent,
+                        hoverColor = MaterialTheme.colorScheme.surfaceContainer,
+                    ),
+                menu = { close ->
+                    var cursor = 0
+                    if (name.isNotBlank()) {
+                        DropdownMenuItem(
+                            onClick = {
+                                close()
+                                copyText(name)
                             },
-                        ) { _ ->
-                            Column(
-                                horizontalAlignment = Alignment.CenterHorizontally,
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(vertical = Spacing.Hair / 2),
-                            ) {
-                                val followable = staffFollowed?.contains(participant.mid) == false
-                                BadgedAvatar(
-                                    url = participant.faceUrl,
-                                    size = Dimens.AvatarRow,
-                                    badge = if (!followable) null else AvatarBadge(
-                                        icon = Icons.Filled.Add,
-                                        contentDescription = stringResource(
-                                            Res.string.video_follow_staff,
-                                            participant.name,
-                                        ),
-                                        onClick = { onFollowStaff(participant.mid) },
-                                    ),
-                                )
-                                Text(
-                                    participant.name,
-                                    style = MaterialTheme.typography.labelSmall,
-                                    textAlign = TextAlign.Center,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                    modifier = Modifier.fillMaxWidth(),
-                                )
-                                Text(
-                                    participant.title,
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    textAlign = TextAlign.Center,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                    modifier = Modifier.fillMaxWidth(),
+                            text = { Text(copyUpNameLabel) },
+                            leadingIcon = { Icon(Icons.Outlined.ContentCopy, contentDescription = null) },
+                            shape = menuItemShape(cursor++, itemCount),
+                        )
+                    }
+                    if (mid > 0L) {
+                        DropdownMenuItem(
+                            onClick = {
+                                close()
+                                copyText(mid.toString())
+                            },
+                            text = { Text(copyUidLabel) },
+                            leadingIcon = { Icon(Icons.Outlined.ContentCopy, contentDescription = null) },
+                            shape = menuItemShape(cursor++, itemCount),
+                        )
+                    }
+                },
+            ) { _ ->
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = Dimens.MinTouchTarget),
+                ) {
+                    Avatar(url = faceUrl, size = UpAvatarSize)
+                    Column(modifier = Modifier.weight(1f)) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
+                        ) {
+                            Text(
+                                text = name,
+                                style = MaterialTheme.typography.titleSmall,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f, fill = false),
+                            )
+                            upCard?.let {
+                                LevelBadge(
+                                    level = it.level,
+                                    senior = it.isSeniorMember,
+                                    height = Dimens.LevelBadgeHeight,
                                 )
                             }
+                        }
+                        upCard?.let {
+                            Text(
+                                text = stringResource(Res.string.space_followers, formatCount(it.follower)),
+                                style = MaterialTheme.typography.labelSmall.tabular,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                            )
                         }
                     }
                 }
             }
-            if (staff.isEmpty()) {
-                FollowButton(
-                    state = followState,
-                    onClick = onToggleFollow,
-                    prominent = false,
-                    name = name,
-                )
+        } else {
+            val staffState = rememberLazyListState()
+            LazyRow(
+                state = staffState,
+                modifier = Modifier.weight(1f).verticalWheelScrollsRow(staffState),
+                horizontalArrangement = Arrangement.spacedBy(Spacing.Hair),
+            ) {
+                items(participants, key = { "${it.mid}-${it.name}" }) { participant ->
+                    val itemCount = (if (participant.name.isNotBlank()) 1 else 0) +
+                        (if (participant.mid > 0L) 1 else 0)
+                    ContextMenuBox(
+                        onClick = { onUpClick(participant.mid) },
+                        menuLabel = menuLabel,
+                        modifier = Modifier
+                            .width(StaffCellWidth)
+                            .interactiveCard(
+                                shape = MaterialTheme.shapes.small,
+                                baseColor = Color.Transparent,
+                                hoverColor = MaterialTheme.colorScheme.surfaceContainer,
+                            ),
+                        menu = { close ->
+                            var cursor = 0
+                            if (participant.name.isNotBlank()) {
+                                DropdownMenuItem(
+                                    onClick = {
+                                        close()
+                                        copyText(participant.name)
+                                    },
+                                    text = { Text(copyUpNameLabel) },
+                                    leadingIcon = { Icon(Icons.Outlined.ContentCopy, contentDescription = null) },
+                                    shape = menuItemShape(cursor++, itemCount),
+                                )
+                            }
+                            if (participant.mid > 0L) {
+                                DropdownMenuItem(
+                                    onClick = {
+                                        close()
+                                        copyText(participant.mid.toString())
+                                    },
+                                    text = { Text(copyUidLabel) },
+                                    leadingIcon = { Icon(Icons.Outlined.ContentCopy, contentDescription = null) },
+                                    shape = menuItemShape(cursor++, itemCount),
+                                )
+                            }
+                        },
+                    ) { _ ->
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = Spacing.Hair / 2),
+                        ) {
+                            val followable = staffFollowed?.contains(participant.mid) == false
+                            BadgedAvatar(
+                                url = participant.faceUrl,
+                                size = Dimens.AvatarRow,
+                                badge = if (!followable) null else AvatarBadge(
+                                    icon = Icons.Filled.Add,
+                                    contentDescription = stringResource(
+                                        Res.string.video_follow_staff,
+                                        participant.name,
+                                    ),
+                                    onClick = { onFollowStaff(participant.mid) },
+                                ),
+                            )
+                            Text(
+                                participant.name,
+                                style = MaterialTheme.typography.labelSmall,
+                                textAlign = TextAlign.Center,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                            Text(
+                                participant.title,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                textAlign = TextAlign.Center,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                        }
+                    }
+                }
             }
+        }
+        if (staff.isEmpty()) {
+            FollowButton(
+                state = followState,
+                onClick = onToggleFollow,
+                prominent = false,
+                name = name,
+            )
         }
     }
 }
@@ -1507,7 +1502,7 @@ private fun UpRow(
 /**
  * 标题、元信息胶囊行和就地平滑展开的版权声明、简介与标签。
  *
- * - 标题升至 `titleLargeEmphasized`,长按/右键支持复制标题、BV 号与自由选词;
+ * - 标题采用 `titleMediumEmphasized`,长按/右键支持复制标题、BV 号与自由选词;
  * - BV 号在收起与展开两态均提供单击即复制的 [CopyableIdPill](独立消费点按,不误触展开切换);
  * - 展开/收起箭头固定在元信息行末尾同一位置,展开区以 `expandVertically + fadeIn` 在列表内原地生长,不额外占用底部收起行。
  */
@@ -1603,7 +1598,7 @@ private fun TitleBlock(
             val titleNode: @Composable () -> Unit = {
                 Text(
                     text = detail.title,
-                    style = MaterialTheme.typography.titleLargeEmphasized,
+                    style = MaterialTheme.typography.titleMediumEmphasized,
                     color = MaterialTheme.colorScheme.onSurface,
                     maxLines = if (expanded) Int.MAX_VALUE else 2,
                     overflow = TextOverflow.Ellipsis,
@@ -3061,59 +3056,12 @@ private fun QueueHeader(
     val showActionLabels = rowWidth > 0.dp && totalLabeledWidth <= rowWidth
 
     Column(modifier = Modifier.fillMaxWidth()) {
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
-            modifier = Modifier
-                .fillMaxWidth()
-                .heightIn(min = Dimens.MinTouchTarget),
-        ) {
-            if (onTitleClick != null) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(Spacing.Hair),
-                    modifier = Modifier
-                        .weight(1f)
-                        .heightIn(min = Dimens.MinTouchTarget)
-                        .clip(MaterialTheme.shapes.small)
-                        .pointerHoverIcon(PointerIcon.Hand)
-                        .clickable(role = Role.Button, onClick = onTitleClick)
-                        .padding(vertical = Spacing.Tight),
-                ) {
-                    Text(
-                        text = resolvedLabel,
-                        style = MaterialTheme.typography.titleSmallEmphasized,
-                        color = MaterialTheme.colorScheme.onSurface,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f, fill = false),
-                    )
-                    Icon(
-                        imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.size(Dimens.IconInline),
-                    )
-                }
-            } else {
-                Text(
-                    text = resolvedLabel,
-                    style = MaterialTheme.typography.titleSmallEmphasized,
-                    color = MaterialTheme.colorScheme.onSurface,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier
-                        .weight(1f)
-                        .padding(vertical = Spacing.Tight),
-                )
-            }
-            if (!posText.isNullOrBlank()) {
-                QueuePositionBadge(text = posText)
-            }
-            if (edgeLoading) {
-                LoadingSpinner()
-            }
-        }
+        QueueSourceCapsule(
+            sourceLabel = resolvedLabel,
+            positionText = posText,
+            edgeLoading = edgeLoading,
+            onClick = onTitleClick,
+        )
 
         Box(
             modifier = Modifier
@@ -3218,7 +3166,6 @@ private fun QueuePositionBadge(
 private val QueueBadgeVerticalPadding = 2.dp
 private val MetadataBadgeVerticalPadding = 2.dp
 private val CopyrightIconSize = 14.dp
-private val UpCardVerticalPadding = 10.dp
 private const val ActionPressScale = 0.95f
 private const val ActionPopScale = 1.06f
 private const val ActionPopMillis = 140L

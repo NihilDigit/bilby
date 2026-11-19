@@ -8,32 +8,33 @@ import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.PagerState
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.MoreVert
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
-import androidx.compose.material3.FilledTonalToggleButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialExpressiveTheme
@@ -46,7 +47,7 @@ import androidx.compose.material3.Tab
 import androidx.compose.material3.TabIndicatorScope
 import androidx.compose.material3.TabRowDefaults
 import androidx.compose.material3.Text
-import androidx.compose.material3.ToggleButtonShapes
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Stable
@@ -276,6 +277,7 @@ private fun TabIndicatorScope.SearchPagerTabIndicator(pagerState: PagerState) {
             if (tabPositions.isEmpty()) {
                 layout(0, 0) {}
             } else {
+                val selectedIndex = pagerState.currentPage.coerceIn(0, tabPositions.lastIndex)
                 val pos = (pagerState.currentPage + pagerState.currentPageOffsetFraction)
                     .coerceIn(0f, tabPositions.lastIndex.toFloat())
                 val low = pos.toInt().coerceIn(0, tabPositions.lastIndex)
@@ -290,19 +292,23 @@ private fun TabIndicatorScope.SearchPagerTabIndicator(pagerState: PagerState) {
                 val placeable = measurable.measure(
                     constraints.copy(minWidth = indicatorWidth, maxWidth = indicatorWidth),
                 )
-                layout(constraints.maxWidth, constraints.maxHeight) {
-                    placeable.placeRelative(indicatorX, constraints.maxHeight - placeable.height)
+                val parentX = ((tabPositions[selectedIndex].width.roundToPx() - indicatorWidth) / 2).coerceAtLeast(0)
+                layout(placeable.width, placeable.height) {
+                    placeable.placeRelative(indicatorX - parentX, 0)
                 }
             }
         },
     )
 }
 
-/** 栏名与筛选并成一行所需的宽度:三个标签的最小宽加上视频栏的四枚筛选 chip。 */
+/** 栏名与筛选并成一行所需的宽度:三个标签的最小宽加上视频栏的四枚筛选按钮。 */
 private val JoinedHeaderMinWidth = 760.dp
 
+private val FilterChipVisualMinHeight = 36.dp
+
 /**
- * 一栏的筛选,每一项是一枚带下拉的 filter chip,chip 上写着当前选的那一档。
+ * 一栏的筛选,每一项是一枚轻量化透明文字下拉按钮,参照评论区排序右对齐;
+ * 窄屏多筛选项超出宽度时保持横向滚动且首项不被裁切。
  */
 @Composable
 private fun FilterChips(
@@ -311,15 +317,10 @@ private fun FilterChips(
     actions: SearchResultActions,
     modifier: Modifier = Modifier,
     contentPadding: Dp = 0.dp,
+    fillWidth: Boolean = false,
 ) {
     val scroll = rememberScrollState()
-    Row(
-        horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
-        modifier = modifier
-            .verticalWheelScrollsRow(scroll)
-            .horizontalScroll(scroll)
-            .padding(horizontal = contentPadding),
-    ) {
+    val chips: @Composable () -> Unit = {
         when (tab) {
             SearchTab.Video -> {
                 MenuChip(VideoOrders, state.order, SearchOrder.Comprehensive, actions.onOrderChange)
@@ -335,6 +336,30 @@ private fun FilterChips(
                 MenuChip(UserOrders, state.userOrder, SearchUserOrder.Default, actions.onUserOrderChange)
         }
     }
+    if (fillWidth) {
+        BoxWithConstraints(modifier = modifier) {
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(Spacing.Hair, Alignment.End),
+                modifier = Modifier
+                    .verticalWheelScrollsRow(scroll)
+                    .horizontalScroll(scroll)
+                    .widthIn(min = maxWidth)
+                    .padding(horizontal = contentPadding),
+            ) {
+                chips()
+            }
+        }
+    } else {
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(Spacing.Hair, Alignment.End),
+            modifier = modifier
+                .verticalWheelScrollsRow(scroll)
+                .horizontalScroll(scroll)
+                .padding(horizontal = contentPadding),
+        ) {
+            chips()
+        }
+    }
 }
 
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
@@ -348,28 +373,35 @@ private fun <T> MenuChip(
     var open by remember { mutableStateOf(false) }
     val selectedLabel = options.firstOrNull { it.first == selected }?.second ?: return
     val active = selected != default
+    val contentColor = if (active) {
+        MaterialTheme.colorScheme.primary
+    } else {
+        MaterialTheme.colorScheme.onSurfaceVariant
+    }
     val motionScheme = if (LocalPointerSource.current.isTouchLike) {
         MaterialTheme.motionScheme
     } else {
         SearchDesktopMenuMotionScheme
     }
     Box {
-        FilledTonalToggleButton(
-            checked = active,
-            onCheckedChange = { open = true },
-            shapes = ToggleButtonShapes(
-                shape = CircleShape,
-                pressedShape = MaterialTheme.shapes.small,
-                checkedShape = MaterialTheme.shapes.medium,
-            ),
-            contentPadding = PaddingValues(horizontal = Spacing.Cozy, vertical = Spacing.Hair),
+        TextButton(
+            onClick = { open = true },
+            colors = ButtonDefaults.textButtonColors(contentColor = contentColor),
+            contentPadding = PaddingValues(start = Spacing.Cozy, end = Spacing.Tight),
+            modifier = Modifier
+                .defaultMinSize(minWidth = 1.dp, minHeight = FilterChipVisualMinHeight)
+                .heightIn(min = FilterChipVisualMinHeight),
         ) {
             Text(
                 text = stringResource(selectedLabel),
+                style = if (active) {
+                    MaterialTheme.typography.labelLargeEmphasized
+                } else {
+                    MaterialTheme.typography.labelLarge
+                },
                 maxLines = 1,
                 softWrap = false,
             )
-            Spacer(Modifier.width(Spacing.Hair))
             Icon(
                 Icons.Filled.ArrowDropDown,
                 contentDescription = null,
@@ -414,13 +446,14 @@ private fun ResultPage(
     val listPadding = PaddingValues(bottom = bottomPadding + navigationBarsBottom())
     Column(modifier = Modifier.fillMaxSize()) {
         if (showFilters) {
-            // 边距放在滚动的内容里,不放在外面:放外面的话横滑时 chip 在 16dp 处被截断。
+            // 边距放在滚动的内容里,不放在外面:放外面的话横滑时按钮在 16dp 处被截断。
             FilterChips(
                 tab = tab,
                 state = state,
                 actions = actions,
                 modifier = Modifier.fillMaxWidth(),
                 contentPadding = Spacing.Comfortable,
+                fillWidth = true,
             )
         }
 

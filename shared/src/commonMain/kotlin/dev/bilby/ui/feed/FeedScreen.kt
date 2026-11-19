@@ -922,7 +922,7 @@ private fun FeedEntryItem(
     } else {
         modifier
     }
-    val rowUi = rememberFeedEntryRowUi(item)
+    val rowUi = rememberFeedEntryRowUi(item, showArticleNote = !multiColumn)
     FeedEntryRow(
         item = item,
         rowUi = rowUi,
@@ -1145,11 +1145,14 @@ private val ReadMarkerIconSize = 16.dp
  * 是判断依据,那里照旧带。
  */
 @Composable
-private fun rememberFeedEntryRowUi(entry: FeedEntry): VideoRowUi {
+private fun rememberFeedEntryRowUi(
+    entry: FeedEntry,
+    showArticleNote: Boolean = true,
+): VideoRowUi {
     val articleBadge = stringResource(Res.string.feed_article_badge)
     val dateText = formatRelativeTime(entry.publishedAtEpochSeconds)
     val typeBadge = if (entry is FeedEntry.Video) chargingBadgeText(entry.chargingOnly) else ""
-    return remember(entry, articleBadge, dateText, typeBadge) {
+    return remember(entry, articleBadge, dateText, typeBadge, showArticleNote) {
         when (entry) {
             is FeedEntry.Video -> VideoRowUi(
                 title = entry.title,
@@ -1168,7 +1171,7 @@ private fun rememberFeedEntryRowUi(entry: FeedEntry): VideoRowUi {
                 upName = entry.upName,
                 dateText = dateText,
                 upFaceUrl = entry.upFaceUrl,
-                note = entry.summary.takeIf { it.isNotBlank() },
+                note = if (showArticleNote) entry.summary.takeIf { it.isNotBlank() } else null,
             )
         }
     }
@@ -1577,7 +1580,7 @@ private fun BurstStackedItem(
     modifier: Modifier = Modifier,
 ) {
     val colors = MaterialTheme.colorScheme
-    val baseRowUi = rememberFeedEntryRowUi(node.lead)
+    val baseRowUi = rememberFeedEntryRowUi(node.lead, showArticleNote = !multiColumn)
     val stackBadge = stringResource(Res.string.feed_burst_stack_badge, node.totalCount)
     val rowUi = remember(baseRowUi, stackBadge) {
         baseRowUi.copy(

@@ -4,7 +4,6 @@ import androidx.compose.animation.core.FiniteAnimationSpec
 import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.horizontalScroll
-import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -20,11 +19,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.MoreHoriz
 import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material.icons.outlined.Tune
-import androidx.compose.material3.ButtonGroup
-import androidx.compose.material3.ButtonGroupDefaults
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
@@ -40,8 +36,6 @@ import androidx.compose.material3.MotionScheme
 import androidx.compose.material3.SegmentedListItem
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.ToggleButton
-import androidx.compose.material3.ToggleButtonDefaults
 import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
@@ -87,6 +81,7 @@ import dev.bilby.ui.components.PaneTitle
 import dev.bilby.ui.components.RefreshAction
 import dev.bilby.ui.components.RefreshBox
 import dev.bilby.ui.components.SearchField
+import dev.bilby.ui.components.SortMenu
 import dev.bilby.ui.components.UnfollowConfirmDialog
 import dev.bilby.ui.components.menuItemShape
 import dev.bilby.ui.components.verticalWheelScrollsRow
@@ -792,62 +787,12 @@ private fun WideFilterRow(
             modifier = Modifier.weight(1f),
         )
         if (state.canSort) {
-            val sortColors = ToggleButtonDefaults.colors(
-                containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
-                contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                checkedContainerColor = MaterialTheme.colorScheme.secondaryContainer,
-                checkedContentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+            SortMenu(
+                options = FollowOrderOptions,
+                selected = state.order,
+                onSelect = onSelectOrder,
+                modifier = Modifier.padding(end = Spacing.Hair),
             )
-            val interactionSources = remember { List(FollowOrderOptions.size) { MutableInteractionSource() } }
-            val orderLabels = FollowOrderOptions.map { (_, labelRes) -> stringResource(labelRes) }
-            ButtonGroup(
-                overflowIndicator = { menuState ->
-                    IconButton(onClick = { menuState.show() }) {
-                        Icon(
-                            Icons.Outlined.MoreHoriz,
-                            contentDescription = stringResource(Res.string.menu_item_actions),
-                        )
-                    }
-                },
-                horizontalArrangement = Arrangement.spacedBy(ButtonGroupDefaults.ConnectedSpaceBetween),
-                modifier = Modifier.padding(end = Spacing.Tight),
-            ) {
-                FollowOrderOptions.forEachIndexed { index, (option, _) ->
-                    val label = orderLabels[index]
-                    val interactionSource = interactionSources[index]
-                    customItem(
-                        buttonGroupContent = {
-                            ToggleButton(
-                                checked = state.order == option,
-                                onCheckedChange = { if (it) onSelectOrder(option) },
-                                shapes = if (index == 0) {
-                                    ButtonGroupDefaults.connectedLeadingButtonShapes()
-                                } else {
-                                    ButtonGroupDefaults.connectedTrailingButtonShapes()
-                                },
-                                colors = sortColors,
-                                contentPadding = PaddingValues(horizontal = Spacing.Cozy),
-                                interactionSource = interactionSource,
-                                modifier = Modifier
-                                    .animateWidth(interactionSource)
-                                    .semantics { role = Role.RadioButton },
-                            ) {
-                                Text(label, maxLines = 1, softWrap = false)
-                            }
-                        },
-                        menuContent = { menuState ->
-                            DropdownMenuItem(
-                                onClick = {
-                                    menuState.dismiss()
-                                    onSelectOrder(option)
-                                },
-                                text = { Text(label) },
-                                shape = menuItemShape(index, FollowOrderOptions.size),
-                            )
-                        },
-                    )
-                }
-            }
         }
         RefreshAction(state.refreshing, onRefresh)
     }

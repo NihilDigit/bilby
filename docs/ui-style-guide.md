@@ -80,7 +80,7 @@ Android 与桌面端已统一到同一代 Compose 与 Material 3 API 表面（�
 2. **激活 15 档 `*Emphasized` 层级字重**：
    - `display*Emphasized`、`headline*Emphasized`、`title*Emphasized`、`label*Emphasized` 取 `FontWeight.SemiBold`（600）；
    - `body*Emphasized` 取 `FontWeight.Medium`（500），既让列表主标题压住次级 `onSurfaceVariant` 元信息，又避免 CJK 合成粗体糊笔。
-   - 典型锚点：专栏标题用 `headlineMediumEmphasized`（28/36）；订阅页顶栏标题、空间页 UP 名、个人页昵称、听视频曲目名、扫码欢迎卡标题用 `headlineSmallEmphasized`（24/32）；播放页主标题用 `titleLargeEmphasized`（22/28）；二级面板标题、分组卡头与空间合集卡标题用 `titleMediumEmphasized`（16/24）；视频行与网格卡标题统一用 `bodyLargeEmphasized`（16/24）；评论昵称用 `labelLargeEmphasized`。
+   - 典型锚点：专栏标题用 `headlineMediumEmphasized`（28/36）；订阅页顶栏标题、空间页 UP 名、个人页昵称、听视频曲目名、扫码欢迎卡标题用 `headlineSmallEmphasized`（24/32）；播放页主标题、二级面板标题、分组卡头与空间合集卡标题用 `titleMediumEmphasized`（16/24）；视频行与网格卡标题统一用 `bodyLargeEmphasized`（16/24）；评论昵称用 `labelLargeEmphasized`。
 3. **等宽数字扩展 `TextStyle.tabular`（`fontFeatureSettings = "tnum"`）**：
    - 凡是封面时长、播放/弹幕/点赞计数、`X / N` 队列位置、BV/AV/UID 标识胶囊、硬币流水、全屏时钟与电量百分比、倒计时读数，一律追加 `.tabular`，杜绝跳字与多行数字对不齐。
 4. **长文段落行高按篇幅单独拉宽**：不污染全局 `Typography`，评论正文取 14/24sp、动态正文取 16/26sp、专栏正文取 16/28sp。
@@ -110,7 +110,7 @@ Android 与桌面端已统一到同一代 Compose 与 Material 3 API 表面（�
 ### 2.1 排序、筛选、分裂按钮与浮动工具条
 
 - **视图/模式切换**（固定 2–5 项）：使用 `ButtonGroup` +相连的 `ToggleButton` / `FilledTonalToggleButton`（配 `ButtonGroupDefaults.connected*ButtonShapes()` 与 `ConnectedSpaceBetween`，不用已废弃的 M2 `SegmentedButton`）。
-- **排序选择**：使用 `SortRow`；选项 ≤ 3 档且调用处传 `preferButtonGroup = true` 时直接展开为 1-tap `ButtonGroup`，超过 3 档或在紧凑顶栏内收成 `SortMenu`。
+- **排序与筛选选择**：全站排序（`SortRow` / `SortMenu`）与搜索筛选栏统一采用轻量化透明底 `TextButton` + `ArrowDropDown` 右对齐下拉菜单（默认 `onSurfaceVariant`，已选非默认筛选项升至 `primary` + `labelLargeEmphasized`），不占重底色胶囊。
 - **「听全部」复合入口**：`CollectionScreen`、`OfflineScreen`、`SpaceScreen` 使用 `SplitButtonLayout`（`TonalLeadingButton` 直接启动听全部，`TonalTrailingButton` 展开加入队列选项菜单）。
 - **二级合集/列表页统一摘要控制卡**：`CollectionScreen`、`FavFolderScreen`、`ToViewScreen`、`OfflineScreen` 顶部统一使用 `surfaceContainer` + `shapes.large` 头卡，将 `.tabular` 容量/条数统计、操作钮与排序收拢在同一容器内。
 - **底部浮动工具条（`HorizontalFloatingToolbar`）**：用于历史/稍后再看/离线/收藏夹多选批量操作底栏、`ArticleScreen` 阅读底栏（大纲/回顶/浏览器打开）与 `DraftQueueBar`。多选进入后顶栏只保留退出与计数，批量动作统一落到底部拇指区。
@@ -123,7 +123,7 @@ Android 与桌面端已统一到同一代 Compose 与 Material 3 API 表面（�
 
 ### 2.3 播放页五格分段动作栏（`ActionButtonsRow`）
 
-- 播放页 `UpRow`（包在 `surfaceContainer` + `shapes.large` 容器卡内，与上下区块严格对齐 `16.dp` 外边距）下方为五格等宽动作栏：**点赞（长按 1500ms 触发一键三连进度填充与回弹） / 投币 / 收藏 / 稍后看 / 听视频**。
+- 播放页 `UpRow`（去底色直接落在 `surface` 上，左右与 `TitleBlock` 及下方动作栏严格对齐 `16.dp` 外边距，桌面悬停底色取 `surfaceContainer`）下方为五格等宽动作栏：**点赞（长按 1500ms 触发一键三连进度填充与回弹） / 投币 / 收藏 / 稍后看 / 听视频**。
 - 选中态切换实心图标与强调容器色，计数统一用 `labelSmallEmphasized.tabular`，点击与三连完成带空间弹簧缩放反馈。
 - 点赞、投币、收藏、稍后再看全部采用**本地乐观更新**，绝不因写操作重拉整页详情导致数字二次闪烁。
 
@@ -239,10 +239,10 @@ Compose 的 `SelectionContainer` 若直接套在可点击卡片外层或跨 `Laz
 
 - **听视频（`ListenScreen`）是播放页内部的状态分支，与全屏同构，绝不拆成独立导航目的地**；全局唯一播放器归 `AudioPlaybackService`（Android）与 `DesktopPlaybackHost`（桌面）所有。
   - `DiscView` 保持 **100% `CircleShape` 真黑胶唱片**（静态径向光晕，禁止改为多边形或空闲呼吸动画）；转动惯性仅在播放或减速收尾时驱动，暂停落稳后立即停止帧回调。
-  - 双栏模式且右侧队列可见时，左侧 `DiscView` 隐藏重复来源胶囊（`showSourcePill = !(expandedWindow && hasQueue)`）。
+  - 有队列时队列头以共享 `QueueSourceCapsule` 独占一行展示来源与真实已加载计数 `X / N`，单栏与双栏均隐藏左侧 `DiscView` 的重复来源胶囊（`showSourcePill = !hasQueue`）。
 - **暂停下翻评论时的快捷播放条（`QuickPlayBar.kt`）**：画面仅在暂停且浏览评论区时随上滑收起，顶部留驻 `64.dp` 高的 `surfaceContainer` 快捷条（`44×28.dp` 圆角封面缩略图、`titleSmallEmphasized` 单行标题、胶囊播放键、底沿 `3.dp` 进度条）；点横条本身只展开画面，点播放键才恢复出声。
 - **`IntroTab` 单列表连续自然滚动与就地平滑展开（`VideoTabs.kt`）**：
-  - 简介页自上而下是**同一条连续滚动的 `LazyColumn`**：`TitleBlock` → `UpRow` 容器卡 → 五格 `ActionButtonsRow` → 分 P 横条 → 内联播放队列预览。
+  - 简介页自上而下是**同一条连续滚动的 `LazyColumn`**：`TitleBlock` → `UpRow` → 五格 `ActionButtonsRow` → 分 P 横条 → 内联播放队列预览。
   - **展开简介时绝不隐藏或卸载下方的播放队列**。视频标签在进页加载详情时即并发预热（`loadVideoTags()`），避免展开后二次撑高跳动；点击 `TitleBlock` 时，完整精确发布时刻（`yyyy-MM-dd HH:mm` `.tabular`）、禁止转载声明、富文本简介与标签行通过 `AnimatedVisibility`（空间弹簧 `expandVertically` + `fadeIn`）**就地单段平滑展开**，自然把下方卡片往下推。
   - 桌面端或非触屏指针模式下发表评论采用右栏底部就地停靠的 `InlineCommentComposer` 编辑卡，不再弹出居中白底模态框。
 
