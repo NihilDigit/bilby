@@ -495,13 +495,13 @@ private fun SurfaceModeToggleGroup(
         modifier = modifier,
     ) {
         options.forEachIndexed { index, (option, label) ->
-            val shapes = when (index) {
-                0 -> ButtonGroupDefaults.connectedLeadingButtonShapes()
-                options.lastIndex -> ButtonGroupDefaults.connectedTrailingButtonShapes()
-                else -> ButtonGroupDefaults.connectedMiddleButtonShapes()
-            }
             customItem(
                 buttonGroupContent = {
+                    val shapes = when (index) {
+                        0 -> ButtonGroupDefaults.connectedLeadingButtonShapes()
+                        options.lastIndex -> ButtonGroupDefaults.connectedTrailingButtonShapes()
+                        else -> ButtonGroupDefaults.connectedMiddleButtonShapes()
+                    }
                     ToggleButton(
                         checked = surfaceMode == option,
                         onCheckedChange = { if (it) onSurfaceModeChange(option) },
