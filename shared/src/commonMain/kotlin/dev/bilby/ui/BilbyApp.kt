@@ -274,11 +274,12 @@ import dev.bilby.ui.search.SearchResultScreen
 import dev.bilby.ui.search.SearchResultViewModel
 import dev.bilby.ui.search.SearchTab
 import dev.bilby.ui.components.RefreshAction
+import dev.bilby.ui.player.LocalPlayerLayoutPrefs
 import dev.bilby.ui.player.PlayerGestureOptions
 import dev.bilby.ui.settings.AboutSettingsPage
 import dev.bilby.ui.settings.AgentSettingsPage
 import dev.bilby.ui.settings.AppearanceSettingsPage
-import dev.bilby.ui.settings.GestureSettingsPage
+import dev.bilby.ui.settings.PlayerCustomizationPage
 import dev.bilby.ui.settings.PlaybackSettingsPage
 import dev.bilby.data.model.ArticleRef
 import dev.bilby.data.model.FeedEntry
@@ -1726,12 +1727,17 @@ private fun BilbyApp(
                 }
             }
             entry<LiveRoom> { key ->
-                LiveRoomRoute(
-                    container,
-                    key.roomId,
-                    onBack = { backStack.removeLastOrNull() },
-                    onUserClick = { push(Space(it)) },
+                val playerPrefs by container.settings.playerPrefs.collectAsStateWithLifecycle(
+                    initialValue = PlayerPrefs(),
                 )
+                CompositionLocalProvider(LocalPlayerLayoutPrefs provides playerPrefs.layout) {
+                    LiveRoomRoute(
+                        container,
+                        key.roomId,
+                        onBack = { backStack.removeLastOrNull() },
+                        onUserClick = { push(Space(it)) },
+                    )
+                }
             }
             entry<Space> { key ->
                 val scope = rememberCoroutineScope()
@@ -3095,8 +3101,10 @@ private fun SettingsPageRoute(
             onBack = onBack,
         )
 
-        SettingsSection.Gestures -> GestureSettingsPage(
+        SettingsSection.Gestures -> PlayerCustomizationPage(
             state = state,
+            onUpdateLayout = vm::updatePlayerLayout,
+            onResetLayout = vm::resetPlayerLayout,
             onDoubleTapSeekChange = vm::setDoubleTapSeek,
             onLongPressSpeedChange = vm::setLongPressSpeed,
             onLongPressSpeedDialChange = vm::setLongPressSpeedDial,
@@ -4719,6 +4727,7 @@ private fun VideoPane(
     }
     val commentState = commentVm?.state?.collectAsStateWithLifecycle()?.value ?: CommentUiState()
 
+    CompositionLocalProvider(LocalPlayerLayoutPrefs provides playerPrefs.layout) {
     VideoScreen(
         bvid = bvid,
         frame = frame,
@@ -4783,6 +4792,7 @@ private fun VideoPane(
         gestures = PlayerGestureOptions(
             swipeSeek = playerPrefs.swipeSeek,
             doubleTapSeek = playerPrefs.doubleTapSeek,
+            doubleTapSeekSeconds = playerPrefs.layout.effectiveDoubleTapSeekSeconds,
             brightnessAndVolume = playerPrefs.swipeBrightnessVolume,
             fastForward = playerPrefs.longPressSpeed,
             fastForwardDial = playerPrefs.longPressSpeedDial,
@@ -4797,6 +4807,7 @@ private fun VideoPane(
         nightBanner = nightBanner,
         onAuthorResolved = onAuthorResolved,
     )
+    }
 }
 
 private const val NIGHT_ACTIVE_TICK_MILLIS = 1_000L

@@ -28,6 +28,7 @@ import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -40,11 +41,15 @@ import androidx.compose.material.icons.automirrored.filled.VolumeOff
 import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.BrightnessHigh
 import androidx.compose.material.icons.filled.BrightnessLow
+import androidx.compose.material.icons.filled.FastForward
+import androidx.compose.material.icons.filled.FastRewind
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.LockOpen
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.OpenInFull
 import androidx.compose.material.icons.filled.PushPin
+import androidx.compose.material.icons.filled.SkipNext
+import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.material.icons.outlined.Lan
 import androidx.compose.material.icons.outlined.SignalCellularAlt
 import androidx.compose.material.icons.outlined.Wifi
@@ -109,6 +114,14 @@ import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.PointerType
+import dev.bilby.data.CenterSlotAction
+import dev.bilby.data.DEFAULT_DOUBLE_TAP_SEEK_SECONDS
+import dev.bilby.data.MAX_SEEK_SECONDS
+import dev.bilby.data.MIN_SEEK_SECONDS
+import dev.bilby.data.PlayerControlId
+import dev.bilby.data.PlayerFormFactor
+import dev.bilby.data.PlayerLayoutPrefs
+import dev.bilby.data.PlayerPanelItem
 import dev.bilby.elapsedRealtimeMillis
 import dev.bilby.player.PlayerHandle
 import dev.bilby.ui.components.LocalEditableFocusTracker
@@ -138,8 +151,10 @@ data class PlayerGestureOptions(
     val seek: Boolean = true,
     /** 画面横划调整进度。关闭它不影响进度条与键盘左右方向键。 */
     val swipeSeek: Boolean = true,
-    /** 两侧双击 ±10 秒。关闭后整屏双击播放/暂停,不影响横划进度。 */
+    /** 两侧双击进退。关闭后整屏双击播放/暂停,不影响横划进度。 */
     val doubleTapSeek: Boolean = true,
+    /** 两侧双击单次步进秒数（1..300）。 */
+    val doubleTapSeekSeconds: Int = DEFAULT_DOUBLE_TAP_SEEK_SECONDS,
     /** 左半屏纵划调亮度、右半屏调音量。 */
     val brightnessAndVolume: Boolean = true,
     /** 长按选择临时倍速。 */
@@ -259,6 +274,8 @@ class PlayerShellScope internal constructor(
 
     fun seekToNext() = actions.seekToNext()
 
+    fun seekByMillis(deltaMillis: Long) = actions.seekByMillis(deltaMillis)
+
     /** 进度条按下:先暂停,松手时按 [onSeekFinished] 决定要不要恢复。 */
     fun onSeekStart() = actions.seekStart()
 
@@ -279,6 +296,7 @@ internal class PlayerShellActions(
     val togglePlayPause: () -> Unit,
     val seekToPrevious: () -> Unit,
     val seekToNext: () -> Unit,
+    val seekByMillis: (Long) -> Unit,
     val seekStart: () -> Unit,
     val seekTo: (Long) -> Unit,
     val seekFinished: () -> Unit,
@@ -375,6 +393,10 @@ fun PlayerShell(
     onToggleDanmaku: (() -> Unit)? = null,
     /** 键盘 `Enter` 唤起并聚焦弹幕输入框。 */
     onRequestDanmakuInput: (() -> Unit)? = null,
+    /** 播放器面板与中央簇自定义配置。 */
+    layoutPrefs: PlayerLayoutPrefs = LocalPlayerLayoutPrefs.current,
+    /** 顶栏自定义面板项的业务控件渲染器；null 时走兼容的 [topBarActions]。 */
+    topBarControlRenderer: (@Composable RowScope.(PlayerControlId) -> Unit)? = null,
 ) {
     val pipWindow = rememberPipWindow().takeIf { pip }
     // 在小窗里离开了这一页(键盘返回、队列播完退页)时,窗口不能留在右下角那一小块里。
@@ -680,6 +702,13 @@ fun PlayerShell(
             player.seekToNext()
             keepAwake()
         },
+        seekByMillis = { deltaMillis ->
+            if (gestures.seek) {
+                nudgeSeek(player, progress, deltaMillis)
+                seekNudgeMillis = accumulateNudge(seekNudgeMillis, deltaMillis)
+            }
+            keepAwake()
+        },
         seekStart = {
             resumeAfterDrag = player.isPlaying
             player.pause()
@@ -959,14 +988,16 @@ fun PlayerShell(
                                 return@double
                             }
                             val quarter = size.width / 4f
+                            val doubleTapSeekMillis = gestures.doubleTapSeekSeconds
+                                .coerceIn(MIN_SEEK_SECONDS, MAX_SEEK_SECONDS) * 1_000L
                             when {
                                 gestures.seek && gestures.doubleTapSeek && offset.x < quarter ->
-                                    nudgeSeek(player, progress, -DOUBLE_TAP_SEEK_MILLIS)
-                                        .also { seekNudgeMillis = accumulateNudge(seekNudgeMillis, -DOUBLE_TAP_SEEK_MILLIS) }
+                                    nudgeSeek(player, progress, -doubleTapSeekMillis)
+                                        .also { seekNudgeMillis = accumulateNudge(seekNudgeMillis, -doubleTapSeekMillis) }
 
                                 gestures.seek && gestures.doubleTapSeek && offset.x > size.width - quarter ->
-                                    nudgeSeek(player, progress, DOUBLE_TAP_SEEK_MILLIS)
-                                        .also { seekNudgeMillis = accumulateNudge(seekNudgeMillis, DOUBLE_TAP_SEEK_MILLIS) }
+                                    nudgeSeek(player, progress, doubleTapSeekMillis)
+                                        .also { seekNudgeMillis = accumulateNudge(seekNudgeMillis, doubleTapSeekMillis) }
 
                                 else -> {
                                     togglePlayPause()
@@ -1197,6 +1228,10 @@ fun PlayerShell(
         // 按钮一起被切着露出,读起来像一块幕布在拉;整栏滑进来又动得太多,一轻触就是半屏在动。
         // 滑一半、透明度补上另一半,方向还在,幅度小了。
         // 小窗里页面的全屏状态可能还是 true(全屏里进的小窗),顶栏、锁、内嵌右上角都另看 pip。
+        val activeLayout = layoutPrefs.layoutFor(
+            PlayerFormFactor.of(isTouch = pointerSource.isTouchLike, isFullscreen = isFullscreen),
+        )
+
         AnimatedVisibility(
             visible = isFullscreen && !pip && controlsVisible && !locked,
             enter = slideInVertically(spatialOffsetSpec) { -it / 2 } + fadeIn(effectsSpec),
@@ -1213,33 +1248,112 @@ fun PlayerShell(
                     .windowInsetsPadding(WindowInsets.barsAndCutout)
                     .padding(end = Spacing.Tight, bottom = Spacing.Comfortable),
             ) {
-                val exitFullscreenLabel = stringResource(Res.string.player_exit_fullscreen)
-                PlayerTooltip(exitFullscreenLabel, shortcut = "Esc", anchorAbove = false) {
-                    PlayerIconButton(
-                        onClick = { onFullscreenChange(false) },
-                        icon = Icons.AutoMirrored.Filled.ArrowBack,
-                        contentDescription = exitFullscreenLabel,
-                    )
+                val hasTopSpacer = activeLayout.topBar.any { it == PlayerPanelItem.Spacer }
+                var renderedLegacyActions = false
+                for (item in activeLayout.topBar) {
+                    when (item) {
+                        PlayerPanelItem.Spacer -> Spacer(Modifier.weight(1f))
+                        is PlayerPanelItem.Control -> when (item.id) {
+                            PlayerControlId.Back -> {
+                                val exitFullscreenLabel = stringResource(Res.string.player_exit_fullscreen)
+                                PlayerTooltip(exitFullscreenLabel, shortcut = "Esc", anchorAbove = false) {
+                                    PlayerIconButton(
+                                        onClick = { onFullscreenChange(false) },
+                                        icon = Icons.AutoMirrored.Filled.ArrowBack,
+                                        contentDescription = exitFullscreenLabel,
+                                    )
+                                }
+                            }
+                            PlayerControlId.Title -> Text(
+                                text = title,
+                                style = MaterialTheme.typography.titleSmall,
+                                color = FixedColors.OnMedia,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = if (hasTopSpacer) Modifier.weight(1f, fill = false) else Modifier.weight(1f),
+                            )
+                            PlayerControlId.SystemStatus -> PlayerStatusCluster(
+                                status = systemStatus,
+                                modifier = Modifier.padding(horizontal = Spacing.Tight),
+                            )
+                            PlayerControlId.PlayPause -> ControlBarPlayButton(
+                                isPlaying = playWhenReady,
+                                onClick = togglePlayPause,
+                            )
+                            PlayerControlId.Previous -> if (scope.canPrevious || scope.canNext) {
+                                val prevLabel = stringResource(Res.string.player_previous)
+                                PlayerTooltip(prevLabel, anchorAbove = false) {
+                                    PlayerIconButton(
+                                        onClick = actions.seekToPrevious,
+                                        enabled = scope.canPrevious,
+                                        icon = Icons.Filled.SkipPrevious,
+                                        contentDescription = prevLabel,
+                                    )
+                                }
+                            }
+                            PlayerControlId.Next -> if (scope.canPrevious || scope.canNext) {
+                                val nextLabel = stringResource(Res.string.player_next)
+                                PlayerTooltip(nextLabel, anchorAbove = false) {
+                                    PlayerIconButton(
+                                        onClick = actions.seekToNext,
+                                        enabled = scope.canNext,
+                                        icon = Icons.Filled.SkipNext,
+                                        contentDescription = nextLabel,
+                                    )
+                                }
+                            }
+                            PlayerControlId.SeekBackward -> if (gestures.seek) {
+                                val sec = layoutPrefs.seekButtonSeconds
+                                val label = stringResource(Res.string.player_seek_backward_seconds, sec)
+                                PlayerTooltip(label, anchorAbove = false) {
+                                    PlayerIconButton(
+                                        onClick = { actions.seekByMillis(-sec * 1_000L) },
+                                        icon = Icons.Filled.FastRewind,
+                                        contentDescription = label,
+                                    )
+                                }
+                            }
+                            PlayerControlId.SeekForward -> if (gestures.seek) {
+                                val sec = layoutPrefs.seekButtonSeconds
+                                val label = stringResource(Res.string.player_seek_forward_seconds, sec)
+                                PlayerTooltip(label, anchorAbove = false) {
+                                    PlayerIconButton(
+                                        onClick = { actions.seekByMillis(sec * 1_000L) },
+                                        icon = Icons.Filled.FastForward,
+                                        contentDescription = label,
+                                    )
+                                }
+                            }
+                            PlayerControlId.Lock -> {
+                                val lockDescription = stringResource(if (locked) Res.string.player_unlock else Res.string.player_lock)
+                                PlayerTooltip(lockDescription, anchorAbove = false) {
+                                    PlayerIconButton(
+                                        onClick = {
+                                            haptics.performHapticFeedback(
+                                                if (locked) HapticFeedbackType.ToggleOff else HapticFeedbackType.ToggleOn,
+                                            )
+                                            onLockedChange(!locked)
+                                        },
+                                        icon = if (locked) Icons.Filled.Lock else Icons.Filled.LockOpen,
+                                        contentDescription = lockDescription,
+                                        selected = locked,
+                                    )
+                                }
+                            }
+                            PlayerControlId.Settings -> {
+                                if (!renderedLegacyActions) {
+                                    topBarActions()
+                                    renderedLegacyActions = true
+                                }
+                                topBarControlRenderer?.invoke(this, item.id)
+                            }
+                            else -> topBarControlRenderer?.invoke(this, item.id)
+                        }
+                    }
                 }
-                Text(
-                    text = title,
-                    style = MaterialTheme.typography.titleSmall,
-                    color = FixedColors.OnMedia,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    // **只有这一个带权重的孩子。** 之前是标题 `weight(1f, fill = false)` 再跟
-                    // 一个 `Spacer(weight(1f))`,两个权重把剩余宽度对半分,右端那颗按钮因此停在
-                    // 中间偏右。标题吃掉全部剩余宽度,动作自然被顶到边上。
-                    modifier = Modifier.weight(1f),
-                )
-                PlayerStatusCluster(
-                    status = systemStatus,
-                    modifier = Modifier.padding(horizontal = Spacing.Tight),
-                )
-                // 顶栏右端的槽。**切集放这里,不放控制条** —— 控制条上的东西回答的都是"这个
-                // 播放器现在怎么放"(倍速、清晰度、字幕、弹幕、全屏),而切集回答的是"在放
-                // 哪一条",和它左边那个标题是同一类。风格指南 §4.3 那条判据问的正是这个。
-                topBarActions()
+                if (!renderedLegacyActions) {
+                    topBarActions()
+                }
             }
         }
 
@@ -1308,7 +1422,8 @@ fun PlayerShell(
         // 鼠标模式下隐藏防误触锁:锁按钮专为横屏握持手指防误触设立,鼠标不存在误触;但若此前触屏已锁上,
         // 仍保留显示以便鼠标也能解锁。
         AnimatedVisibility(
-            visible = isFullscreen && !pip && controlsVisible && (pointerSource.isTouchLike || locked) &&
+            visible = isFullscreen && !pip && controlsVisible &&
+                (locked || (pointerSource.isTouchLike && !activeLayout.hasControl(PlayerControlId.Lock))) &&
                 !(levelHud != null && shownLevelDockEnd),
             enter = scaleIn(scaleSpec) + fadeIn(effectsSpec),
             exit = scaleOut(scaleSpec) + fadeOut(effectsSpec),
@@ -1349,43 +1464,44 @@ fun PlayerShell(
         // 暂停那个方块就压在进退读数上。手势进行中没有人要去点播放键,松手后读数淡出、它再回来。
         // 触屏模式保留正中播放键；键鼠模式下播放键已移至底部控制条最左端，不再遮挡视频正中，
         // 仅在加载缓冲时于正中保留轻量化指示器。
+        val centerConfig = activeLayout.center
+        val hasVisibleCenterSide = listOf(
+            centerConfig.outerLeft,
+            centerConfig.innerLeft,
+            centerConfig.innerRight,
+            centerConfig.outerRight,
+        ).any { slot ->
+            when (slot.action) {
+                CenterSlotAction.None -> false
+                CenterSlotAction.Previous, CenterSlotAction.Next -> scope.canPrevious || scope.canNext
+                is CenterSlotAction.SeekBackward, is CenterSlotAction.SeekForward -> gestures.seek
+            }
+        }
+        val showCenterControls = (controlsVisible && !locked) && (centerConfig.showCenterPlay || hasVisibleCenterSide)
+
         AnimatedVisibility(
             // Android 小窗里不画:那里的播放键是系统给的。桌面小窗在触屏模式下照画，键鼠模式走底栏左端播放键。
             visible = (!pip || pipWindow != null) && currentGesture !is PlayerGesture.Seek &&
                 speedController?.active != true &&
-                if (pointerSource.isTouchLike) {
-                    (controlsVisible && !locked) || loadingVisible || flashVisible
-                } else {
-                    loadingVisible
-                },
+                (showCenterControls || loadingVisible || (centerConfig.showCenterPlay && flashVisible)),
             enter = scaleIn(scaleSpec, initialScale = CenterButtonEnterScale) + fadeIn(effectsSpec),
             exit = scaleOut(scaleSpec, targetScale = CenterButtonEnterScale) + fadeOut(effectsSpec),
             modifier = Modifier.align(Alignment.Center).hoverable(controlsHover),
         ) {
-            if (pointerSource.isTouchLike) {
-                CenterPlayButton(
-                    isPlaying = playWhenReady,
-                    loading = loadingVisible,
-                    large = isFullscreen && !pip,
-                    onClick = {
-                        togglePlayPause()
-                    },
-                )
-            } else {
-                Surface(
-                    shape = CircleShape,
-                    color = mediaControlContainer(),
-                    contentColor = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.size(if (isFullscreen && !pip) 56.dp else 44.dp),
-                ) {
-                    Box(contentAlignment = Alignment.Center) {
-                        LoadingIndicator(
-                            color = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.size(if (isFullscreen && !pip) 40.dp else 32.dp),
-                        )
-                    }
-                }
-            }
+            CenterControlCluster(
+                config = centerConfig,
+                isPlaying = playWhenReady,
+                loading = loadingVisible,
+                large = isFullscreen && !pip,
+                showSideButtons = controlsVisible && !locked && !pip,
+                canPrevious = scope.canPrevious,
+                canNext = scope.canNext,
+                allowSeek = gestures.seek,
+                onTogglePlayPause = togglePlayPause,
+                onPrevious = actions.seekToPrevious,
+                onNext = actions.seekToNext,
+                onSeekDeltaMillis = actions.seekByMillis,
+            )
         }
 
         // 控制条贴着下边缘,所以从下边缘进出,幅度同顶栏:滑半个栏高加淡入。
@@ -1436,7 +1552,7 @@ internal fun Overlay(modifier: Modifier = Modifier, content: @Composable () -> U
 }
 
 private val StatusClusterHorizontalPadding = 10.dp
-private val StatusClusterVerticalPadding = 5.dp
+private val StatusClusterHeight = 32.dp
 private val StatusNetworkIconSize = 13.dp
 private val StatusIconLabelGap = 3.dp
 private val BatteryGlyphWidth = 18.dp
@@ -1463,7 +1579,7 @@ private val ChargingAccentColor = Color(0xFF8CE99A)
  * 系统状态栏在全屏下已隐藏,此胶囊随播放器控件一同显隐;各项之间仅用 `8.dp` 间距分隔,不出现中点符号。
  */
 @Composable
-private fun PlayerStatusCluster(
+internal fun PlayerStatusCluster(
     status: PlayerSystemStatus,
     modifier: Modifier = Modifier,
 ) {
@@ -1476,13 +1592,11 @@ private fun PlayerStatusCluster(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
         modifier = modifier
+            .height(StatusClusterHeight)
             .clip(CircleShape)
             .background(mediaControlContainer())
             .border(HudSpecularBorderWidth, HudSpecularBorderColor, CircleShape)
-            .padding(
-                horizontal = StatusClusterHorizontalPadding,
-                vertical = StatusClusterVerticalPadding,
-            ),
+            .padding(horizontal = StatusClusterHorizontalPadding),
     ) {
         if (hasTime) {
             Text(

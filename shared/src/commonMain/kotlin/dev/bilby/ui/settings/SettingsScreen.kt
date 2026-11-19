@@ -35,7 +35,7 @@ import androidx.compose.material.icons.outlined.PlayCircleOutline
 import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.Shield
 import androidx.compose.material.icons.outlined.SystemUpdate
-import androidx.compose.material.icons.outlined.TouchApp
+import androidx.compose.material.icons.outlined.Tune
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -208,17 +208,6 @@ fun SettingsScreen(
                     row { position ->
                         CategoryRow(
                             position = position,
-                            title = stringResource(Res.string.settings_section_gestures),
-                            icon = Icons.Outlined.TouchApp,
-                            value = stringResource(Res.string.settings_gestures_summary),
-                            target = RowTarget.Page,
-                            onClick = { onOpenSection(SettingsSection.Gestures) },
-                            selected = selected(SettingsSection.Gestures),
-                        )
-                    }
-                    row { position ->
-                        CategoryRow(
-                            position = position,
                             title = stringResource(Res.string.settings_section_agent),
                             icon = Icons.Outlined.AutoAwesome,
                             value = state.llm?.let { llm ->
@@ -264,6 +253,19 @@ fun SettingsScreen(
                             target = RowTarget.Page,
                             onClick = { onOpenSection(SettingsSection.About) },
                             selected = selected(SettingsSection.About),
+                        )
+                    }
+                }
+                SettingsGroup(title = stringResource(Res.string.settings_group_customization)) {
+                    row { position ->
+                        CategoryRow(
+                            position = position,
+                            title = stringResource(Res.string.settings_section_player_customization),
+                            icon = Icons.Outlined.Tune,
+                            value = stringResource(Res.string.settings_player_customization_summary),
+                            target = RowTarget.Page,
+                            onClick = { onOpenSection(SettingsSection.Gestures) },
+                            selected = selected(SettingsSection.Gestures),
                         )
                     }
                 }

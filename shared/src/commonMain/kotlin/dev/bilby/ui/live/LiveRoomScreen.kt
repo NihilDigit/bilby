@@ -147,7 +147,11 @@ import dev.bilby.ui.components.SidePaneLayer
 import dev.bilby.ui.components.rememberSidePaneState
 import androidx.compose.foundation.layout.width
 import androidx.compose.ui.unit.Dp
+import dev.bilby.data.PlayerControlId
+import dev.bilby.data.PlayerFormFactor
+import dev.bilby.data.PlayerLayoutPrefs
 import dev.bilby.data.SideSheetPrefs
+import dev.bilby.ui.player.LocalPlayerLayoutPrefs
 import dev.bilby.ui.components.SplitPaneResizeHandle
 import androidx.compose.runtime.CompositionLocalProvider
 import dev.bilby.ui.player.PlayerTooltip
@@ -365,6 +369,7 @@ fun LiveRoomScreen(
                         }
                     },
                     // 全屏顶栏同样给画中画,理由同播放页:它只从按钮进。
+                    layoutPrefs = LocalPlayerLayoutPrefs.current,
                     topBarActions = {
                         if (pip.supported) {
                             val pipLabel = stringResource(Res.string.player_pip)
@@ -376,9 +381,21 @@ fun LiveRoomScreen(
                                 )
                             }
                         }
-                        PlayerSettingsButton {
-                            settingsOnly = null
-                            settingsOpen = true
+                    },
+                    topBarControlRenderer = { id ->
+                        when (id) {
+                            PlayerControlId.Settings -> PlayerSettingsButton {
+                                settingsOnly = null
+                                settingsOpen = true
+                            }
+                            PlayerControlId.DanmakuToggle -> DanmakuButton(
+                                enabled = danmakuPrefs.enabled,
+                                onEnabledChange = { danmakuEditor.setEnabled(it) },
+                                isFullscreen = fullscreen,
+                            )
+                            PlayerControlId.Volume -> PlayerVolumeControl()
+                            PlayerControlId.Fullscreen -> FullscreenButton(fullscreen) { fullscreen = !fullscreen }
+                            else -> Unit
                         }
                     },
                     embeddedTopActions = {
@@ -833,6 +850,9 @@ private fun LiveControlBar(
 ) {
     // 触屏走正中播放键；键鼠模式下将形变+强调色播放键置于最左端，不遮挡直播画面。
     val isTouchLike = LocalPointerSource.current.isTouchLike
+    val activeLayout = LocalPlayerLayoutPrefs.current.layoutFor(
+        PlayerFormFactor.of(isTouch = isTouchLike, isFullscreen = isFullscreen),
+    )
     val density = LocalDensity.current
     var barWidth by remember { mutableStateOf(0.dp) }
     Box(
@@ -851,7 +871,7 @@ private fun LiveControlBar(
             verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier.fillMaxWidth(),
         ) {
-            if (!pip && !isTouchLike) {
+            if (!pip && activeLayout.hasInBottomBar(PlayerControlId.PlayPause)) {
                 ControlBarPlayButton(
                     isPlaying = playWhenReady,
                     onClick = onTogglePlayPause,
@@ -930,9 +950,15 @@ private fun LiveControlBar(
                 }
             }
             if (roomy || !composing) LiveAudioOnlyButton(onlyAudio, onOnlyAudioChange, isFullscreen)
-            if (wide || isFullscreen) DanmakuButton(danmakuEnabled, onDanmakuEnabledChange, isFullscreen)
-            PlayerSettingsButton { onOpenSettings(null) }
-            FullscreenButton(isFullscreen, onFullscreenToggle)
+            if ((wide || isFullscreen) && activeLayout.hasInBottomBar(PlayerControlId.DanmakuToggle)) {
+                DanmakuButton(danmakuEnabled, onDanmakuEnabledChange, isFullscreen)
+            }
+            if (activeLayout.hasInBottomBar(PlayerControlId.Settings)) {
+                PlayerSettingsButton { onOpenSettings(null) }
+            }
+            if (activeLayout.hasInBottomBar(PlayerControlId.Fullscreen)) {
+                FullscreenButton(isFullscreen, onFullscreenToggle)
+            }
         }
     }
 }

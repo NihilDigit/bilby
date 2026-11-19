@@ -24,6 +24,7 @@ import dev.bilby.agent.LlmModelInfo
 import dev.bilby.data.ExcludedUp
 import dev.bilby.data.LlmConfig
 import dev.bilby.data.PlayEndMode
+import dev.bilby.data.PlayerLayoutPrefs
 import dev.bilby.data.SettingsStore
 import dev.bilby.data.SponsorBlockPrefs
 import dev.bilby.player.hardwareDecodableCodecIds
@@ -74,6 +75,7 @@ data class SettingsUiState(
     val defaultHoldSpeed: Float = SettingsStore.DEFAULT_HOLD_SPEED,
     val swipeSeek: Boolean = true,
     val swipeBrightnessVolume: Boolean = true,
+    val playerLayout: PlayerLayoutPrefs = PlayerLayoutPrefs.Default,
     /** 一条内容播完后的行为。见 [dev.bilby.data.PlaybackPrefs.endMode]。 */
     val endMode: PlayEndMode = PlayEndMode.Continue,
     /** 见 [dev.bilby.data.PlayerPrefs.pbpOutroCompletion]。 */
@@ -265,6 +267,7 @@ class SettingsViewModel(
                         swipeSeek = prefs.swipeSeek,
                         swipeBrightnessVolume = prefs.swipeBrightnessVolume,
                         pbpOutroCompletion = prefs.pbpOutroCompletion,
+                        playerLayout = prefs.layout,
                     )
                 }
             }
@@ -418,6 +421,22 @@ class SettingsViewModel(
     fun setPbpOutroCompletion(value: Boolean) {
         _state.update { it.copy(pbpOutroCompletion = value) }
         persist { settings.savePbpOutroCompletion(value) }
+    }
+
+    fun setPlayerLayout(layout: PlayerLayoutPrefs) {
+        val sanitized = layout.sanitize()
+        _state.update { it.copy(playerLayout = sanitized) }
+        persist { settings.savePlayerLayout(sanitized) }
+    }
+
+    fun updatePlayerLayout(transform: (PlayerLayoutPrefs) -> PlayerLayoutPrefs) {
+        val next = transform(_state.value.playerLayout).sanitize()
+        _state.update { it.copy(playerLayout = next) }
+        persist { settings.savePlayerLayout(next) }
+    }
+
+    fun resetPlayerLayout() {
+        setPlayerLayout(PlayerLayoutPrefs.Default)
     }
 
     fun setThemeMode(mode: ThemeMode) {

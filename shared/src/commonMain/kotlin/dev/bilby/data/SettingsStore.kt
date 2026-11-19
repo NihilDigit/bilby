@@ -166,6 +166,7 @@ class SettingsStore(private val store: DataStore<Preferences>) {
             swipeSeek = p[KEY_SWIPE_SEEK] ?: true,
             swipeBrightnessVolume = p[KEY_SWIPE_BRIGHTNESS_VOLUME] ?: true,
             pbpOutroCompletion = p[KEY_PBP_OUTRO_COMPLETION] ?: true,
+            layout = decodePlayerLayoutPrefs(p[KEY_PLAYER_LAYOUT_JSON]),
         )
     }
 
@@ -213,6 +214,11 @@ class SettingsStore(private val store: DataStore<Preferences>) {
     /** 见 [PlayerPrefs.pbpOutroCompletion]。 */
     suspend fun savePbpOutroCompletion(enabled: Boolean) {
         store.edit { p -> p[KEY_PBP_OUTRO_COMPLETION] = enabled }
+    }
+
+    suspend fun savePlayerLayout(layout: PlayerLayoutPrefs) {
+        val sanitized = layout.sanitize()
+        store.edit { p -> p[KEY_PLAYER_LAYOUT_JSON] = encodePlayerLayoutPrefs(sanitized) }
     }
 
     /**
@@ -695,6 +701,7 @@ class SettingsStore(private val store: DataStore<Preferences>) {
         private val KEY_SWIPE_SEEK = booleanPreferencesKey("player_swipe_seek")
         private val KEY_SWIPE_BRIGHTNESS_VOLUME = booleanPreferencesKey("player_swipe_brightness_volume")
         private val KEY_PBP_OUTRO_COMPLETION = booleanPreferencesKey("player_pbp_outro_completion")
+        private val KEY_PLAYER_LAYOUT_JSON = stringPreferencesKey("player_layout_json")
 
         const val DEFAULT_HOLD_SPEED = 2.5f
         val HOLD_SPEED_OPTIONS = listOf(1.5f, 2f, 2.5f, 3f, 3.5f)
@@ -925,6 +932,7 @@ data class PlayerPrefs(
      * 完播阈值恒取固定容差(见 [dev.bilby.player.finishedThresholdMillis])。
      */
     val pbpOutroCompletion: Boolean = true,
+    val layout: PlayerLayoutPrefs = PlayerLayoutPrefs.Default,
 ) {
     fun defaultAudioOn(metered: Boolean): Int = if (metered) defaultAudioMetered else defaultAudioWifi
 

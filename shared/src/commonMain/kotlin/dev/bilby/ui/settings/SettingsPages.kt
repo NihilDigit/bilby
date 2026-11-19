@@ -510,9 +510,8 @@ fun PlaybackSettingsPage(
 }
 
 /**
- * 快捷手势。播放器内的触控快捷操作集中在此,每一项都可以单独关闭;默认长按倍速随长按开关展开收起。
+ * 快捷手势兼容入口，已整合升级为 [PlayerCustomizationPage]。
  */
-@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 fun GestureSettingsPage(
     state: SettingsUiState,
@@ -524,86 +523,18 @@ fun GestureSettingsPage(
     onSwipeBrightnessVolumeChange: (Boolean) -> Unit,
     onBack: (() -> Unit)?,
 ) {
-    val holdSpeedShown = remember { MutableTransitionState(state.longPressSpeed) }
-    holdSpeedShown.targetState = state.longPressSpeed
-    val holdSpeedOnScreen = state.longPressSpeed || holdSpeedShown.currentState
-    val enter = expandVertically(MaterialTheme.motionScheme.fastSpatialSpec()) +
-        fadeIn(MaterialTheme.motionScheme.fastEffectsSpec())
-    val exit = shrinkVertically(MaterialTheme.motionScheme.fastSpatialSpec()) +
-        fadeOut(MaterialTheme.motionScheme.fastEffectsSpec())
-
-    SettingsSubPage(stringResource(Res.string.settings_section_gestures), onBack, state.loaded) {
-        SettingsGroup {
-            row { position ->
-                ToggleSettingRow(
-                    position = position,
-                    icon = Icons.Outlined.FastForward,
-                    title = stringResource(Res.string.settings_double_tap_seek),
-                    subtitle = stringResource(Res.string.settings_double_tap_seek_subtitle),
-                    checked = state.doubleTapSeek,
-                    onCheckedChange = onDoubleTapSeekChange,
-                )
-            }
-            row { position ->
-                ToggleSettingRow(
-                    position = position,
-                    icon = Icons.Outlined.Speed,
-                    title = stringResource(Res.string.settings_long_press_speed),
-                    subtitle = stringResource(Res.string.settings_long_press_speed_subtitle),
-                    checked = state.longPressSpeed,
-                    onCheckedChange = onLongPressSpeedChange,
-                )
-            }
-            if (holdSpeedOnScreen) {
-                row { position ->
-                    AnimatedVisibility(visibleState = holdSpeedShown, enter = enter, exit = exit) {
-                        ToggleSettingRow(
-                            position = position,
-                            icon = Icons.Outlined.Tune,
-                            title = stringResource(Res.string.settings_long_press_speed_dial),
-                            subtitle = stringResource(Res.string.settings_long_press_speed_dial_subtitle),
-                            checked = state.longPressSpeedDial,
-                            onCheckedChange = onLongPressSpeedDialChange,
-                        )
-                    }
-                }
-                row { position ->
-                    AnimatedVisibility(visibleState = holdSpeedShown, enter = enter, exit = exit) {
-                        ChoiceRow(
-                            position = position,
-                            icon = Icons.Outlined.Speed,
-                            title = stringResource(Res.string.settings_default_hold_speed),
-                            options = SettingsStore.HOLD_SPEED_OPTIONS,
-                            selected = state.defaultHoldSpeed,
-                            label = { formatSpeed(it) },
-                            onChange = onDefaultHoldSpeedChange,
-                            valueAtEnd = true,
-                        )
-                    }
-                }
-            }
-            row { position ->
-                ToggleSettingRow(
-                    position = position,
-                    icon = Icons.Outlined.SwapHoriz,
-                    title = stringResource(Res.string.settings_swipe_seek),
-                    subtitle = stringResource(Res.string.settings_swipe_seek_subtitle),
-                    checked = state.swipeSeek,
-                    onCheckedChange = onSwipeSeekChange,
-                )
-            }
-            row { position ->
-                ToggleSettingRow(
-                    position = position,
-                    icon = Icons.Outlined.SwapVert,
-                    title = stringResource(Res.string.settings_swipe_brightness_volume),
-                    subtitle = stringResource(Res.string.settings_swipe_brightness_volume_subtitle),
-                    checked = state.swipeBrightnessVolume,
-                    onCheckedChange = onSwipeBrightnessVolumeChange,
-                )
-            }
-        }
-    }
+    PlayerCustomizationPage(
+        state = state,
+        onUpdateLayout = {},
+        onResetLayout = {},
+        onDoubleTapSeekChange = onDoubleTapSeekChange,
+        onLongPressSpeedChange = onLongPressSpeedChange,
+        onLongPressSpeedDialChange = onLongPressSpeedDialChange,
+        onDefaultHoldSpeedChange = onDefaultHoldSpeedChange,
+        onSwipeSeekChange = onSwipeSeekChange,
+        onSwipeBrightnessVolumeChange = onSwipeBrightnessVolumeChange,
+        onBack = onBack,
+    )
 }
 
 @Composable

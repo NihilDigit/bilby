@@ -21,6 +21,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.FastForward
 import androidx.compose.material.icons.filled.FastRewind
@@ -28,6 +29,8 @@ import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.SkipNext
+import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.material.icons.filled.Fullscreen
 import androidx.compose.material.icons.filled.FullscreenExit
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
@@ -36,7 +39,15 @@ import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.LoadingIndicator
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.staticCompositionLocalOf
+import androidx.compose.ui.graphics.PathEffect
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.unit.Dp
+import dev.bilby.data.CenterClusterConfig
+import dev.bilby.data.CenterSlotAction
+import dev.bilby.data.CenterSlotConfig
+import dev.bilby.data.CenterSlotPosition
+import dev.bilby.data.PlayerLayoutPrefs
 import dev.bilby.formatDurationMillis
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
@@ -943,3 +954,351 @@ private const val PlayingWidthRatio = 1.15f
 private const val PlayingCornerRatio = 0.3f
 private const val LoadingRatio = 0.72f
 private const val IconRatio = 0.5f
+
+val LocalPlayerLayoutPrefs = staticCompositionLocalOf { PlayerLayoutPrefs.Default }
+
+/**
+ * 播放器中央控件簇：最多 5 键 `[ 外左 ] [ 内左 ] [ 播放/暂停 ] [ 内右 ] [ 外右 ]`。
+ *
+ * - 真实播放态：空槽位与不可用切集槽位不渲染交互热区，仅在成对可见时以对称占位宽度保持中央播放键绝对居中。
+ * - 所见即所得预览态（[previewMode] = true）：空槽位显示虚线圆框与微弱 `+`，点选任意槽位即可编辑。
+ */
+@Composable
+internal fun CenterControlCluster(
+    config: CenterClusterConfig,
+    isPlaying: Boolean,
+    loading: Boolean,
+    large: Boolean,
+    showSideButtons: Boolean,
+    canPrevious: Boolean,
+    canNext: Boolean,
+    allowSeek: Boolean,
+    onTogglePlayPause: () -> Unit,
+    onPrevious: () -> Unit,
+    onNext: () -> Unit,
+    onSeekDeltaMillis: (Long) -> Unit,
+    previewMode: Boolean = false,
+    selectedSlot: CenterSlotPosition? = null,
+    onSelectSlot: ((CenterSlotPosition) -> Unit)? = null,
+    scaleMultiplier: Float = 1f,
+    modifier: Modifier = Modifier,
+) {
+    val baseHeight = (if (large) CenterButtonHeightLarge else CenterButtonHeight) * scaleMultiplier
+
+    fun isSlotVisible(slot: CenterSlotConfig): Boolean {
+        if (previewMode) return true
+        if (!showSideButtons) return false
+        return when (slot.action) {
+            CenterSlotAction.None -> false
+            CenterSlotAction.Previous, CenterSlotAction.Next -> canPrevious || canNext
+            is CenterSlotAction.SeekBackward, is CenterSlotAction.SeekForward -> allowSeek
+        }
+    }
+
+    val outerLeftVisible = isSlotVisible(config.outerLeft)
+    val innerLeftVisible = isSlotVisible(config.innerLeft)
+    val innerRightVisible = isSlotVisible(config.innerRight)
+    val outerRightVisible = isSlotVisible(config.outerRight)
+    val showOuterPair = previewMode || outerLeftVisible || outerRightVisible
+    val showInnerPair = previewMode || innerLeftVisible || innerRightVisible
+
+    val outerVisualSize = maxOf(
+        (baseHeight * config.outerLeft.scale.ratio),
+        (baseHeight * config.outerRight.scale.ratio),
+    ).coerceAtLeast(28.dp)
+    val innerVisualSize = maxOf(
+        (baseHeight * config.innerLeft.scale.ratio),
+        (baseHeight * config.innerRight.scale.ratio),
+    ).coerceAtLeast(32.dp)
+    val outerSlotWidth = if (previewMode) outerVisualSize else maxOf(outerVisualSize, Dimens.MinTouchTarget)
+    val innerSlotWidth = if (previewMode) innerVisualSize else maxOf(innerVisualSize, Dimens.MinTouchTarget)
+    val gap = when {
+        previewMode -> Spacing.Tight
+        showOuterPair && !large -> Spacing.Tight
+        large -> Spacing.Loose
+        else -> Spacing.Comfortable
+    }
+
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(gap),
+        modifier = modifier,
+    ) {
+        if (showOuterPair) {
+            CenterSideSlotContainer(
+                slot = config.outerLeft,
+                visible = outerLeftVisible,
+                baseHeight = baseHeight,
+                slotWidth = outerSlotWidth,
+                canPrevious = canPrevious,
+                canNext = canNext,
+                onPrevious = onPrevious,
+                onNext = onNext,
+                onSeekDeltaMillis = onSeekDeltaMillis,
+                previewMode = previewMode,
+                selected = selectedSlot == CenterSlotPosition.OuterLeft,
+                onSelect = { onSelectSlot?.invoke(CenterSlotPosition.OuterLeft) },
+            )
+        }
+        if (showInnerPair) {
+            CenterSideSlotContainer(
+                slot = config.innerLeft,
+                visible = innerLeftVisible,
+                baseHeight = baseHeight,
+                slotWidth = innerSlotWidth,
+                canPrevious = canPrevious,
+                canNext = canNext,
+                onPrevious = onPrevious,
+                onNext = onNext,
+                onSeekDeltaMillis = onSeekDeltaMillis,
+                previewMode = previewMode,
+                selected = selectedSlot == CenterSlotPosition.InnerLeft,
+                onSelect = { onSelectSlot?.invoke(CenterSlotPosition.InnerLeft) },
+            )
+        }
+
+        // 中央播放键槽位
+        val centerSelected = previewMode && selectedSlot == CenterSlotPosition.Center
+        Box(
+            contentAlignment = Alignment.Center,
+            modifier = Modifier
+                .then(
+                    if (centerSelected) {
+                        Modifier
+                            .border(2.dp, MaterialTheme.colorScheme.primary, CircleShape)
+                            .padding(3.dp)
+                    } else {
+                        Modifier
+                    },
+                ),
+        ) {
+            when {
+                config.showCenterPlay -> CenterPlayButton(
+                    isPlaying = isPlaying,
+                    loading = loading,
+                    large = large && scaleMultiplier >= 0.9f,
+                    onClick = {
+                        if (previewMode) {
+                            onSelectSlot?.invoke(CenterSlotPosition.Center)
+                        } else {
+                            onTogglePlayPause()
+                        }
+                    },
+                )
+                previewMode -> DashedCenterSlotPlaceholder(
+                    diameter = baseHeight.coerceAtLeast(40.dp),
+                    selected = centerSelected,
+                    onClick = { onSelectSlot?.invoke(CenterSlotPosition.Center) },
+                )
+                loading -> Surface(
+                    shape = CircleShape,
+                    color = mediaControlContainer(),
+                    contentColor = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(if (large) 56.dp else 44.dp),
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        LoadingIndicator(
+                            color = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(if (large) 40.dp else 32.dp),
+                        )
+                    }
+                }
+            }
+        }
+
+        if (showInnerPair) {
+            CenterSideSlotContainer(
+                slot = config.innerRight,
+                visible = innerRightVisible,
+                baseHeight = baseHeight,
+                slotWidth = innerSlotWidth,
+                canPrevious = canPrevious,
+                canNext = canNext,
+                onPrevious = onPrevious,
+                onNext = onNext,
+                onSeekDeltaMillis = onSeekDeltaMillis,
+                previewMode = previewMode,
+                selected = selectedSlot == CenterSlotPosition.InnerRight,
+                onSelect = { onSelectSlot?.invoke(CenterSlotPosition.InnerRight) },
+            )
+        }
+        if (showOuterPair) {
+            CenterSideSlotContainer(
+                slot = config.outerRight,
+                visible = outerRightVisible,
+                baseHeight = baseHeight,
+                slotWidth = outerSlotWidth,
+                canPrevious = canPrevious,
+                canNext = canNext,
+                onPrevious = onPrevious,
+                onNext = onNext,
+                onSeekDeltaMillis = onSeekDeltaMillis,
+                previewMode = previewMode,
+                selected = selectedSlot == CenterSlotPosition.OuterRight,
+                onSelect = { onSelectSlot?.invoke(CenterSlotPosition.OuterRight) },
+            )
+        }
+    }
+}
+
+@Composable
+private fun CenterSideSlotContainer(
+    slot: CenterSlotConfig,
+    visible: Boolean,
+    baseHeight: Dp,
+    slotWidth: Dp,
+    canPrevious: Boolean,
+    canNext: Boolean,
+    onPrevious: () -> Unit,
+    onNext: () -> Unit,
+    onSeekDeltaMillis: (Long) -> Unit,
+    previewMode: Boolean,
+    selected: Boolean,
+    onSelect: () -> Unit,
+) {
+    val visualDiameter = (baseHeight * slot.scale.ratio).coerceAtLeast(28.dp)
+    if (!visible) {
+        Box(modifier = Modifier.width(slotWidth))
+        return
+    }
+    Box(
+        contentAlignment = Alignment.Center,
+        modifier = Modifier
+            .width(slotWidth)
+            .then(
+                if (previewMode) Modifier else Modifier.sizeIn(minWidth = Dimens.MinTouchTarget, minHeight = Dimens.MinTouchTarget),
+            ),
+    ) {
+        if (slot.action == CenterSlotAction.None) {
+            if (previewMode) {
+                DashedCenterSlotPlaceholder(
+                    diameter = visualDiameter,
+                    selected = selected,
+                    onClick = onSelect,
+                )
+            }
+            return
+        }
+
+        val enabled = previewMode || when (slot.action) {
+            CenterSlotAction.Previous -> canPrevious
+            CenterSlotAction.Next -> canNext
+            is CenterSlotAction.SeekBackward, is CenterSlotAction.SeekForward -> true
+            CenterSlotAction.None -> false
+        }
+        val contentAlpha = if (enabled) 1f else 0.38f
+        val icon = when (slot.action) {
+            CenterSlotAction.Previous -> Icons.Filled.SkipPrevious
+            CenterSlotAction.Next -> Icons.Filled.SkipNext
+            is CenterSlotAction.SeekBackward -> Icons.Filled.FastRewind
+            is CenterSlotAction.SeekForward -> Icons.Filled.FastForward
+            CenterSlotAction.None -> Icons.Filled.Add
+        }
+        val contentDesc = when (val a = slot.action) {
+            CenterSlotAction.Previous -> stringResource(Res.string.player_previous)
+            CenterSlotAction.Next -> stringResource(Res.string.player_next)
+            is CenterSlotAction.SeekBackward -> stringResource(Res.string.player_seek_backward_seconds, a.seconds)
+            is CenterSlotAction.SeekForward -> stringResource(Res.string.player_seek_forward_seconds, a.seconds)
+            CenterSlotAction.None -> null
+        }
+        val secondsBadge = slot.action.seekSecondsOrNull()
+        val iconSize = (visualDiameter * (if (secondsBadge != null) 0.42f else 0.52f)).coerceIn(14.dp, 28.dp)
+
+        Surface(
+            onClick = {
+                if (previewMode) {
+                    onSelect()
+                } else {
+                    when (val a = slot.action) {
+                        CenterSlotAction.Previous -> onPrevious()
+                        CenterSlotAction.Next -> onNext()
+                        is CenterSlotAction.SeekBackward -> onSeekDeltaMillis(-a.seconds * 1_000L)
+                        is CenterSlotAction.SeekForward -> onSeekDeltaMillis(a.seconds * 1_000L)
+                        CenterSlotAction.None -> Unit
+                    }
+                }
+            },
+            enabled = enabled,
+            shape = CircleShape,
+            color = mediaControlContainer(),
+            contentColor = MaterialTheme.colorScheme.onSurface.copy(alpha = contentAlpha),
+            modifier = Modifier
+                .size(visualDiameter)
+                .then(
+                    if (previewMode && selected) {
+                        Modifier.border(2.dp, MaterialTheme.colorScheme.primary, CircleShape)
+                    } else {
+                        Modifier
+                    },
+                )
+                .pointerHoverIcon(PointerIcon.Hand),
+        ) {
+            Box(contentAlignment = Alignment.Center) {
+                if (secondsBadge != null) {
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.Center,
+                    ) {
+                        Icon(
+                            imageVector = icon,
+                            contentDescription = contentDesc,
+                            modifier = Modifier.size(iconSize),
+                        )
+                        Text(
+                            text = "${secondsBadge}s",
+                            style = MaterialTheme.typography.labelSmall.tabular,
+                            maxLines = 1,
+                        )
+                    }
+                } else {
+                    Icon(
+                        imageVector = icon,
+                        contentDescription = contentDesc,
+                        modifier = Modifier.size(iconSize),
+                    )
+                }
+            }
+        }
+    }
+}
+
+/** 预览画布中未配置中央槽位的虚线圆框占位。 */
+@Composable
+private fun DashedCenterSlotPlaceholder(
+    diameter: Dp,
+    selected: Boolean,
+    onClick: () -> Unit,
+) {
+    val strokeColor = if (selected) {
+        MaterialTheme.colorScheme.primary
+    } else {
+        FixedColors.OnMedia.copy(alpha = 0.42f)
+    }
+    val strokeWidth = if (selected) 2.dp else 1.5.dp
+    Box(
+        contentAlignment = Alignment.Center,
+        modifier = Modifier
+            .size(diameter)
+            .clip(CircleShape)
+            .clickable(onClick = onClick)
+            .pointerHoverIcon(PointerIcon.Hand),
+    ) {
+        Canvas(modifier = Modifier.fillMaxSize()) {
+            val strokePx = strokeWidth.toPx()
+            drawCircle(
+                color = strokeColor,
+                radius = (size.minDimension - strokePx) / 2f,
+                style = Stroke(
+                    width = strokePx,
+                    pathEffect = PathEffect.dashPathEffect(floatArrayOf(10f, 8f), 0f),
+                ),
+            )
+        }
+        Icon(
+            imageVector = Icons.Filled.Add,
+            contentDescription = stringResource(Res.string.player_custom_add_slot),
+            tint = strokeColor,
+            modifier = Modifier.size((diameter * 0.42f).coerceIn(14.dp, 22.dp)),
+        )
+    }
+}

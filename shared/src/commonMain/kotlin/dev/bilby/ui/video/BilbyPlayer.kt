@@ -15,12 +15,17 @@ import androidx.compose.foundation.layout.systemGestures
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Bedtime
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.FastForward
+import androidx.compose.material.icons.filled.FastRewind
 import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.HighQuality
+import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.LockOpen
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.material.icons.filled.Speed
@@ -96,6 +101,11 @@ import dev.bilby.ui.theme.tabular
 import dev.bilby.danmaku.DanmakuVote
 import dev.bilby.data.DanmakuPrefs
 import dev.bilby.data.DanmakuPrefsEditor
+import dev.bilby.data.PlayerControlId
+import dev.bilby.data.PlayerFormFactor
+import dev.bilby.data.PlayerLayoutPrefs
+import dev.bilby.data.PlayerPanelItem
+import dev.bilby.ui.player.LocalPlayerLayoutPrefs
 import dev.nihildigit.danmaku.Danmaku
 import dev.nihildigit.danmaku.SpecialDanmaku
 import dev.nihildigit.danmaku.DanmakuHost
@@ -232,6 +242,8 @@ fun BilbyPlayer(
     onRequestExternalDanmakuInput: (() -> Unit)? = null,
     /** 是否在播放器画面内渲染长按倍速覆盖层;竖屏单栏内嵌时由外层画在画面下方,传 false。 */
     showSpeedOverlay: Boolean = true,
+    /** 播放器面板与中央簇自定义配置。 */
+    layoutPrefs: PlayerLayoutPrefs = LocalPlayerLayoutPrefs.current,
 ) {
     /** 两栏布局(含紧凑高度横屏):内嵌画面占整窗高度,控制条按全屏的尺寸排。 */
     val windowSize = rememberBilbyWindowSize()
@@ -261,11 +273,93 @@ fun BilbyPlayer(
         speedController = speedController,
         showSpeedOverlay = showSpeedOverlay,
         gestures = gestures,
-        topBarActions = {
-            topBarActions()
-            PlayerSettingsButton {
-                settingsOnly = null
-                settingsOpen = true
+        layoutPrefs = layoutPrefs,
+        topBarActions = topBarActions,
+        topBarControlRenderer = { id ->
+            when (id) {
+                PlayerControlId.Settings -> PlayerSettingsButton {
+                    settingsOnly = null
+                    settingsOpen = true
+                }
+                PlayerControlId.DanmakuToggle -> DanmakuButton(
+                    enabled = danmakuPrefs.enabled,
+                    onEnabledChange = { danmakuEditor?.setEnabled(it) },
+                    isFullscreen = isFullscreen,
+                )
+                PlayerControlId.Volume -> PlayerVolumeControl()
+                PlayerControlId.Speed -> {
+                    val desc = stringResource(Res.string.player_speed)
+                    PlayerTooltip(desc, anchorAbove = false) {
+                        ControlButton(
+                            expanded = false,
+                            onClick = {
+                                settingsOnly = PlayerSettingsSection.Speed
+                                settingsOpen = true
+                            },
+                            label = formatSpeed(speedController.speed),
+                            icon = { tint -> Icon(Icons.Filled.Speed, desc, tint = tint, modifier = Modifier.size(ChipIconSize)) },
+                        )
+                    }
+                }
+                PlayerControlId.Quality -> qualities.takeIf { it.size > 1 }
+                    ?.firstOrNull { it.quality == currentQuality }?.label?.let { label ->
+                        val desc = stringResource(Res.string.player_quality)
+                        PlayerTooltip(desc, anchorAbove = false) {
+                            ControlButton(
+                                expanded = false,
+                                onClick = {
+                                    settingsOnly = PlayerSettingsSection.Quality
+                                    settingsOpen = true
+                                },
+                                label = label,
+                                icon = { tint -> Icon(Icons.Filled.HighQuality, desc, tint = tint, modifier = Modifier.size(ChipIconSize)) },
+                            )
+                        }
+                    }
+                PlayerControlId.Audio -> currentAudio.takeIf { audioOptions.size > 1 }?.let { audioId ->
+                    val desc = stringResource(Res.string.player_audio_quality)
+                    PlayerTooltip(desc, anchorAbove = false) {
+                        ControlButton(
+                            expanded = false,
+                            onClick = {
+                                settingsOnly = PlayerSettingsSection.Audio
+                                settingsOpen = true
+                            },
+                            label = audioQualityLabel(audioId),
+                            icon = { tint -> Icon(Icons.Filled.GraphicEq, desc, tint = tint, modifier = Modifier.size(ChipIconSize)) },
+                        )
+                    }
+                }
+                PlayerControlId.Subtitle -> if (subtitleTracks.isNotEmpty()) {
+                    val desc = stringResource(Res.string.player_subtitle)
+                    PlayerTooltip(desc, anchorAbove = false) {
+                        ControlButton(
+                            expanded = currentSubtitleLan.isNotEmpty(),
+                            onClick = {
+                                settingsOnly = PlayerSettingsSection.Subtitle
+                                settingsOpen = true
+                            },
+                            label = subtitleTracks.firstOrNull { it.lan == currentSubtitleLan }?.displayName,
+                            icon = { tint -> Icon(Icons.Filled.Subtitles, desc, tint = tint, modifier = Modifier.size(ChipIconSize)) },
+                        )
+                    }
+                }
+                PlayerControlId.SleepTimer -> if (onSleepTimer != null) {
+                    val desc = stringResource(Res.string.sleep_timer_off)
+                    PlayerTooltip(desc, anchorAbove = false) {
+                        ControlButton(
+                            expanded = sleepTimer.mode != SleepTimerMode.Off,
+                            onClick = {
+                                settingsOnly = PlayerSettingsSection.SleepTimer
+                                settingsOpen = true
+                            },
+                            label = null,
+                            icon = { tint -> Icon(Icons.Filled.Bedtime, desc, tint = tint, modifier = Modifier.size(ChipIconSize)) },
+                        )
+                    }
+                }
+                PlayerControlId.Fullscreen -> FullscreenButton(isFullscreen) { onFullscreenChange(!isFullscreen) }
+                else -> Unit
             }
         },
         embeddedTopActions = embeddedTopActions,
@@ -386,11 +480,15 @@ fun BilbyPlayer(
                 onTogglePlayPause = { togglePlayPause() },
                 onPrevious = { seekToPrevious() },
                 onNext = { seekToNext() },
+                onSeekByMillis = { seekByMillis(it) },
+                locked = locked,
+                onToggleLock = { onLockedChange(!locked) },
                 danmakuEnabled = danmakuPrefs.enabled,
                 onDanmakuEnabledChange = {
                     danmakuEditor?.setEnabled(it)
                     keepControlsAwake()
                 },
+                layoutPrefs = layoutPrefs,
                 pip = pip,
             )
         },
@@ -519,8 +617,12 @@ private fun PlayerControlBar(
     onTogglePlayPause: () -> Unit,
     onPrevious: () -> Unit,
     onNext: () -> Unit,
+    onSeekByMillis: (Long) -> Unit,
+    locked: Boolean,
+    onToggleLock: () -> Unit,
     danmakuEnabled: Boolean,
     onDanmakuEnabledChange: (Boolean) -> Unit,
+    layoutPrefs: PlayerLayoutPrefs = PlayerLayoutPrefs.Default,
     /**
      * 小窗:只留读数和进度条。弹幕、设置、全屏都藏起来 —— 几百 dp 宽的小窗排不下一整排,
      * 小窗里要做的也只是看到哪了、拖一下;要调什么回到窗口里调。
@@ -530,7 +632,10 @@ private fun PlayerControlBar(
     val container = Modifier.playerControlBar(isFullscreen)
     val density = LocalDensity.current
     var barWidth by remember { mutableStateOf(0.dp) }
-    var middleWidth by remember { mutableStateOf(0.dp) }
+    val isTouchLike = LocalPointerSource.current.isTouchLike
+    val activeLayout = layoutPrefs.layoutFor(
+        PlayerFormFactor.of(isTouch = isTouchLike, isFullscreen = isFullscreen),
+    )
 
     val seekBar: @Composable (Modifier) -> Unit = { modifier ->
         BoundSeekBar(
@@ -555,7 +660,11 @@ private fun PlayerControlBar(
         )
     }
 
-    val isTouchLike = LocalPointerSource.current.isTouchLike
+    val qualityLabel = qualities.takeIf { it.size > 1 }
+        ?.firstOrNull { it.quality == currentQuality }?.label
+    val audioLabel = currentAudio.takeIf { audioOptions.size > 1 }?.let { audioQualityLabel(it) }
+    val subtitleLabel = subtitleTracks.firstOrNull { it.lan == currentSubtitleLan }?.displayName
+
     Box(
         modifier = container.onSizeChanged { barWidth = with(density) { it.width.toDp() } },
     ) {
@@ -581,6 +690,8 @@ private fun PlayerControlBar(
                 BoundTimeLabel(progress = progress, isDuration = true, secondary = true, modifier = Modifier.padding(end = Spacing.Tight))
             }
         } else if (!stacked) {
+            val hasTimeItem = activeLayout.hasInBottomBar(PlayerControlId.TimeLabel)
+            var renderedSeekBar = false
             Row(verticalAlignment = Alignment.CenterVertically) {
                 if (composing && danmakuField != null) {
                     ControlBarDanmakuField(
@@ -599,162 +710,340 @@ private fun PlayerControlBar(
                         focusRequestNonce = danmakuFocusNonce,
                         modifier = Modifier.weight(1f).padding(horizontal = Spacing.Tight),
                     )
-                } else {
-                    if (!isTouchLike) {
-                        ControlBarPlayButton(isPlaying = playWhenReady, onClick = onTogglePlayPause)
+                    if (activeLayout.hasInBottomBar(PlayerControlId.Volume)) PlayerVolumeControl()
+                    if (isFullscreen && activeLayout.hasInBottomBar(PlayerControlId.DanmakuToggle)) {
+                        DanmakuButton(danmakuEnabled, onDanmakuEnabledChange, isFullscreen)
                     }
-                    BoundTimeLabel(
-                        progress = progress,
-                        isDuration = false,
-                        modifier = Modifier.padding(start = if (isTouchLike) Spacing.Tight else Spacing.Hair),
-                    )
-                    seekBar(Modifier.weight(1f))
-                    BoundTimeLabel(progress = progress, isDuration = true, secondary = true, modifier = Modifier.padding(end = Spacing.Hair))
-                    if (danmakuField != null) {
-                        val label = stringResource(Res.string.danmaku_send)
-                        PlayerTooltip(label, shortcut = "Enter") {
-                            PlayerIconButton(
-                                onClick = { composing = true },
-                                icon = Icons.Filled.Edit,
-                                contentDescription = label,
-                            )
+                    if (activeLayout.hasInBottomBar(PlayerControlId.Settings)) {
+                        PlayerSettingsButton { onOpenSettings(null) }
+                    }
+                    if (activeLayout.hasInBottomBar(PlayerControlId.Fullscreen)) {
+                        FullscreenButton(isFullscreen, onFullscreenToggle)
+                    }
+                } else {
+                    for (item in activeLayout.bottomBar) {
+                        when (item) {
+                            PlayerPanelItem.Spacer -> {
+                                if (!renderedSeekBar && !hasTimeItem) {
+                                    seekBar(Modifier.weight(1f))
+                                    renderedSeekBar = true
+                                } else if (!hasTimeItem) {
+                                    Spacer(Modifier.weight(1f))
+                                }
+                            }
+                            is PlayerPanelItem.Control -> when (item.id) {
+                                PlayerControlId.PlayPause -> ControlBarPlayButton(
+                                    isPlaying = playWhenReady,
+                                    onClick = onTogglePlayPause,
+                                )
+                                PlayerControlId.Previous -> if (canPrevious || canNext) {
+                                    val prevLabel = stringResource(Res.string.player_previous)
+                                    PlayerTooltip(prevLabel) {
+                                        PlayerIconButton(
+                                            onClick = onPrevious,
+                                            enabled = canPrevious,
+                                            icon = Icons.Filled.SkipPrevious,
+                                            contentDescription = prevLabel,
+                                        )
+                                    }
+                                }
+                                PlayerControlId.Next -> if (canPrevious || canNext) {
+                                    val nextLabel = stringResource(Res.string.player_next)
+                                    PlayerTooltip(nextLabel) {
+                                        PlayerIconButton(
+                                            onClick = onNext,
+                                            enabled = canNext,
+                                            icon = Icons.Filled.SkipNext,
+                                            contentDescription = nextLabel,
+                                        )
+                                    }
+                                }
+                                PlayerControlId.SeekBackward -> {
+                                    val sec = layoutPrefs.seekButtonSeconds
+                                    val label = stringResource(Res.string.player_seek_backward_seconds, sec)
+                                    PlayerTooltip(label) {
+                                        PlayerIconButton(
+                                            onClick = { onSeekByMillis(-sec * 1_000L) },
+                                            icon = Icons.Filled.FastRewind,
+                                            contentDescription = label,
+                                        )
+                                    }
+                                }
+                                PlayerControlId.SeekForward -> {
+                                    val sec = layoutPrefs.seekButtonSeconds
+                                    val label = stringResource(Res.string.player_seek_forward_seconds, sec)
+                                    PlayerTooltip(label) {
+                                        PlayerIconButton(
+                                            onClick = { onSeekByMillis(sec * 1_000L) },
+                                            icon = Icons.Filled.FastForward,
+                                            contentDescription = label,
+                                        )
+                                    }
+                                }
+                                PlayerControlId.TimeLabel -> {
+                                    BoundTimeLabel(
+                                        progress = progress,
+                                        isDuration = false,
+                                        modifier = Modifier.padding(start = if (isTouchLike) Spacing.Tight else Spacing.Hair),
+                                    )
+                                    seekBar(Modifier.weight(1f))
+                                    renderedSeekBar = true
+                                    BoundTimeLabel(
+                                        progress = progress,
+                                        isDuration = true,
+                                        secondary = true,
+                                        modifier = Modifier.padding(end = Spacing.Hair),
+                                    )
+                                }
+                                PlayerControlId.DanmakuInput -> if (danmakuField != null) {
+                                    val label = stringResource(Res.string.danmaku_send)
+                                    PlayerTooltip(label, shortcut = "Enter") {
+                                        PlayerIconButton(
+                                            onClick = { composing = true },
+                                            icon = Icons.Filled.Edit,
+                                            contentDescription = label,
+                                        )
+                                    }
+                                }
+                                PlayerControlId.Volume -> PlayerVolumeControl()
+                                PlayerControlId.DanmakuToggle -> if (isFullscreen) {
+                                    DanmakuButton(danmakuEnabled, onDanmakuEnabledChange, isFullscreen)
+                                }
+                                PlayerControlId.Speed -> {
+                                    val desc = stringResource(Res.string.player_speed)
+                                    PlayerTooltip(desc) {
+                                        ControlButton(
+                                            expanded = false,
+                                            onClick = { onOpenSettings(PlayerSettingsSection.Speed) },
+                                            label = formatSpeed(speed),
+                                            icon = { tint -> Icon(Icons.Filled.Speed, desc, tint = tint, modifier = Modifier.size(ChipIconSize)) },
+                                        )
+                                    }
+                                }
+                                PlayerControlId.SleepTimer -> if (hasSleepTimer && sleepTimer.mode != SleepTimerMode.Off) {
+                                    BoundActiveSleepTimerChip(
+                                        sleepTimer = sleepTimer,
+                                        progress = progress,
+                                        speed = speed,
+                                        showLabel = barWidth >= Breakpoints.StackedControlBar,
+                                        onClick = { onOpenSettings(PlayerSettingsSection.SleepTimer) },
+                                    )
+                                }
+                                PlayerControlId.Settings -> PlayerSettingsButton { onOpenSettings(null) }
+                                PlayerControlId.Fullscreen -> FullscreenButton(isFullscreen, onFullscreenToggle)
+                                else -> Unit
+                            }
                         }
                     }
+                    if (!renderedSeekBar) {
+                        seekBar(Modifier.weight(1f))
+                    }
                 }
-                PlayerVolumeControl()
-                // 全屏没有标签行,弹幕开关只能在这里;内嵌时它在标签行那枚胶囊里。
-                if (isFullscreen) DanmakuButton(danmakuEnabled, onDanmakuEnabledChange, isFullscreen)
-                if (hasSleepTimer && sleepTimer.mode != SleepTimerMode.Off && !composing) {
-                    BoundActiveSleepTimerChip(
-                        sleepTimer = sleepTimer,
-                        progress = progress,
-                        speed = speed,
-                        showLabel = barWidth >= Breakpoints.StackedControlBar,
-                        onClick = { onOpenSettings(PlayerSettingsSection.SleepTimer) },
-                    )
-                }
-                PlayerSettingsButton { onOpenSettings(null) }
-                FullscreenButton(isFullscreen, onFullscreenToggle)
             }
         } else {
-            // **两行负间距叠着放。** 两者都是 48dp 的触摸区,画出来的东西却只有十几 dp 高,两块
-            // 空 padding 摞在一起读起来像两组不相干的控件。叠 [ControlRowOverlap] 之后看着是一组,
-            // 两边的触摸区都还在 36dp 以上。按钮行在后,叠掉的那一截归按钮,避免点设置/全屏偏上时误触进度条。
+            // **两行负间距叠着放。** 进度条独占首行，第二行严格按 KDE Plasma 面板模型有序排布 [activeLayout.bottomBar]。
             Column(
                 modifier = Modifier.fillMaxWidth(),
                 verticalArrangement = Arrangement.spacedBy(-ControlRowOverlap),
             ) {
                 seekBar(Modifier.fillMaxWidth())
-                // 弹幕输入框在读数与 chip 之间,同网页端。这一行放不下它和整排 chip 时,它收成一枚
-                // 「发弹幕」键,点开之后 chip 让位、输入框铺开,同窄屏胶囊写弹幕时视图切换退场。
                 val showField = danmakuField != null && (roomy || composing)
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    if (!composing || roomy) {
-                        if (!isTouchLike) {
-                            ControlBarPlayButton(isPlaying = playWhenReady, onClick = onTogglePlayPause)
-                        }
-                        if (canPrevious || canNext) {
-                            val prevLabel = stringResource(Res.string.player_previous)
-                            PlayerTooltip(prevLabel) {
-                                PlayerIconButton(
-                                    onClick = onPrevious,
-                                    enabled = canPrevious,
-                                    icon = Icons.Filled.SkipPrevious,
-                                    contentDescription = prevLabel,
-                                )
+                val hasBottomSpacer = activeLayout.bottomBar.any { it == PlayerPanelItem.Spacer }
+                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                    for (item in activeLayout.bottomBar) {
+                        when (item) {
+                            PlayerPanelItem.Spacer -> {
+                                if (!composing || roomy) {
+                                    Spacer(Modifier.weight(1f))
+                                }
                             }
-                            val nextLabel = stringResource(Res.string.player_next)
-                            PlayerTooltip(nextLabel) {
-                                PlayerIconButton(
-                                    onClick = onNext,
-                                    enabled = canNext,
-                                    icon = Icons.Filled.SkipNext,
-                                    contentDescription = nextLabel,
-                                )
+                            is PlayerPanelItem.Control -> when (item.id) {
+                                PlayerControlId.PlayPause -> if (!composing || roomy) {
+                                    ControlBarPlayButton(isPlaying = playWhenReady, onClick = onTogglePlayPause)
+                                }
+                                PlayerControlId.Previous -> if ((!composing || roomy) && (canPrevious || canNext)) {
+                                    val prevLabel = stringResource(Res.string.player_previous)
+                                    PlayerTooltip(prevLabel) {
+                                        PlayerIconButton(
+                                            onClick = onPrevious,
+                                            enabled = canPrevious,
+                                            icon = Icons.Filled.SkipPrevious,
+                                            contentDescription = prevLabel,
+                                        )
+                                    }
+                                }
+                                PlayerControlId.Next -> if ((!composing || roomy) && (canPrevious || canNext)) {
+                                    val nextLabel = stringResource(Res.string.player_next)
+                                    PlayerTooltip(nextLabel) {
+                                        PlayerIconButton(
+                                            onClick = onNext,
+                                            enabled = canNext,
+                                            icon = Icons.Filled.SkipNext,
+                                            contentDescription = nextLabel,
+                                        )
+                                    }
+                                }
+                                PlayerControlId.SeekBackward -> if (!composing || roomy) {
+                                    val sec = layoutPrefs.seekButtonSeconds
+                                    val label = stringResource(Res.string.player_seek_backward_seconds, sec)
+                                    PlayerTooltip(label) {
+                                        PlayerIconButton(
+                                            onClick = { onSeekByMillis(-sec * 1_000L) },
+                                            icon = Icons.Filled.FastRewind,
+                                            contentDescription = label,
+                                        )
+                                    }
+                                }
+                                PlayerControlId.SeekForward -> if (!composing || roomy) {
+                                    val sec = layoutPrefs.seekButtonSeconds
+                                    val label = stringResource(Res.string.player_seek_forward_seconds, sec)
+                                    PlayerTooltip(label) {
+                                        PlayerIconButton(
+                                            onClick = { onSeekByMillis(sec * 1_000L) },
+                                            icon = Icons.Filled.FastForward,
+                                            contentDescription = label,
+                                        )
+                                    }
+                                }
+                                PlayerControlId.TimeLabel -> if (!composing || roomy) {
+                                    Row(
+                                        verticalAlignment = Alignment.Bottom,
+                                        modifier = Modifier.padding(
+                                            start = if (isTouchLike) Spacing.Tight else Spacing.Hair,
+                                            end = Spacing.Tight,
+                                        ),
+                                    ) {
+                                        BoundTimeLabel(progress = progress, isDuration = false, large = true)
+                                        BoundTimeLabel(progress = progress, isDuration = true, large = true, secondary = true, prefix = " / ")
+                                    }
+                                }
+                                PlayerControlId.Volume -> if (!composing || roomy) {
+                                    PlayerVolumeControl()
+                                }
+                                PlayerControlId.DanmakuInput -> if (danmakuField != null) {
+                                    if (showField) {
+                                        ControlBarDanmakuField(
+                                            draft = danmakuField.draft,
+                                            onDraftChange = danmakuField.onDraftChange,
+                                            maxLength = danmakuField.maxLength,
+                                            sending = danmakuField.sending,
+                                            error = danmakuField.error,
+                                            onSend = danmakuField.onSend,
+                                            onFocusChange = { focused ->
+                                                composing = focused
+                                                onDanmakuFieldFocusChange(focused)
+                                                danmakuField.onComposingChange(focused)
+                                            },
+                                            autoFocus = !roomy,
+                                            focusRequestNonce = danmakuFocusNonce,
+                                            modifier = Modifier
+                                                .then(
+                                                    if (composing || !hasBottomSpacer) {
+                                                        Modifier.weight(1f)
+                                                    } else {
+                                                        Modifier.widthIn(min = 160.dp, max = 320.dp)
+                                                    },
+                                                )
+                                                .padding(horizontal = Spacing.Cozy),
+                                        )
+                                    } else {
+                                        val label = stringResource(Res.string.danmaku_send)
+                                        PlayerTooltip(label, shortcut = "Enter") {
+                                            PlayerIconButton(
+                                                onClick = { composing = true },
+                                                icon = Icons.Filled.Edit,
+                                                contentDescription = label,
+                                            )
+                                        }
+                                    }
+                                }
+                                PlayerControlId.Speed -> if (wide && !composing) {
+                                    val speedDescription = stringResource(Res.string.player_speed)
+                                    PlayerTooltip(speedDescription) {
+                                        ControlButton(
+                                            expanded = false,
+                                            onClick = { onOpenSettings(PlayerSettingsSection.Speed) },
+                                            label = formatSpeed(speed),
+                                            icon = { tint -> Icon(Icons.Filled.Speed, speedDescription, tint = tint, modifier = Modifier.size(ChipIconSize)) },
+                                        )
+                                    }
+                                }
+                                PlayerControlId.Quality -> if (wide && !composing && qualityLabel != null) {
+                                    val description = stringResource(Res.string.player_quality)
+                                    PlayerTooltip(description) {
+                                        ControlButton(
+                                            expanded = false,
+                                            onClick = { onOpenSettings(PlayerSettingsSection.Quality) },
+                                            label = qualityLabel,
+                                            icon = { tint -> Icon(Icons.Filled.HighQuality, description, tint = tint, modifier = Modifier.size(ChipIconSize)) },
+                                        )
+                                    }
+                                }
+                                PlayerControlId.Audio -> if (wide && !composing && audioLabel != null) {
+                                    val description = stringResource(Res.string.player_audio_quality)
+                                    PlayerTooltip(description) {
+                                        ControlButton(
+                                            expanded = false,
+                                            onClick = { onOpenSettings(PlayerSettingsSection.Audio) },
+                                            label = audioLabel,
+                                            icon = { tint -> Icon(Icons.Filled.GraphicEq, description, tint = tint, modifier = Modifier.size(ChipIconSize)) },
+                                        )
+                                    }
+                                }
+                                PlayerControlId.Subtitle -> if (wide && !composing && subtitleTracks.isNotEmpty()) {
+                                    val description = stringResource(Res.string.player_subtitle)
+                                    PlayerTooltip(description) {
+                                        ControlButton(
+                                            expanded = subtitleLabel != null,
+                                            onClick = { onOpenSettings(PlayerSettingsSection.Subtitle) },
+                                            label = subtitleLabel,
+                                            icon = { tint -> Icon(Icons.Filled.Subtitles, description, tint = tint, modifier = Modifier.size(ChipIconSize)) },
+                                        )
+                                    }
+                                }
+                                PlayerControlId.SleepTimer -> if (hasSleepTimer && !composing) {
+                                    val active = sleepTimer.mode != SleepTimerMode.Off
+                                    if (active) {
+                                        BoundActiveSleepTimerChip(
+                                            sleepTimer = sleepTimer,
+                                            progress = progress,
+                                            speed = speed,
+                                            showLabel = wide && barWidth >= Breakpoints.Medium,
+                                            onClick = { onOpenSettings(PlayerSettingsSection.SleepTimer) },
+                                        )
+                                    } else if (wide) {
+                                        val description = stringResource(Res.string.sleep_timer_off)
+                                        PlayerTooltip(description) {
+                                            ControlButton(
+                                                expanded = false,
+                                                onClick = { onOpenSettings(PlayerSettingsSection.SleepTimer) },
+                                                label = null,
+                                                icon = { tint -> Icon(Icons.Filled.Bedtime, description, tint = tint, modifier = Modifier.size(ChipIconSize)) },
+                                            )
+                                        }
+                                    }
+                                }
+                                PlayerControlId.DanmakuToggle -> DanmakuButton(danmakuEnabled, onDanmakuEnabledChange, isFullscreen)
+                                PlayerControlId.Settings -> PlayerSettingsButton { onOpenSettings(null) }
+                                PlayerControlId.Lock -> if (isFullscreen) {
+                                    val lockDesc = stringResource(if (locked) Res.string.player_unlock else Res.string.player_lock)
+                                    PlayerTooltip(lockDesc) {
+                                        PlayerIconButton(
+                                            onClick = onToggleLock,
+                                            icon = if (locked) Icons.Filled.Lock else Icons.Filled.LockOpen,
+                                            contentDescription = lockDesc,
+                                            selected = locked,
+                                        )
+                                    }
+                                }
+                                PlayerControlId.Fullscreen -> FullscreenButton(isFullscreen, onFullscreenToggle)
+                                else -> Unit
                             }
                         }
-                        Row(
-                            verticalAlignment = Alignment.Bottom,
-                            modifier = Modifier.padding(
-                                start = if (isTouchLike && !canPrevious && !canNext) Spacing.Tight else Spacing.Hair,
-                                end = Spacing.Tight,
-                            ),
-                        ) {
-                            BoundTimeLabel(progress = progress, isDuration = false, large = true)
-                            BoundTimeLabel(progress = progress, isDuration = true, large = true, secondary = true, prefix = " / ")
-                        }
-                        PlayerVolumeControl()
                     }
-                    // 中间段(弹幕输入框 + 档位 chip)装进 weight(1f) 容器,保证右侧的弹幕开关、
-                    // 设置按钮、全屏按钮由外层 Row 优先测量,任何字号/屏幕宽度下都不会被挤出屏幕。
-                    Box(
-                        modifier = Modifier
-                            .weight(1f)
-                            .onSizeChanged { middleWidth = with(density) { it.width.toDp() } },
-                    ) {
-                        val showChips = wide && !composing && middleWidth >= if (showField) 420.dp else 240.dp
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier.fillMaxWidth(),
-                        ) {
-                            if (showField) {
-                                ControlBarDanmakuField(
-                                    draft = danmakuField.draft,
-                                    onDraftChange = danmakuField.onDraftChange,
-                                    maxLength = danmakuField.maxLength,
-                                    sending = danmakuField.sending,
-                                    error = danmakuField.error,
-                                    onSend = danmakuField.onSend,
-                                    onFocusChange = { focused ->
-                                        composing = focused
-                                        onDanmakuFieldFocusChange(focused)
-                                        danmakuField.onComposingChange(focused)
-                                    },
-                                    autoFocus = !roomy,
-                                    focusRequestNonce = danmakuFocusNonce,
-                                    modifier = Modifier.weight(1f).padding(horizontal = Spacing.Cozy),
-                                )
-                            } else {
-                                Spacer(Modifier.weight(1f))
-                            }
-                            if (showChips) {
-                                SettingChips(
-                                    speed = speed,
-                                    // 只有一档时没什么可换,chip 不画(面板里那一段同样不画)。
-                                    qualityLabel = qualities.takeIf { it.size > 1 }
-                                        ?.firstOrNull { it.quality == currentQuality }?.label,
-                                    audioLabel = currentAudio.takeIf { audioOptions.size > 1 }?.let { audioQualityLabel(it) },
-                                    subtitleLabel = subtitleTracks.firstOrNull { it.lan == currentSubtitleLan }?.displayName,
-                                    hasSubtitles = subtitleTracks.isNotEmpty(),
-                                    sleepTimer = sleepTimer,
-                                    progress = progress,
-                                    hasSleepTimer = hasSleepTimer,
-                                    showSleepLabel = barWidth >= Breakpoints.Medium,
-                                    onOpenSection = onOpenSettings,
-                                )
-                            }
-                        }
+                    if (!hasBottomSpacer && !composing) {
+                        Spacer(Modifier.weight(1f))
                     }
-                    if (danmakuField != null && !showField) {
-                        val label = stringResource(Res.string.danmaku_send)
-                        PlayerTooltip(label, shortcut = "Enter") {
-                            PlayerIconButton(onClick = { composing = true }, icon = Icons.Filled.Edit, contentDescription = label)
-                        }
-                    }
-                    DanmakuButton(danmakuEnabled, onDanmakuEnabledChange, isFullscreen)
-                    val sleepActive = !wide && hasSleepTimer && sleepTimer.mode != SleepTimerMode.Off && !composing
-                    val canFitSleepChip = barWidth >= Breakpoints.DynamicColumnMinWidth || danmakuField == null
-                    if (sleepActive && canFitSleepChip) {
-                        BoundActiveSleepTimerChip(
-                            sleepTimer = sleepTimer,
-                            progress = progress,
-                            speed = speed,
-                            showLabel = false,
-                            onClick = { onOpenSettings(PlayerSettingsSection.SleepTimer) },
-                        )
-                    }
-                    PlayerSettingsButton(selected = sleepActive && !canFitSleepChip) { onOpenSettings(null) }
-                    FullscreenButton(isFullscreen, onFullscreenToggle)
                 }
             }
         }
@@ -804,107 +1093,6 @@ private fun BoundTimeLabel(
         maxLines = 1,
         modifier = modifier,
     )
-}
-
-/**
- * 宽排法里那几枚写着当前档位的 chip。倍速交给贴边选择器,其余打开设置面板里的对应段。
- * 没有字幕轨时那一枚不画,字幕关着时只画图标(写「关闭」读起来像按下去会关掉)。
- * 音质只有一条音轨时不画,同清晰度。
- */
-@Composable
-private fun SettingChips(
-    speed: Float,
-    qualityLabel: String?,
-    audioLabel: String?,
-    subtitleLabel: String?,
-    hasSubtitles: Boolean,
-    sleepTimer: SleepTimerState,
-    progress: PlayerProgressState,
-    hasSleepTimer: Boolean,
-    showSleepLabel: Boolean,
-    onOpenSection: (PlayerSettingsSection) -> Unit,
-) {
-    val speedDescription = stringResource(Res.string.player_speed)
-    PlayerTooltip(speedDescription) {
-        ControlButton(
-            expanded = false,
-            onClick = { onOpenSection(PlayerSettingsSection.Speed) },
-            label = formatSpeed(speed),
-            icon = { tint -> Icon(Icons.Filled.Speed, speedDescription, tint = tint, modifier = Modifier.size(ChipIconSize)) },
-        )
-    }
-    if (qualityLabel != null) {
-        val description = stringResource(Res.string.player_quality)
-        PlayerTooltip(description) {
-            ControlButton(
-                expanded = false,
-                onClick = { onOpenSection(PlayerSettingsSection.Quality) },
-                label = qualityLabel,
-                icon = { tint -> Icon(Icons.Filled.HighQuality, description, tint = tint, modifier = Modifier.size(ChipIconSize)) },
-            )
-        }
-    }
-    if (audioLabel != null) {
-        val description = stringResource(Res.string.player_audio_quality)
-        PlayerTooltip(description) {
-            ControlButton(
-                expanded = false,
-                onClick = { onOpenSection(PlayerSettingsSection.Audio) },
-                label = audioLabel,
-                icon = { tint -> Icon(Icons.Filled.GraphicEq, description, tint = tint, modifier = Modifier.size(ChipIconSize)) },
-            )
-        }
-    }
-    if (hasSubtitles) {
-        val description = stringResource(Res.string.player_subtitle)
-        PlayerTooltip(description) {
-            ControlButton(
-                expanded = false,
-                onClick = { onOpenSection(PlayerSettingsSection.Subtitle) },
-                label = subtitleLabel,
-                icon = { tint -> Icon(Icons.Filled.Subtitles, description, tint = tint, modifier = Modifier.size(ChipIconSize)) },
-            )
-        }
-    }
-    if (hasSleepTimer) {
-        BoundSettingSleepTimerChip(
-            sleepTimer = sleepTimer,
-            progress = progress,
-            speed = speed,
-            showSleepLabel = showSleepLabel,
-            onClick = { onOpenSection(PlayerSettingsSection.SleepTimer) },
-        )
-    }
-}
-
-@Composable
-private fun BoundSettingSleepTimerChip(
-    sleepTimer: SleepTimerState,
-    progress: PlayerProgressState,
-    speed: Float,
-    showSleepLabel: Boolean,
-    onClick: () -> Unit,
-) {
-    val description = stringResource(Res.string.sleep_timer_off)
-    val itemRemainingMillis = if (sleepTimer.mode == SleepTimerMode.EndOfItem) {
-        computeItemRemainingMillis(progress.displayPositionMillis, progress.durationMillis, speed)
-    } else {
-        null
-    }
-    val activeLabel = sleepTimerLabel(sleepTimer, itemRemainingMillis)
-    val label = activeLabel?.takeIf { showSleepLabel }
-    PlayerTooltip(description) {
-        ControlButton(
-            expanded = activeLabel != null,
-            onClick = onClick,
-            label = label,
-            icon = { tint ->
-                if (label == null) {
-                    Icon(Icons.Filled.Bedtime, description, tint = tint, modifier = Modifier.size(ChipIconSize))
-                }
-            },
-        )
-    }
 }
 
 /** 窄控制条在定时激活时露出的紧凑提示 chip,没开定时时不占窄条位置;点它直达定时面板。 */
