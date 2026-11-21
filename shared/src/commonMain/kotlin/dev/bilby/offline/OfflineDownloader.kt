@@ -18,7 +18,9 @@ import io.ktor.utils.io.ByteReadChannel
 import io.ktor.utils.io.readAvailable
 import java.io.File
 import java.io.RandomAccessFile
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancelAndJoin
@@ -32,6 +34,8 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
 /**
@@ -47,6 +51,10 @@ data class OfflineRequest(
     val durationSeconds: Long,
     /** 用户选的清晰度档。真正下到哪一档由 [dev.bilby.player.selectStreams] 决定,可能降级。 */
     val qualityId: Int,
+    /** 可选合集元信息,入队时若已知可直接带入,下载时也会从视频详情补全。 */
+    val seasonId: Long = 0,
+    val seasonTitle: String = "",
+    val seasonMid: Long = 0,
 )
 
 /**
@@ -114,11 +122,44 @@ class OfflineDownloader(
     /** 盘上的全部条目 + 正在下的那条,按创建时间倒序。界面只读这一份。 */
     val items: StateFlow<List<OfflineItem>> = _items.asStateFlow()
 
+    private data class PendingEntry(
+        val ticket: Long,
+        val key: String,
+        val request: OfflineRequest,
+    )
+
+    private class RunningEntry(
+        val ticket: Long,
+        val requestKey: String,
+        val job: Job,
+        @Volatile var resolvedKey: String? = null,
+        @Volatile var resolvedCid: Long = 0L,
+    )
+
+    private data class DetachedWork(
+        val jobs: List<Job>,
+        val affectedKeys: Set<String>,
+        val resolvedCids: Set<Long>,
+    )
+
+    private val queueLock = Any()
+
     /**
-     * 待办。用 `Channel` 而不是自己维护一个 list + 锁:排队本来就是"一个消费者按顺序取",
-     * 而无界通道的 `send` 不挂起,界面那一侧勾十条也不会被阻塞。
+     * 串行化队列控制操作(入队/暂停/继续/重试/删除/清空),避免连续点击"暂停→继续"或"入队→清空"
+     * 时两条控制协程交错写盘或互相覆盖状态。下载子协程 [runOne] 绝不获取此锁,故 [cancelAndJoin]
+     * 不会死锁。
      */
-    private val pending = Channel<OfflineRequest>(Channel.UNLIMITED)
+    private val controlMutex = Mutex()
+
+    private val nextTicket = java.util.concurrent.atomic.AtomicLong(0)
+
+    /**
+     * 待办队列。改用显式 [ArrayDeque] + 唤醒信号 [pendingSignal],使暂停、取消、清空队列能
+     * 立刻把未开始的请求摘出队列并清掉去重票据,避免"暂停后马上继续"撞上通道里残留的旧请求。
+     */
+    private val pendingQueue = ArrayDeque<PendingEntry>()
+
+    private val pendingSignal = Channel<Unit>(Channel.UNLIMITED)
 
     /**
      * 还没干完的件数。**忙不忙用计数判,不用"消费者协程还活着没有"判** —— 后者在消费者正要
@@ -134,55 +175,37 @@ class OfflineDownloader(
     private val permits = Channel<Unit>(MAX_CONCURRENCY)
 
     /**
-     * 正在下的那些,以及各自的协程。**只为了让 [delete] 能把它掐掉** —— 不掐的话,删除会把
-     * 目录删掉,而还在写的那条流立刻把目录重建出来,盘上留下一个列表里查无此人的文件。
-     *
-     * 键是**请求**的 (bvid, cid),其中 cid 可能还是 0([runOne] 里才补出来),所以 [delete]
-     * 不能直接按键查,要按 bvid 匹配并把 cid=0 那条也算上。
+     * 正在下的那些,以及各自的协程与解析后的真 cid 键。**为了 [delete]/[pause] 能精准掐掉**
+     * —— 不掐的话,删除会把目录删掉,而还在写的那条流立刻把目录重建出来。
      */
-    private val running = java.util.concurrent.ConcurrentHashMap<String, Job>()
+    private val running = java.util.concurrent.ConcurrentHashMap<String, RunningEntry>()
 
     /**
-     * 已经排进 [pending]、但用户又把它删掉了的那些。
+     * 已经排进 [pendingQueue] 或正在下载的键 -> 唯一票据号。**入队去重与无竞态取消/暂停全看它。**
      *
-     * **删一条排队中的不能只从列表里抹掉**:请求还在通道里,轮到它时会照样下完,然后作为一条
-     * 新的已缓存条目冒出来 —— 表现是"删了之后过一会儿自己回来了"。并发度大于 1 之后这事更常
-     * 撞上:排队的条数一多,用户本来就更会去取消其中几条。
+     * 用票据号而不是布尔集合:暂停一条再立刻继续时,新入队拿到新票据号;旧协程在 finally 里按
+     * `(key, oldTicket)` 条件移除,绝不会把新票据误删。
      */
-    private val cancelled = java.util.Collections.newSetFromMap(
-        java.util.concurrent.ConcurrentHashMap<String, Boolean>(),
-    )
-
-    /**
-     * 已经排进 [pending]、还没走完的那些(排队中和正在下的都算)。**入队去重看它,不看列表
-     * 里的状态。**
-     *
-     * 状态判不住是因为键对不上:请求的 cid 可能是 0,而 [runOne] 会把真 cid 补进列表项,
-     * 于是第二次以 cid=0 排进来的同一条在列表里找不到自己,两个协程同时写同一个文件。
-     *
-     * [delete] **不撤这个标记**。删掉一条排队中的再立刻加回来,通道里那条旧的还在,撤了标记
-     * 就变成两条一起下 —— 而那条旧的会照常把它下完(墓碑已被入队撤掉),结果正是用户要的。
-     */
-    private val inFlight = java.util.Collections.newSetFromMap(
-        java.util.concurrent.ConcurrentHashMap<String, Boolean>(),
-    )
+    private val activeTickets = java.util.concurrent.ConcurrentHashMap<String, Long>()
 
     init {
         scope.launch {
-            // 先扫无主文件再读列表。**顺序不能反** —— 扫的判据正是"列表里认不认得它",
-            // 而这一刻还没有任何一条在下,不存在扫到一半正好在写的情形(见 sweepOrphans)。
-            store.sweepOrphans()
-            val onDisk = store.list()
-            val interrupted = onDisk.filter {
-                it.status == OfflineStatus.Running || it.status == OfflineStatus.Queued
+            controlMutex.withLock {
+                // 先扫无主文件再读列表。**顺序不能反** —— 扫的判据正是"列表里认不认得它",
+                // 而这一刻还没有任何一条在下,不存在扫到一半正好在写的情形(见 sweepOrphans)。
+                store.sweepOrphans()
+                val onDisk = store.list()
+                val interrupted = onDisk.filter {
+                    it.status == OfflineStatus.Running || it.status == OfflineStatus.Queued
+                }
+                _items.value = onDisk.map { it.recoveredFromInterruption() }
+                // 上一次进程没走完就被杀了的那些要落盘改状态,否则下次启动读回来的还是 Running。
+                // 已暂停(Paused)的条目保持 Paused,不自动重排。
+                _items.value.filter { it.error == OFFLINE_INTERRUPTED }.forEach { store.write(it) }
+                // 然后接着下,不等人点(PiliPlus 同样把没下完的读回等待队列)。进程被杀不是用户的
+                // 决定,排进去的东西该下完。**只接被打断的,不碰已暂停与真失败的**。
+                enqueueInternal(interrupted.map { it.toRequest() })
             }
-            _items.value = onDisk.map { it.recoveredFromInterruption() }
-            // 上一次进程没走完就被杀了的那些要落盘改状态,否则下次启动读回来的还是 Running。
-            _items.value.filter { it.error == OFFLINE_INTERRUPTED }.forEach { store.write(it) }
-            // 然后接着下,不等人点(PiliPlus 同样把没下完的读回等待队列)。进程被杀不是用户的
-            // 决定,排进去的东西该下完。**只接被打断的,不碰真失败的**:那些的原因(取流被拒、
-            // 盘满)不会因为重启而消失,自动重来只是再失败一次。
-            enqueue(interrupted.map { it.toRequest() })
             backfillLegacyMetadata()
         }
 
@@ -205,22 +228,45 @@ class OfflineDownloader(
         // 消费者常驻,条数按上限起。真正的并发度由令牌卡住,多出来的那几条只是空等。
         repeat(MAX_CONCURRENCY) {
             scope.launch {
-                for (request in pending) {
+                while (true) {
+                    val entry = takeNextPending()
                     permits.receive()
-                    val key = offlineId(request.bvid, request.cid)
+                    var runningEntry: RunningEntry? = null
                     try {
-                        if (!cancelled.remove(key)) {
-                            // **每一条起一个子协程再 join,不直接调 runOne。** 这样 [delete] 能只
-                            // 取消这一条,而不会把整个消费者一起带走 —— 子协程被取消不会向上传播
-                            // 成失败,循环照常取下一件。
-                            val job = scope.launch { runOne(request) }
-                            running[key] = job
-                            job.join()
-                            running.remove(key)
+                        val started = synchronized(queueLock) {
+                            if (activeTickets[entry.key] != entry.ticket) {
+                                null
+                            } else {
+                                val holder = arrayOfNulls<RunningEntry>(1)
+                                // **每一条起一个子协程再 join,不直接调 runOne。** LAZY 启动确保
+                                // 放进 [running] 之后才开始跑,暂停/删除在任意时点都能命中它。
+                                val job = scope.launch(start = CoroutineStart.LAZY) {
+                                    runOne(entry.request, entry.ticket) { resolvedKey, resolvedCid ->
+                                        holder[0]?.let {
+                                            it.resolvedKey = resolvedKey
+                                            it.resolvedCid = resolvedCid
+                                        }
+                                    }
+                                }
+                                val created = RunningEntry(entry.ticket, entry.key, job)
+                                holder[0] = created
+                                running[entry.key] = created
+                                created
+                            }
+                        }
+                        if (started != null) {
+                            runningEntry = started
+                            started.job.start()
+                            started.job.join()
                         }
                     } finally {
-                        // 这一条走完(成功、失败、被取消都算)才允许它再次入队。
-                        inFlight.remove(key)
+                        synchronized(queueLock) {
+                            runningEntry?.let {
+                                running.remove(it.requestKey, it)
+                                it.resolvedKey?.let { rk -> activeTickets.remove(rk, it.ticket) }
+                            }
+                            activeTickets.remove(entry.key, entry.ticket)
+                        }
                         permits.send(Unit)
                         if (outstanding.decrementAndGet() == 0) onBusyChanged(false)
                     }
@@ -229,33 +275,166 @@ class OfflineDownloader(
         }
     }
 
+    private suspend fun takeNextPending(): PendingEntry {
+        while (true) {
+            val next = synchronized(queueLock) { pendingQueue.removeFirstOrNull() }
+            if (next != null) return next
+            pendingSignal.receive()
+        }
+    }
+
     /**
      * 加入队列。**已经下完的直接跳过**,不重下 —— 用户在选择面板里勾中一条已缓存的
      * (面板会把它标成已缓存并禁选,但队列内容可能在面板打开期间变过),重下一遍的代价是
      * 几百 MB 和一次白跑的风控额度。
      *
-     * 失败过的那条要能重来,所以只跳过 [OfflineStatus.Completed]。
+     * 暂停或失败过的那条要能重来,所以只跳过 [OfflineStatus.Completed]。
      */
     fun enqueue(requests: List<OfflineRequest>) {
         if (requests.isEmpty()) return
-        scope.launch {
-            requests.forEach { request ->
-                val existing = _items.value.firstOrNull { it.bvid == request.bvid && it.cid == request.cid }
-                if (existing?.status == OfflineStatus.Completed) return@forEach
-                // 已经在队列里或正在下的那条不重复排。加不进去就说明有人先到,直接跳过。
-                if (!inFlight.add(offlineId(request.bvid, request.cid))) return@forEach
-                // 上一次被取消的那条又被排进来了(重试,或者用户改了主意),撤掉那道墓碑。
-                cancelled.remove(offlineId(request.bvid, request.cid))
-                // 盘上已有这一条(重试、启动时接着下)就在它身上改状态,不重建:重建会把创建时间
-                // 换成现在,每次启动自动续传都把这几条挪到列表最前面。
-                upsert(
-                    existing?.copy(status = OfflineStatus.Queued, error = null, speedBytesPerSecond = 0)
-                        ?: request.toQueuedItem(),
-                )
+        scope.launch { controlMutex.withLock { enqueueInternal(requests) } }
+    }
+
+    private suspend fun enqueueInternal(requests: List<OfflineRequest>) {
+        requests.forEach { request ->
+            val existing = _items.value.firstOrNull { it.bvid == request.bvid && it.cid == request.cid }
+            if (existing?.status == OfflineStatus.Completed) return@forEach
+            val key = offlineId(request.bvid, request.cid)
+            // 已经在队列里或正在下的那条不重复排。先占位再落盘,落盘后再入待办队列。
+            val ticket = synchronized(queueLock) {
+                if (activeTickets.containsKey(key)) return@forEach
+                val next = nextTicket.incrementAndGet()
+                activeTickets[key] = next
+                next
+            }
+            // 盘上已有这一条(重试、继续、启动时接着下)就在它身上改状态,不重建:重建会把创建时间
+            // 换成现在,每次启动自动续传都把这几条挪到列表最前面。
+            upsert(
+                existing?.copy(
+                    status = OfflineStatus.Queued,
+                    error = null,
+                    speedBytesPerSecond = 0,
+                    seasonId = existing.seasonId.takeIf { it != 0L } ?: request.seasonId,
+                    seasonTitle = existing.seasonTitle.ifEmpty { request.seasonTitle },
+                    seasonMid = existing.seasonMid.takeIf { it != 0L } ?: request.seasonMid,
+                ) ?: request.toQueuedItem(),
+            )
+            val enqueued = synchronized(queueLock) {
+                if (activeTickets[key] != ticket) {
+                    false
+                } else {
+                    pendingQueue.addLast(PendingEntry(ticket, key, request))
+                    true
+                }
+            }
+            if (enqueued) {
                 if (outstanding.getAndIncrement() == 0) onBusyChanged(true)
-                pending.send(request)
+                pendingSignal.trySend(Unit)
             }
         }
+    }
+
+    /**
+     * 暂停一条下载。掐掉正在跑的协程但**保留磁盘上已写入的分片文件**,
+     * 下次 [resume] 时沿用现有 HTTP Range 续传。
+     */
+    fun pause(bvid: String, cid: Long) {
+        scope.launch { controlMutex.withLock { performPause(bvid, cid) } }
+    }
+
+    /** 可等待版本的 [pause],供测试与需要有序衔接的场景使用。 */
+    suspend fun pauseAndAwait(bvid: String, cid: Long) {
+        scope.launch { controlMutex.withLock { performPause(bvid, cid) } }.join()
+    }
+
+    private suspend fun performPause(bvid: String, cid: Long) {
+        val targetKey = offlineId(bvid, cid)
+        val detached = detachMatching(targetKey)
+        detached.jobs.forEach { it.cancelAndJoin() }
+        val targets = _items.value.filter {
+            it.id in detached.affectedKeys &&
+                (it.status == OfflineStatus.Queued || it.status == OfflineStatus.Running)
+        }
+        targets.forEach { current ->
+            upsert(current.copy(status = OfflineStatus.Paused, speedBytesPerSecond = 0, error = null))
+        }
+    }
+
+    /** 恢复一条已暂停或已失败的下载,回到排队态并重新入队。 */
+    fun resume(bvid: String, cid: Long) {
+        scope.launch {
+            controlMutex.withLock {
+                val target = _items.value.firstOrNull { it.bvid == bvid && it.cid == cid } ?: return@withLock
+                if (target.status != OfflineStatus.Paused && target.status != OfflineStatus.Failed) return@withLock
+                enqueueInternal(listOf(target.toRequest()))
+            }
+        }
+    }
+
+    /** 暂停全部排队中与下载中的条目,保留各自的分片文件。 */
+    fun pauseAll() {
+        scope.launch { controlMutex.withLock { performPauseAll() } }
+    }
+
+    /** 可等待版本的 [pauseAll]。 */
+    suspend fun pauseAllAndAwait() {
+        scope.launch { controlMutex.withLock { performPauseAll() } }.join()
+    }
+
+    private suspend fun performPauseAll() {
+        val jobs = detachAll()
+        jobs.forEach { it.cancelAndJoin() }
+        val activeItems = _items.value.filter {
+            it.status == OfflineStatus.Queued || it.status == OfflineStatus.Running
+        }
+        activeItems.forEach { item ->
+            upsert(item.copy(status = OfflineStatus.Paused, speedBytesPerSecond = 0, error = null))
+        }
+    }
+
+    /** 恢复全部已暂停的条目。 */
+    fun resumeAll() {
+        scope.launch {
+            controlMutex.withLock {
+                val paused = _items.value.filter { it.status == OfflineStatus.Paused }
+                if (paused.isNotEmpty()) enqueueInternal(paused.map { it.toRequest() })
+            }
+        }
+    }
+
+    /** 重试全部已失败的条目。 */
+    fun retryAllFailed() {
+        scope.launch {
+            controlMutex.withLock {
+                val failed = _items.value.filter { it.status == OfflineStatus.Failed }
+                if (failed.isNotEmpty()) enqueueInternal(failed.map { it.toRequest() })
+            }
+        }
+    }
+
+    /**
+     * 清空下载队列:仅取消并删除所有未完成条目([OfflineStatus.Queued]/[OfflineStatus.Running]/
+     * [OfflineStatus.Paused]/[OfflineStatus.Failed])及其磁盘临时文件,**绝不触碰已完成条目**。
+     */
+    fun clearQueue() {
+        scope.launch { controlMutex.withLock { performClearQueue() } }
+    }
+
+    /** 可等待版本的 [clearQueue],在磁盘文件实际删完后返回。 */
+    suspend fun clearQueueAndAwait() {
+        scope.launch { controlMutex.withLock { performClearQueue() } }.join()
+    }
+
+    private suspend fun performClearQueue() {
+        val jobs = detachAll()
+        jobs.forEach { it.cancelAndJoin() }
+        val incomplete = _items.value.filter { it.status != OfflineStatus.Completed }
+        incomplete.forEach { item ->
+            if (item.hasIdentity) {
+                store.delete(item.bvid, item.cid)
+            }
+        }
+        _items.update { list -> list.filter { it.status == OfflineStatus.Completed } }
     }
 
     /**
@@ -268,19 +447,90 @@ class OfflineDownloader(
      * 可能还在写。等它真的停下来再删。
      */
     fun delete(item: OfflineItem) {
-        scope.launch {
-            // 还在通道里排队的那条也要作废,否则轮到它时会照样下完再冒出来(见 [cancelled])。
-            cancelled.add(offlineId(item.bvid, item.cid))
-            // 正在下的那条,它的键是**请求**的 cid,可能还是 0(真 cid 是 [runOne] 里补的),
-            // 所以要连 `<bvid>_0` 一起找。墓碑不这么放:cid=0 的请求补出来是 P1,而用户删的
-            // 可能是 P3,把两者混为一谈会误杀一条还没开始的下载。
-            running.keys
-                .filter { it == offlineId(item.bvid, item.cid) || it == offlineId(item.bvid, 0) }
-                .mapNotNull { running.remove(it) }
-                .forEach { it.cancelAndJoin() }
+        scope.launch { controlMutex.withLock { performDelete(item) } }
+    }
+
+    /**
+     * 可等待版本的 [delete]。在应用作用域 [scope] 上执行删除(离开页面不会中断),
+     * 并在磁盘文件实际删除完成后返回,供调用方刷新已用空间。
+     */
+    suspend fun deleteAndAwait(item: OfflineItem) {
+        scope.launch { controlMutex.withLock { performDelete(item) } }.join()
+    }
+
+    /** 可等待版本的批量删除。全部删完后返回,供调用方一次性刷新已用空间。 */
+    suspend fun deleteAllAndAwait(items: List<OfflineItem>) {
+        if (items.isEmpty()) return
+        scope.launch { controlMutex.withLock { items.forEach { performDelete(it) } } }.join()
+    }
+
+    private suspend fun performDelete(item: OfflineItem) {
+        val targetKey = offlineId(item.bvid, item.cid)
+        val detached = detachMatching(targetKey)
+        detached.jobs.forEach { it.cancelAndJoin() }
+        if (item.hasIdentity) {
             store.delete(item.bvid, item.cid)
-            _items.update { list -> list.filterNot { it.bvid == item.bvid && it.cid == item.cid } }
         }
+        detached.resolvedCids.forEach { resolvedCid ->
+            if (resolvedCid != 0L && resolvedCid != item.cid) {
+                store.delete(item.bvid, resolvedCid)
+            }
+        }
+        val keysToRemove = detached.affectedKeys
+        _items.update { list -> list.filterNot { it.id in keysToRemove } }
+    }
+
+    private fun detachMatching(targetKey: String): DetachedWork {
+        var removedPendingCount = 0
+        val jobs = mutableListOf<Job>()
+        val affectedKeys = linkedSetOf(targetKey)
+        val resolvedCids = linkedSetOf<Long>()
+        synchronized(queueLock) {
+            val iter = pendingQueue.iterator()
+            while (iter.hasNext()) {
+                val entry = iter.next()
+                if (entry.key == targetKey) {
+                    iter.remove()
+                    activeTickets.remove(entry.key, entry.ticket)
+                    removedPendingCount++
+                }
+            }
+            activeTickets.remove(targetKey)
+            val matchedRunning = running.values.filter {
+                it.requestKey == targetKey || it.resolvedKey == targetKey
+            }
+            for (entry in matchedRunning) {
+                running.remove(entry.requestKey, entry)
+                activeTickets.remove(entry.requestKey, entry.ticket)
+                affectedKeys += entry.requestKey
+                entry.resolvedKey?.let { rk ->
+                    activeTickets.remove(rk, entry.ticket)
+                    affectedKeys += rk
+                }
+                if (entry.resolvedCid != 0L) resolvedCids += entry.resolvedCid
+                jobs += entry.job
+            }
+        }
+        repeat(removedPendingCount) {
+            if (outstanding.decrementAndGet() == 0) onBusyChanged(false)
+        }
+        return DetachedWork(jobs = jobs, affectedKeys = affectedKeys, resolvedCids = resolvedCids)
+    }
+
+    private fun detachAll(): List<Job> {
+        val removedPendingCount: Int
+        val jobs: List<Job>
+        synchronized(queueLock) {
+            removedPendingCount = pendingQueue.size
+            pendingQueue.clear()
+            activeTickets.clear()
+            jobs = running.values.map { it.job }
+            running.clear()
+        }
+        repeat(removedPendingCount) {
+            if (outstanding.decrementAndGet() == 0) onBusyChanged(false)
+        }
+        return jobs
     }
 
     /** 失败的那条重来。参数从索引里读回来,不用界面再攒一份。 */
@@ -296,9 +546,16 @@ class OfflineDownloader(
         coverUrl = coverUrl,
         durationSeconds = durationSeconds,
         qualityId = qualityId,
+        seasonId = seasonId,
+        seasonTitle = seasonTitle,
+        seasonMid = seasonMid,
     )
 
-    private suspend fun runOne(request: OfflineRequest) {
+    private suspend fun runOne(
+        request: OfflineRequest,
+        ticket: Long,
+        onResolvedKey: (resolvedKey: String, resolvedCid: Long) -> Unit,
+    ) {
         // 没网就先等网,别让下面每一步各自失败一遍:详情拉不到不算失败,于是断网时排进来的那条
         // 会带着一份残缺的元信息(没有 aid、没有分 P 序号)一路下完。
         if (!hasNetwork()) awaitNetwork()
@@ -321,17 +578,25 @@ class OfflineDownloader(
         // 与真 cid 是两把不同的键 —— 同一 P 以两种键各排一条时那道闸拦不住,并发度大于 1 的话
         // 两个协程同时写同一个文件,交错出一份两段重叠的坏流。占位格不用管:正主下一次发布时
         // [mergedWith] 会把它撤掉。
+        val requestKey = offlineId(request.bvid, request.cid)
         val resolvedKey = offlineId(resolved.bvid, resolved.cid)
         val claimsResolvedKey = resolved.cid != request.cid
-        if (claimsResolvedKey && !inFlight.add(resolvedKey)) {
-            BiliLog.d("缓存去重:这一 P 已在队列里 $resolvedKey")
-            return
+        if (claimsResolvedKey) {
+            val claimed = synchronized(queueLock) {
+                if (activeTickets[requestKey] != ticket || activeTickets.containsKey(resolvedKey)) {
+                    false
+                } else {
+                    activeTickets[resolvedKey] = ticket
+                    onResolvedKey(resolvedKey, resolved.cid)
+                    true
+                }
+            }
+            if (!claimed) {
+                BiliLog.d("缓存去重或已取消:这一 P 已在队列里 $resolvedKey")
+                return
+            }
         }
-        try {
-            runResolved(resolved, detail)
-        } finally {
-            if (claimsResolvedKey) inFlight.remove(resolvedKey)
-        }
+        runResolved(resolved, detail)
     }
 
     private suspend fun runResolved(resolved: OfflineRequest, detail: VideoDetail?) {
@@ -350,14 +615,26 @@ class OfflineDownloader(
         }
 
         // 第一次带着真 cid 发布,[mergedWith] 会顺手把 cid=0 那格占位撤掉。
-        // 预期总长从盘上那份带过来:这里的 item 是重建的,而续传("上次没下完,点一下继续")
+        // 预期总长从盘上那份带过来:这里的 item 是重建的,而续传("上次没下完,点一下继续"或暂停继续)
         // 恰恰要拿上一次记下的总长去验这次换出来的直链 —— 不带的话最需要校验的那条路上没有校验。
         val prior = store.read(resolved.bvid, cid)
         var item = resolved.toQueuedItem().withMetadataFrom(detail, cid).copy(
             status = OfflineStatus.Running,
+            downloadedBytes = prior?.downloadedBytes ?: 0,
+            totalBytes = prior?.totalBytes ?: 0,
             expectedVideoBytes = prior?.expectedVideoBytes ?: 0,
             expectedAudioBytes = prior?.expectedAudioBytes ?: 0,
             createdAtMillis = prior?.createdAtMillis?.takeIf { it > 0 } ?: System.currentTimeMillis(),
+            seasonId = detail?.seasonId?.takeIf { it != 0L }
+                ?: resolved.seasonId.takeIf { it != 0L }
+                ?: prior?.seasonId ?: 0L,
+            seasonTitle = detail?.seasonTitle?.ifEmpty { null }
+                ?: resolved.seasonTitle.ifEmpty { null }
+                ?: prior?.seasonTitle.orEmpty(),
+            seasonMid = detail?.seasonMid?.takeIf { it != 0L }
+                ?: detail?.takeIf { it.seasonId != 0L }?.up?.mid?.takeIf { it != 0L }
+                ?: resolved.seasonMid.takeIf { it != 0L }
+                ?: prior?.seasonMid ?: 0L,
         )
         upsert(item)
 
@@ -457,29 +734,8 @@ class OfflineDownloader(
      * [OfflineItem.partTitle] 只在多 P 时填:单 P 视频的 `pages[0].title` 常常是 "1" 或者
      * 和标题一字不差,写进去只会让列表每行下面多一句废话。
      */
-    private fun OfflineItem.withMetadataFrom(detail: VideoDetail?, cid: Long): OfflineItem {
-        if (detail == null) return this
-        val part = detail.pages.firstOrNull { it.cid == cid }
-        return copy(
-            title = detail.title.ifEmpty { title },
-            partTitle = if (detail.pages.size > 1) part?.title.orEmpty() else "",
-            partIndex = part?.index ?: partIndex,
-            upName = detail.up.name.ifEmpty { upName },
-            coverUrl = detail.coverUrl.ifEmpty { coverUrl },
-            durationSeconds = part?.durationSeconds?.takeIf { it > 0 }
-                ?: detail.durationSeconds.takeIf { it > 0 }
-                ?: durationSeconds,
-            aid = detail.aid,
-            upMid = detail.up.mid,
-            upFaceUrl = detail.up.faceUrl,
-            description = detail.description,
-            publishedAtEpochSeconds = detail.publishedAtEpochSeconds,
-            copyright = detail.copyright,
-            noReprint = detail.noReprint,
-            chargingOnly = detail.chargingOnly,
-            stat = detail.stat.toOfflineStat(),
-        )
-    }
+    private fun OfflineItem.withMetadataFrom(detail: VideoDetail?, cid: Long): OfflineItem =
+        applyVideoDetailMetadata(detail, cid)
 
     /**
      * 取流。**用户选的档在这条视频上不一定存在** —— 批量勾十条时,有的片源最高只有 720,
@@ -626,6 +882,7 @@ class OfflineDownloader(
             }
         }
     }.getOrElse { cause ->
+        if (cause is CancellationException) throw cause
         if (cause.isDiskFull()) {
             BiliLog.w("缓存写盘时空间不足 file=${target.name}", cause)
             return@getOrElse DownloadFailure.DiskFull
@@ -791,6 +1048,9 @@ class OfflineDownloader(
         qualityId = qualityId,
         status = OfflineStatus.Queued,
         createdAtMillis = System.currentTimeMillis(),
+        seasonId = seasonId,
+        seasonTitle = seasonTitle,
+        seasonMid = seasonMid,
     )
 
     private companion object {
@@ -837,3 +1097,37 @@ private fun VideoStat.toOfflineStat() = OfflineStat(
     share = share,
     like = like,
 )
+
+/**
+ * 把视频详情里完整的元信息(含合集归属)写入条目。
+ *
+ * 提取为 internal 顶层函数便于单元测试直接覆盖合集字段回填。
+ */
+internal fun OfflineItem.applyVideoDetailMetadata(detail: VideoDetail?, cid: Long): OfflineItem {
+    if (detail == null) return this
+    val part = detail.pages.firstOrNull { it.cid == cid }
+    return copy(
+        title = detail.title.ifEmpty { title },
+        partTitle = if (detail.pages.size > 1) part?.title.orEmpty() else "",
+        partIndex = part?.index ?: partIndex,
+        upName = detail.up.name.ifEmpty { upName },
+        coverUrl = detail.coverUrl.ifEmpty { coverUrl },
+        durationSeconds = part?.durationSeconds?.takeIf { it > 0 }
+            ?: detail.durationSeconds.takeIf { it > 0 }
+            ?: durationSeconds,
+        aid = detail.aid,
+        upMid = detail.up.mid,
+        upFaceUrl = detail.up.faceUrl,
+        description = detail.description,
+        publishedAtEpochSeconds = detail.publishedAtEpochSeconds,
+        copyright = detail.copyright,
+        noReprint = detail.noReprint,
+        chargingOnly = detail.chargingOnly,
+        stat = detail.stat.toOfflineStat(),
+        seasonId = detail.seasonId.takeIf { it != 0L } ?: seasonId,
+        seasonTitle = detail.seasonTitle.ifEmpty { seasonTitle },
+        seasonMid = detail.seasonMid.takeIf { it != 0L }
+            ?: detail.takeIf { it.seasonId != 0L }?.up?.mid?.takeIf { it != 0L }
+            ?: seasonMid,
+    )
+}

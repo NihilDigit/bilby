@@ -9,7 +9,7 @@ import kotlinx.serialization.Transient
  * [Failed] 是**停下来等人决定**,不是"还会自己重试":重试的退避在下载器内部走完之后才落到
  * 这里,摆出来的时候已经不会再自己动了。和播放失败那条一样,跳过还是再试由用户决定。
  */
-enum class OfflineStatus { Queued, Running, Completed, Failed }
+enum class OfflineStatus { Queued, Running, Paused, Completed, Failed }
 
 /**
  * 缓存下来的计数。**是缓存那一刻的快照,不会更新。**
@@ -124,8 +124,16 @@ data class OfflineItem(
      * 心跳上报成功之后它跟着推进到刚报上去的值 —— 那一刻服务端存的就是我们报的数。
      */
     val serverProgressBaseMillis: Long = 0,
+    /** 所属合集 ID,0 表示不属于任何合集(或旧索引未记录)。 */
+    val seasonId: Long = 0,
+    val seasonTitle: String = "",
+    val seasonMid: Long = 0,
 ) {
     val id: String get() = offlineId(bvid, cid)
+
+    /** 条目占用字节(优先取实际已下字节,缺失时退回总长)。 */
+    val effectiveBytes: Long
+        get() = downloadedBytes.takeIf { it > 0L } ?: totalBytes.coerceAtLeast(0L)
 
     /** 总数未知时返回 null —— 那种情况下进度条该画不确定态,不该画成 0%。 */
     val progress: Float?
@@ -164,6 +172,9 @@ data class CachedIndex(
     fun isInProgress(target: Pair<String, Long>): Boolean =
         statusOf(target).let { it == OfflineStatus.Queued || it == OfflineStatus.Running }
 
+    /** 用户手动暂停,可以重新勾选或从列表继续。 */
+    fun isPaused(target: Pair<String, Long>): Boolean = statusOf(target) == OfflineStatus.Paused
+
     /** 上次下失败了,可以重新勾选。 */
     fun isFailed(target: Pair<String, Long>): Boolean = statusOf(target) == OfflineStatus.Failed
 
@@ -180,14 +191,15 @@ data class CachedIndex(
         )
 
         /**
-         * 按 bvid 合并时谁说了算。已缓存排第一,理由同类注释:宁可说成已缓存。进行中排在失败前面:
+         * 按 bvid 合并时谁说了算。已缓存排第一,理由同类注释:宁可说成已缓存。进行中排在暂停与失败前面:
          * 一 P 在下、另一 P 失败时,再勾一次落到的多半是在下的那一 P,被去重挡掉。
          */
         private fun statusRank(status: OfflineStatus): Int = when (status) {
             OfflineStatus.Completed -> 0
             OfflineStatus.Running -> 1
             OfflineStatus.Queued -> 2
-            OfflineStatus.Failed -> 3
+            OfflineStatus.Paused -> 3
+            OfflineStatus.Failed -> 4
         }
     }
 }
@@ -265,10 +277,10 @@ const val OFFLINE_INTERRUPTED = "上次没下完,点一下继续"
  * 一条永远停在 37% 的假进度,而它其实什么都没在做 —— 那和"卡住了"在界面上完全一样,而且
  * 用户没有任何办法让它动起来。改成失败态,重试按钮才出现。
  *
- * 已完成和已失败的原样返回:前者不该被动,后者的原因(取流被拒、片源没了)比"上次被打断"
- * 更具体,盖掉是丢信息。
+ * 已完成、已暂停和已失败的原样返回:已完成不该被动,已暂停是用户显式停下的(启动时不自动续下),
+ * 已失败的原因(取流被拒、片源没了)比"上次被打断"更具体,盖掉是丢信息。
  *
- * 下载器启动时会把这些条目自动重新排队([OfflineDownloader] 的 init),这个失败态是排队
+ * 下载器启动时会把被打断的条目自动重新排队([OfflineDownloader] 的 init),这个失败态是排队
  * 之前、以及排队没能发生时(进程在那之前又被杀)留在盘上的样子。
  */
 fun OfflineItem.recoveredFromInterruption(): OfflineItem =
@@ -357,3 +369,121 @@ fun classifyDownloadedLength(actual: Long, expected: Long): DownloadFailure? = w
     actual < expected -> DownloadFailure.Transient
     else -> DownloadFailure.Mismatch
 }
+
+/** 下载队列(非 Completed 条目)的分类汇总计数。 */
+data class OfflineQueueSummary(
+    val activeCount: Int,
+    val pausedCount: Int,
+    val failedCount: Int,
+) {
+    val totalCount: Int get() = activeCount + pausedCount + failedCount
+    val hasActive: Boolean get() = activeCount > 0
+    val hasPaused: Boolean get() = pausedCount > 0
+    val hasFailed: Boolean get() = failedCount > 0
+}
+
+fun List<OfflineItem>.queueSummary(): OfflineQueueSummary {
+    var active = 0
+    var paused = 0
+    var failed = 0
+    for (item in this) {
+        when (item.status) {
+            OfflineStatus.Running, OfflineStatus.Queued -> active++
+            OfflineStatus.Paused -> paused++
+            OfflineStatus.Failed -> failed++
+            OfflineStatus.Completed -> Unit
+        }
+    }
+    return OfflineQueueSummary(activeCount = active, pausedCount = paused, failedCount = failed)
+}
+
+/** 已缓存合集的聚合数据。 */
+data class OfflineCollectionGroup(
+    val seasonId: Long,
+    val seasonTitle: String,
+    val seasonMid: Long,
+    val coverUrl: String,
+    val items: List<OfflineItem>,
+    val totalBytes: Long,
+    val latestCreatedAtMillis: Long,
+)
+
+/**
+ * 「合集」视图的分区结果:
+ * - [collections]: `seasonId != 0` 的已缓存条目按合集分组,按最新缓存时间倒序。
+ * - [ungrouped]: `seasonId == 0` 的非合集条目直接平铺展示,不包进"其他视频"假分组。
+ */
+data class OfflineCollectionPartition(
+    val collections: List<OfflineCollectionGroup>,
+    val ungrouped: List<OfflineItem>,
+)
+
+fun List<OfflineItem>.partitionByCollection(): OfflineCollectionPartition {
+    val completed = filter { it.status == OfflineStatus.Completed }
+    val (inSeason, standalone) = completed.partition { it.seasonId != 0L }
+    val collections = inSeason
+        .groupBy { it.seasonId }
+        .map { (seasonId, groupItems) ->
+            val ordered = groupItems.sortedByDescending { it.createdAtMillis }
+            val representative = ordered.first()
+            OfflineCollectionGroup(
+                seasonId = seasonId,
+                seasonTitle = ordered.firstNotNullOfOrNull { it.seasonTitle.takeIf(String::isNotBlank) }
+                    ?: representative.title,
+                seasonMid = ordered.firstNotNullOfOrNull { it.seasonMid.takeIf { mid -> mid != 0L } }
+                    ?: representative.upMid,
+                coverUrl = ordered.firstNotNullOfOrNull { it.coverUrl.takeIf(String::isNotBlank) }.orEmpty(),
+                items = ordered,
+                totalBytes = ordered.sumOf { it.effectiveBytes },
+                latestCreatedAtMillis = ordered.maxOf { it.createdAtMillis },
+            )
+        }
+        .sortedByDescending { it.latestCreatedAtMillis }
+    return OfflineCollectionPartition(
+        collections = collections,
+        ungrouped = standalone.sortedByDescending { it.createdAtMillis },
+    )
+}
+
+/** UP 主分组键:优先按 upMid,旧索引 upMid == 0 时退回 upName。 */
+sealed interface OfflineUpKey {
+    data class ByMid(val mid: Long) : OfflineUpKey
+    data class ByName(val name: String) : OfflineUpKey
+}
+
+/** 按 UP 主聚合的已缓存视频组。 */
+data class OfflineUpGroup(
+    val key: OfflineUpKey,
+    val upMid: Long,
+    val upName: String,
+    val upFaceUrl: String,
+    val items: List<OfflineItem>,
+    val totalBytes: Long,
+    val latestCreatedAtMillis: Long,
+) {
+    val id: String
+        get() = when (key) {
+            is OfflineUpKey.ByMid -> "mid:${key.mid}"
+            is OfflineUpKey.ByName -> "name:${key.name}"
+        }
+}
+
+fun List<OfflineItem>.groupByUp(): List<OfflineUpGroup> =
+    filter { it.status == OfflineStatus.Completed }
+        .groupBy { item ->
+            if (item.upMid != 0L) OfflineUpKey.ByMid(item.upMid)
+            else OfflineUpKey.ByName(item.upName.trim())
+        }
+        .map { (key, groupItems) ->
+            val ordered = groupItems.sortedByDescending { it.createdAtMillis }
+            OfflineUpGroup(
+                key = key,
+                upMid = ordered.firstNotNullOfOrNull { it.upMid.takeIf { mid -> mid != 0L } } ?: 0L,
+                upName = ordered.firstNotNullOfOrNull { it.upName.takeIf(String::isNotBlank) }.orEmpty(),
+                upFaceUrl = ordered.firstNotNullOfOrNull { it.upFaceUrl.takeIf(String::isNotBlank) }.orEmpty(),
+                items = ordered,
+                totalBytes = ordered.sumOf { it.effectiveBytes },
+                latestCreatedAtMillis = ordered.maxOf { it.createdAtMillis },
+            )
+        }
+        .sortedByDescending { it.latestCreatedAtMillis }

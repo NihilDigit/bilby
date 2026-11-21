@@ -72,6 +72,9 @@ data class OfflineTarget(
     val copyright: Int = 0,
     val noReprint: Boolean = false,
     val chargingOnly: Boolean = false,
+    val seasonId: Long = 0,
+    val seasonTitle: String = "",
+    val seasonMid: Long = 0,
 ) {
     /** 列表 key 与勾选状态的键。用 (bvid, cid) 而不是 bvid:同一条视频的两个分 P 是两行。 */
     val key: String get() = offlineId(item.bvid, cid)
@@ -80,11 +83,13 @@ data class OfflineTarget(
 
     fun isInProgress(cached: CachedIndex): Boolean = cached.isInProgress(item.bvid to cid)
 
+    fun isPaused(cached: CachedIndex): Boolean = cached.isPaused(item.bvid to cid)
+
     fun isFailed(cached: CachedIndex): Boolean = cached.isFailed(item.bvid to cid)
 
     /**
      * 勾不勾得了。已缓存的不用再下;排队和下载中的再勾一次会被下载器的去重挡掉,勾上了什么都
-     * 不发生。失败的可以勾:重新勾选就是重试。
+     * 不发生。已暂停或失败的可以勾:重新勾选就是继续/重试。
      */
     fun isSelectable(cached: CachedIndex): Boolean = !isCached(cached) && !isInProgress(cached)
 }
@@ -98,6 +103,9 @@ fun OfflineTarget.toOfflineRequest(qualityId: Int) = OfflineRequest(
     coverUrl = item.coverUrl,
     durationSeconds = item.durationSeconds,
     qualityId = qualityId,
+    seasonId = seasonId,
+    seasonTitle = seasonTitle,
+    seasonMid = seasonMid,
 )
 
 /**
@@ -224,6 +232,7 @@ fun OfflineCacheSheet(
                 val status = when {
                     target.isCached(cached) -> Res.string.offline_already_cached
                     target.isInProgress(cached) -> Res.string.offline_sheet_in_progress
+                    target.isPaused(cached) -> Res.string.offline_status_paused
                     target.isFailed(cached) -> Res.string.offline_status_failed
                     else -> null
                 }
