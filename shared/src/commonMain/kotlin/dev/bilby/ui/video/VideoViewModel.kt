@@ -925,7 +925,27 @@ class VideoViewModel(
      * 影响已经排进去的活儿 —— 那正是"缓存"这个功能的用途。
      */
     fun cacheSelection(targets: List<OfflineTarget>, qualityId: Int) {
-        offlineDownloader.enqueue(targets.map { it.toOfflineRequest(qualityId) })
+        val detail = _state.value.detail
+        val seasonEpisodeBvids = detail?.seasonEpisodes?.mapTo(hashSetOf()) { it.bvid }.orEmpty()
+        offlineDownloader.enqueue(
+            targets.map { target ->
+                val base = target.toOfflineRequest(qualityId)
+                if (
+                    base.seasonId == 0L &&
+                    detail != null &&
+                    detail.seasonId != 0L &&
+                    (target.item.bvid == detail.bvid || target.item.bvid in seasonEpisodeBvids)
+                ) {
+                    base.copy(
+                        seasonId = detail.seasonId,
+                        seasonTitle = detail.seasonTitle,
+                        seasonMid = detail.seasonMid.takeIf { it != 0L } ?: detail.up.mid,
+                    )
+                } else {
+                    base
+                }
+            },
+        )
     }
 
     /**

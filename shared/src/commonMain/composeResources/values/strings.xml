@@ -1226,4 +1226,28 @@
     <string name="nav_custom_settings_required_hint">核心入口，不可隐藏</string>
     <string name="nav_custom_move_up">上移</string>
     <string name="nav_custom_move_down">下移</string>
+
+    <!-- 离线缓存管理与分组视图 -->
+    <string name="offline_status_paused">已暂停</string>
+    <string name="offline_action_resume">继续</string>
+    <string name="offline_queue_title">下载队列  %1$d</string>
+    <string name="offline_queue_active_count">下载中 %1$d</string>
+    <string name="offline_queue_paused_count">已暂停 %1$d</string>
+    <string name="offline_queue_failed_count">失败 %1$d</string>
+    <string name="offline_queue_pause_all">全部暂停</string>
+    <string name="offline_queue_resume_all">全部继续</string>
+    <string name="offline_queue_retry_failed">重试失败</string>
+    <string name="offline_queue_clear">清空队列</string>
+    <string name="offline_queue_clear_confirm_title">清空下载队列?</string>
+    <string name="offline_queue_clear_confirm_message">将取消并移除队列中 %1$d 项未完成任务及临时文件，已缓存视频不受影响。</string>
+    <string name="offline_tab_all">全部</string>
+    <string name="offline_tab_collections">合集</string>
+    <string name="offline_tab_creators">UP 主</string>
+    <string name="offline_collection_episodes">%1$d 集</string>
+    <string name="offline_delete_collection_action">删除合集缓存</string>
+    <string name="offline_delete_collection_confirm_title">删除此合集的缓存?</string>
+    <string name="offline_delete_creator_action">删除该 UP 主缓存</string>
+    <string name="offline_delete_creator_confirm_title">删除该 UP 主的全部缓存?</string>
+    <string name="offline_delete_group_confirm_message">共 %1$d 个视频（%2$s），文件将从本机移除，重新缓存需再次下载。</string>
+    <string name="offline_unknown_up">未知 UP 主</string>
 </resources>

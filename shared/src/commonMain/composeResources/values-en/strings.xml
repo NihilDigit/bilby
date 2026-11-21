@@ -1163,4 +1163,28 @@
     <string name="nav_custom_settings_required_hint">Required entry, cannot be hidden</string>
     <string name="nav_custom_move_up">Move up</string>
     <string name="nav_custom_move_down">Move down</string>
+
+    <!-- Offline download manager & grouped views -->
+    <string name="offline_status_paused">Paused</string>
+    <string name="offline_action_resume">Resume</string>
+    <string name="offline_queue_title">Download queue  %1$d</string>
+    <string name="offline_queue_active_count">Downloading %1$d</string>
+    <string name="offline_queue_paused_count">Paused %1$d</string>
+    <string name="offline_queue_failed_count">Failed %1$d</string>
+    <string name="offline_queue_pause_all">Pause all</string>
+    <string name="offline_queue_resume_all">Resume all</string>
+    <string name="offline_queue_retry_failed">Retry failed</string>
+    <string name="offline_queue_clear">Clear queue</string>
+    <string name="offline_queue_clear_confirm_title">Clear download queue?</string>
+    <string name="offline_queue_clear_confirm_message">This cancels and removes %1$d incomplete tasks and temporary files. Completed videos remain untouched.</string>
+    <string name="offline_tab_all">All</string>
+    <string name="offline_tab_collections">Collections</string>
+    <string name="offline_tab_creators">Creators</string>
+    <string name="offline_collection_episodes">%1$d episodes</string>
+    <string name="offline_delete_collection_action">Delete collection cache</string>
+    <string name="offline_delete_collection_confirm_title">Delete cached collection?</string>
+    <string name="offline_delete_creator_action">Delete creator cache</string>
+    <string name="offline_delete_creator_confirm_title">Delete all cached videos from this creator?</string>
+    <string name="offline_delete_group_confirm_message">%1$d videos (%2$s) will be removed from this device and will need to be downloaded again.</string>
+    <string name="offline_unknown_up">Unknown creator</string>
 </resources>

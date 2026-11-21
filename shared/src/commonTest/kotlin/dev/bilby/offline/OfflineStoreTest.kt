@@ -251,4 +251,40 @@ class OfflineStoreTest {
 
         assertEquals(listOf("BV1good"), store.list().map { it.bvid })
     }
+
+    @Test
+    fun `合集元信息与 Paused 状态往返落盘并兼容无合集字段的旧索引`() = runTest {
+        val store = store()
+        val withSeason = item("BV1season", 11, createdAt = 200).copy(
+            status = OfflineStatus.Paused,
+            seasonId = 777L,
+            seasonTitle = "合集标题",
+            seasonMid = 88L,
+            downloadedBytes = 1024L,
+            totalBytes = 4096L,
+        )
+        store.write(withSeason)
+        store.videoFile("BV1season", 11).writeBytes(ByteArray(1024))
+
+        // 模拟旧版本写下的 meta.json(不含 seasonId / seasonTitle / seasonMid)
+        val legacyDir = store.dirFor("BV1legacy", 22).apply { mkdirs() }
+        File(legacyDir, "meta.json").writeText(
+            """{"bvid":"BV1legacy","cid":22,"title":"旧视频","status":"Completed","createdAtMillis":100}""",
+        )
+
+        val readSeason = store.read("BV1season", 11)
+        assertEquals(OfflineStatus.Paused, readSeason?.status)
+        assertEquals(777L, readSeason?.seasonId)
+        assertEquals("合集标题", readSeason?.seasonTitle)
+        assertEquals(88L, readSeason?.seasonMid)
+
+        val readLegacy = store.read("BV1legacy", 22)
+        assertEquals(0L, readLegacy?.seasonId)
+        assertEquals("", readLegacy?.seasonTitle)
+        assertEquals(0L, readLegacy?.seasonMid)
+
+        // 暂停态留下的分片不算无主目录,sweepOrphans 绝不能删掉
+        assertEquals(0L, store.sweepOrphans())
+        assertEquals(1024L, store.videoFile("BV1season", 11).length())
+    }
 }
