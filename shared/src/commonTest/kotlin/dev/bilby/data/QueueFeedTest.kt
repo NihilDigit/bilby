@@ -202,6 +202,105 @@ class QueueFeedTest {
         assertNull(feed.open(BvidCodec.fromAid(100)))
     }
 
+    @Test
+    fun `ArchiveCursorFeed 边界条目被非 UGC 过滤时按原始首尾 aid 继续推进`() = runTest {
+        val requested = mutableListOf<Triple<Long, Boolean, Boolean>>()
+        val targetBvid = BvidCodec.fromAid(100)
+        val nextBvid = BvidCodec.fromAid(98)
+        val feed = ArchiveCursorFeed { aid, newer, includeCursor ->
+            requested += Triple(aid, newer, includeCursor)
+            when {
+                aid == 100L && !newer && includeCursor -> CursorArchivePage(
+                    items = listOf(CursorArchiveItem(100L, targetBvid, "t100", "", 60, "UP")),
+                    hasNewer = false,
+                    hasOlder = true,
+                    total = 3,
+                    firstRawAid = 100L,
+                    lastRawAid = 99L, // aid=99 是被过滤掉的 PUGV 条目
+                )
+                aid == 100L && newer -> CursorArchivePage(emptyList(), hasNewer = false, hasOlder = true, total = 3)
+                aid == 99L && !newer && !includeCursor -> CursorArchivePage(
+                    items = listOf(CursorArchiveItem(98L, nextBvid, "t98", "", 60, "UP")),
+                    hasNewer = true,
+                    hasOlder = false,
+                    total = 3,
+                    firstRawAid = 98L,
+                    lastRawAid = 98L,
+                )
+                else -> null
+            }
+        }
+
+        val opened = feed.open(targetBvid)!!
+        assertEquals(listOf(targetBvid), opened.map { it.bvid })
+        assertTrue(feed.hasAfter)
+
+        val after = feed.loadAfter()!!
+        assertEquals(listOf(nextBvid), after.map { it.bvid })
+        assertFalse(feed.hasAfter)
+        assertTrue("应以原始末条 aid=99 继续向后翻页", Triple(99L, false, false) in requested)
+    }
+
+    @Test
+    fun `ArchiveForwardCursorFeed 支持深页最多播放游标定位与失败重试`() = runTest {
+        val pages = listOf(
+            SpaceArchiveCursorPage(
+                items = (1..10).map { i -> spaceVideo("c$i", ts = i.toLong()) },
+                total = 35,
+                nextCursorAid = 100L,
+                hasMore = true,
+            ),
+            SpaceArchiveCursorPage(
+                items = (11..20).map { i -> spaceVideo("c$i", ts = i.toLong()) },
+                total = 35,
+                nextCursorAid = 200L,
+                hasMore = true,
+            ),
+            SpaceArchiveCursorPage(
+                items = emptyList(), // 整页非 UGC 被过滤,但 hasMore 仍为 true 且游标前进
+                total = 35,
+                nextCursorAid = 250L,
+                hasMore = true,
+            ),
+            SpaceArchiveCursorPage(
+                items = (21..35).map { i -> spaceVideo("c$i", ts = i.toLong()) },
+                total = 35,
+                nextCursorAid = null,
+                hasMore = false,
+            ),
+        )
+        val cursorToIndex = mapOf<Long?, Int>(null to 0, 100L to 1, 200L to 2, 250L to 3)
+        var failCursor250 = true
+        val requestedCursors = mutableListOf<Long?>()
+
+        val feed = ArchiveForwardCursorFeed(
+            maxOpenPages = 10,
+            fallbackUpName = "Lu小鱼",
+        ) { cursorAid ->
+            requestedCursors += cursorAid
+            if (cursorAid == 250L && failCursor250) return@ArchiveForwardCursorFeed null
+            pages[cursorToIndex.getValue(cursorAid)]
+        }
+
+        // 打开第 2 页末尾的 c18:应从 null 翻到 100L 命中,fillWindow 续翻 200L(空页跳过) 并在 250L 失败时停住
+        val opened = feed.open("c18")!!
+        assertEquals((1..20).map { "c$it" }, opened.map { it.bvid })
+        assertEquals("Lu小鱼", opened.first().upName)
+        assertFalse(feed.hasBefore)
+        assertTrue(feed.hasAfter)
+        assertEquals(0, feed.offsetOfFirst)
+        assertEquals(35, feed.total)
+
+        // 重试时必须继续请求游标 250L 而不重复或丢失
+        assertNull(feed.loadAfter())
+        failCursor250 = false
+        val rest = feed.loadAfter()!!
+        assertEquals((21..35).map { "c$it" }, rest.map { it.bvid })
+        assertFalse(feed.hasAfter)
+        assertEquals(35, feed.total)
+        assertEquals(listOf(null, 100L, 200L, 250L, 250L, 250L), requestedCursors)
+    }
+
     /** 动态按游标翻页:游标就是页号的字符串,[pages] 里一个元素是一页里带视频的那些。 */
     private fun dynamicPages(
         pages: List<List<Int>>,
@@ -295,20 +394,29 @@ class QueueFeedTest {
     )
 
     @Test
-    fun `NightMergeFeed 按发布时间全局倒序归并多位 UP 主并支持分页续取`() = runTest {
+    fun `NightMergeFeed 按发布时间全局倒序归并多位 UP 主并支持游标续取`() = runTest {
         val upA = WhitelistedUp(mid = 10L, name = "Alpha")
         val upB = WhitelistedUp(mid = 20L, name = "Beta")
         // 每位 UP 共 15 条,每页 10 条:Alpha 取偶数时间戳,Beta 取奇数时间戳。
-        val alphaAll = (1..15).reversed().map { i -> spaceVideo("a$i", ts = i * 20L) }
-        val betaAll = (1..15).reversed().map { i -> spaceVideo("b$i", ts = i * 20L + 10L, upName = "BetaAuthor") }
+        val alphaAll = (1..15).reversed().map { i -> i.toLong() to spaceVideo("a$i", ts = i * 20L) }
+        val betaAll = (1..15).reversed().map { i -> (100L + i) to spaceVideo("b$i", ts = i * 20L + 10L, upName = "BetaAuthor") }
+        val requestedCursors = mutableListOf<Pair<Long, Long?>>()
 
         val feed = NightMergeFeed(
             ups = listOf(upA, upB),
             batchSize = 10,
-        ) { mid, page ->
+        ) { mid, cursorAid ->
+            requestedCursors += mid to cursorAid
             val source = if (mid == 10L) alphaAll else betaAll
-            val from = (page - 1) * 10
-            SpaceArchivePage(total = source.size, items = source.drop(from).take(10))
+            val startIndex = if (cursorAid == null) 0 else source.indexOfFirst { it.first == cursorAid } + 1
+            val slice = source.drop(startIndex).take(10)
+            val hasMore = startIndex + slice.size < source.size
+            SpaceArchiveCursorPage(
+                items = slice.map { it.second },
+                total = source.size,
+                nextCursorAid = if (hasMore) slice.lastOrNull()?.first else null,
+                hasMore = hasMore,
+            )
         }
 
         val initial = feed.open("b15")!!
@@ -330,41 +438,63 @@ class QueueFeedTest {
         // 验证全局严格按时间倒序:b15(310), a15(300), b14(290), a14(280), ..., a1(20)
         val expected = (1..15).reversed().flatMap { i -> listOf("b$i", "a$i") }
         assertEquals(expected, all.map { it.bvid })
+        assertTrue("Alpha 首屏传 null, 续页传末条 aid=6", (10L to null) in requestedCursors && (10L to 6L) in requestedCursors)
+        assertTrue("Beta 首屏传 null, 续页传末条 aid=106", (20L to null) in requestedCursors && (20L to 106L) in requestedCursors)
     }
 
     @Test
-    fun `NightMergeFeed 某位 UP 续取失败时停在原处等待重试,不乱序跳过`() = runTest {
+    fun `NightMergeFeed 某位 UP 游标续取失败时停在原处等待重试,不乱序跳过`() = runTest {
         val upA = WhitelistedUp(mid = 10L, name = "Alpha")
         val upB = WhitelistedUp(mid = 20L, name = "Beta")
-        val alphaPages = listOf(
-            listOf(spaceVideo("a1", 500), spaceVideo("a2", 400)),
-            listOf(spaceVideo("a3", 100)),
+        val alphaPages = mapOf<Long?, SpaceArchiveCursorPage>(
+            null to SpaceArchiveCursorPage(
+                items = listOf(spaceVideo("a1", 500), spaceVideo("a2", 400)),
+                total = 3,
+                nextCursorAid = 1002L,
+                hasMore = true,
+            ),
+            1002L to SpaceArchiveCursorPage(
+                items = listOf(spaceVideo("a3", 100)),
+                total = 3,
+                nextCursorAid = null,
+                hasMore = false,
+            ),
         )
-        val betaPages = listOf(
-            listOf(spaceVideo("b1", 450)),
-            listOf(spaceVideo("b2", 350), spaceVideo("b3", 250)),
+        val betaPages = mapOf<Long?, SpaceArchiveCursorPage>(
+            null to SpaceArchiveCursorPage(
+                items = listOf(spaceVideo("b1", 450)),
+                total = 3,
+                nextCursorAid = 2001L,
+                hasMore = true,
+            ),
+            2001L to SpaceArchiveCursorPage(
+                items = listOf(spaceVideo("b2", 350), spaceVideo("b3", 250)),
+                total = 3,
+                nextCursorAid = null,
+                hasMore = false,
+            ),
         )
-        var failBetaPage2 = true
+        var failBetaCursor = true
 
         val feed = NightMergeFeed(
             ups = listOf(upA, upB),
             batchSize = 2,
-        ) { mid, page ->
-            if (mid == 20L && page == 2 && failBetaPage2) return@NightMergeFeed null
+        ) { mid, cursorAid ->
+            if (mid == 20L && cursorAid == 2001L && failBetaCursor) return@NightMergeFeed null
             val pages = if (mid == 10L) alphaPages else betaPages
-            SpaceArchivePage(total = 3, items = pages.getOrNull(page - 1).orEmpty())
+            pages[cursorAid]
         }
 
-        // batchSize = 2,QUEUE_WINDOW 会继续尝试拉取直到 Beta 第 2 页失败后停在已确认顺序的前两条 ["a1", "b1"]
+        // batchSize = 2,QUEUE_WINDOW 会继续尝试拉取直到 Beta 游标 2001L 失败后停在已确认顺序的前两条 ["a1", "b1"]
         val opened = feed.open("a1")!!
         assertEquals(listOf("a1", "b1"), opened.map { it.bvid })
         assertTrue(feed.hasAfter)
 
-        // Beta 第 2 页继续失败时 loadAfter 返回 null,绝不提前吐出 a2(400) 或 a3(100) 越过未拉到的 b2(350)
+        // Beta 游标继续失败时 loadAfter 返回 null,绝不提前吐出 a2(400) 或 a3(100) 越过未拉到的 b2(350)
         assertNull(feed.loadAfter())
 
         // 恢复后重试继续严格按全局时间倒序吐出剩余条目
-        failBetaPage2 = false
+        failBetaCursor = false
         val rest = mutableListOf<QueueItem>()
         while (feed.hasAfter) {
             rest += feed.loadAfter()!!

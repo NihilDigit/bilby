@@ -1,22 +1,24 @@
 package dev.bilby.data
 
 import dev.bilby.BiliLog
+import dev.bilby.BvidCodec
 import dev.bilby.formatDurationSeconds
 import dev.bilby.normalizeDurationText
 import dev.bilby.api.BiliClient
 import dev.bilby.api.BiliConstants
 import dev.bilby.api.BiliResult
 import dev.bilby.api.DmImgParams
+import dev.bilby.api.dto.ArchiveCursorItemDto
+import dev.bilby.api.dto.ArchiveCursorResponseDto
+import dev.bilby.api.dto.ArchiveSearchResponseDto
 import dev.bilby.api.dto.DynamicFeedResponseDto
 import dev.bilby.api.dto.DynamicItemDto
+import dev.bilby.api.dto.RelationStatDto
 import dev.bilby.api.dto.SeasonArchiveDto
 import dev.bilby.api.dto.SeasonArchivesResponseDto
 import dev.bilby.api.dto.SpaceSeasonSeriesEntryDto
 import dev.bilby.api.dto.SpaceSeasonSeriesResponseDto
 import dev.bilby.api.dto.SpaceUserInfoDto
-import dev.bilby.api.dto.RelationStatDto
-import dev.bilby.api.dto.ArchiveCursorResponseDto
-import dev.bilby.api.dto.ArchiveSearchResponseDto
 import dev.bilby.api.dto.VListItemDto
 import dev.bilby.api.getAppData
 import dev.bilby.api.getData
@@ -76,6 +78,21 @@ enum class SpaceArchiveOrder(val apiValue: String) {
 
 data class SpaceArchivePage(val total: Int, val items: List<SpaceVideoItem>)
 
+/**
+ * App 端 `x/v2/space/archive/cursor` 游标分页的一页（notes/space-archive-cursor.md）。
+ *
+ * @param items 已按 UGC 规则过滤后的本页视频（过滤 `is_pgc`、`is_pugv` 与空 `bvid`）。
+ * @param total 服务端返回的投稿总数（`count`），非正数时为 0。
+ * @param nextCursorAid 下一页应传入的 `aid` 游标（取原始末条 `param`，防止末条被过滤导致停滞），到底时为 null。
+ * @param hasMore 服务端声明仍有下一页且本页非空、游标可推进。
+ */
+data class SpaceArchiveCursorPage(
+    val items: List<SpaceVideoItem>,
+    val total: Int,
+    val nextCursorAid: Long?,
+    val hasMore: Boolean,
+)
+
 /** 投稿游标接口的一条。时长是数值秒,UP 名接口给了就带上。 */
 data class CursorArchiveItem(
     val aid: Long,
@@ -91,12 +108,16 @@ data class CursorArchiveItem(
  *
  * @param hasNewer 这一页之前(更新)还有没有。
  * @param hasOlder 这一页之后(更旧)还有没有。
+ * @param firstRawAid 原始响应首条 aid（供非 UGC 条目被过滤时继续向前翻页）。
+ * @param lastRawAid 原始响应末条 aid（供非 UGC 条目被过滤时继续向后翻页）。
  */
 data class CursorArchivePage(
     val items: List<CursorArchiveItem>,
     val hasNewer: Boolean,
     val hasOlder: Boolean,
     val total: Int? = null,
+    val firstRawAid: Long? = null,
+    val lastRawAid: Long? = null,
 )
 
 /**
@@ -147,8 +168,11 @@ data class SpaceCollectionDetailPage(val total: Int, val items: List<SpaceVideoI
 class SpaceRepository(private val client: BiliClient) {
 
     companion object {
-        /** 投稿列表一页的条数。列表页据此算出点中的那条落在第几页(见 QueueContext.UpArchive)。 */
+        /** 空间内关键词搜索（web `arc/search`）一页的条数。 */
         const val ARCHIVE_PAGE_SIZE = 30
+
+        /** App 端投稿游标接口（`x/v2/space/archive/cursor`）一页的条数（notes/space-archive-cursor.md）。 */
+        const val ARCHIVE_CURSOR_PAGE_SIZE = 20
 
         /** 合集/系列目录一页的条数,同上。 */
         const val COLLECTION_PAGE_SIZE = 30
@@ -233,8 +257,8 @@ class SpaceRepository(private val client: BiliClient) {
         )
 
     /**
-     * 投稿列表与空间内搜索是同一个接口(notes 1.3 节):`keyword` 非空即是搜索。
-     * `order` 只暴露 pubdate/click 两档,UI 上对应"最新/最多播放"两个 FilterChip。
+     * 空间内关键词搜索走 web `x/space/wbi/arc/search`（非关键词首屏也兼容转调游标接口以避免 `order=click` 风控；
+     * 非关键词翻页请直接调 [loadArchiveCursorPage]，见 notes/space-archive-cursor.md）。
      */
     suspend fun loadArchives(
         mid: Long,
@@ -242,6 +266,10 @@ class SpaceRepository(private val client: BiliClient) {
         order: SpaceArchiveOrder,
         keyword: String? = null,
     ): BiliResult<SpaceArchivePage> {
+        if (keyword.isNullOrBlank() && page == 1) {
+            return loadArchiveCursorPage(mid = mid, order = order, cursorAid = null)
+                .map { cursorPage -> SpaceArchivePage(cursorPage.total, cursorPage.items) }
+        }
         val params = buildMap {
             put("mid", mid.toString())
             put("ps", ARCHIVE_PAGE_SIZE.toString())
@@ -268,9 +296,38 @@ class SpaceRepository(private val client: BiliClient) {
     }
 
     /**
+     * 非关键词浏览 UP 主投稿（最新 `pubdate` 与最多播放 `click` 均走此接口），避免 web `arc/search`
+     * 的深页号与 `order=click` 风控拒绝（见 notes/space-archive-cursor.md）。
+     *
+     * 首屏省略 `aid`；续页传入上一页末条 `aid`。与 `BiliConstants.APP_USER_AGENT` / `AppSign.APP_KEY`
+     * 统一使用 `android_hd` / `build=2001100`。
+     */
+    suspend fun loadArchiveCursorPage(
+        mid: Long,
+        order: SpaceArchiveOrder = SpaceArchiveOrder.Pubdate,
+        cursorAid: Long? = null,
+    ): BiliResult<SpaceArchiveCursorPage> {
+        val params = buildMap {
+            put("vmid", mid.toString())
+            if (cursorAid != null) put("aid", cursorAid.toString())
+            put("ps", ARCHIVE_CURSOR_PAGE_SIZE.toString())
+            put("order", order.apiValue)
+            put("build", "2001100")
+            put("mobi_app", "android_hd")
+            put("platform", "android")
+            put("qn", "80")
+        }
+        // App 端空间投稿游标接口（notes/space-archive-cursor.md）
+        return client.getAppData<ArchiveCursorResponseDto>(
+            "${BiliConstants.APP_HOST}/x/v2/space/archive/cursor",
+            params,
+        ).map { dto -> dto.toSpaceArchiveCursorPage(previousCursorAid = cursorAid) }
+    }
+
+    /**
      * 以 [aid] 为游标取这位 UP 的投稿,**不受页号深度影响**:web 投稿接口的深 `pn` 会被服务端
      * 夹住(见 [loadArchives] 的调用方历史),这个接口按 aid 定位,几十万条的 UP 也一次命中
-     * (notes/space-and-search.md 1.4.3)。
+     * (notes/space-archive-cursor.md)。
      *
      * @param newer true 取游标之前(更新)的一页,false 取之后(更旧)的一页。
      * @param includeCursor 取更旧的那页时把游标自己放在第一条。取更新的那页不认这个参数。
@@ -283,39 +340,24 @@ class SpaceRepository(private val client: BiliClient) {
         aid: Long,
         newer: Boolean,
         includeCursor: Boolean = false,
+        order: SpaceArchiveOrder = SpaceArchiveOrder.Pubdate,
     ): BiliResult<CursorArchivePage> {
         val params = buildMap {
             put("vmid", mid.toString())
             put("aid", aid.toString())
-            put("ps", "20")
-            put("order", "pubdate")
+            put("ps", ARCHIVE_CURSOR_PAGE_SIZE.toString())
+            put("order", order.apiValue)
             put("build", "2001100")
             put("mobi_app", "android_hd")
             put("platform", "android")
             put("qn", "80")
             if (newer) put("sort", "asc") else if (includeCursor) put("include_cursor", "true")
         }
+        // App 端空间投稿游标接口（notes/space-archive-cursor.md）
         return client.getAppData<ArchiveCursorResponseDto>(
             "${BiliConstants.APP_HOST}/x/v2/space/archive/cursor",
             params,
-        ).map { dto ->
-            CursorArchivePage(
-                items = dto.item.mapNotNull { item ->
-                    val itemAid = item.param.toLongOrNull() ?: return@mapNotNull null
-                    CursorArchiveItem(
-                        aid = itemAid,
-                        bvid = item.bvid,
-                        title = item.title,
-                        coverUrl = item.cover.toHttpsUrl(),
-                        durationSeconds = item.duration,
-                        upName = item.author,
-                    )
-                },
-                hasNewer = dto.hasPrev,
-                hasOlder = dto.hasNext,
-                total = dto.count.takeIf { it > 0 },
-            )
-        }
+        ).map { dto -> dto.toCursorArchivePage() }
     }
 
     /** 合集与系列共用一个列表接口(notes 1.4.1 节),固定每页 10 条(接口本身写死)。 */
@@ -497,3 +539,61 @@ private fun Long.formatCount(): String = when {
 
 /** `live_room.liveStatus`:1 才是正在直播,2 是轮播录像。 */
 private const val LIVE_STATUS_LIVE = 1
+
+private const val CHARGING_BADGE_TEXT = "充电专属"
+
+internal fun ArchiveCursorItemDto.isUgcVideo(): Boolean =
+    !isPgc && !isPugv && bvid.isNotBlank()
+
+internal fun ArchiveCursorItemDto.resolveAidOrNull(): Long? =
+    param.toLongOrNull()?.takeIf { it > 0L }
+        ?: BvidCodec.toAid(bvid).takeIf { it > 0L }
+
+internal fun ArchiveCursorItemDto.toSpaceVideoItemOrNull(): SpaceVideoItem? {
+    if (!isUgcVideo()) return null
+    return SpaceVideoItem(
+        bvid = bvid,
+        title = title,
+        coverUrl = cover.toHttpsUrl(),
+        durationText = formatDurationSeconds(duration),
+        publishedAtEpochSeconds = ctime,
+        playCountText = play.formatCount(),
+        danmakuCountText = danmaku.formatCount(),
+        chargingOnly = badges.any { it.text == CHARGING_BADGE_TEXT },
+        upName = author,
+    )
+}
+
+internal fun ArchiveCursorResponseDto.toSpaceArchiveCursorPage(
+    previousCursorAid: Long? = null,
+): SpaceArchiveCursorPage {
+    val nextCursorAid = item.asReversed().firstNotNullOfOrNull { it.resolveAidOrNull() }
+    val canAdvance = hasNext && item.isNotEmpty() && nextCursorAid != null && nextCursorAid != previousCursorAid
+    return SpaceArchiveCursorPage(
+        items = item.mapNotNull { it.toSpaceVideoItemOrNull() },
+        total = count.coerceAtLeast(0),
+        nextCursorAid = if (canAdvance) nextCursorAid else null,
+        hasMore = canAdvance,
+    )
+}
+
+internal fun ArchiveCursorResponseDto.toCursorArchivePage(): CursorArchivePage =
+    CursorArchivePage(
+        items = item.mapNotNull { entry ->
+            if (!entry.isUgcVideo()) return@mapNotNull null
+            val itemAid = entry.resolveAidOrNull() ?: return@mapNotNull null
+            CursorArchiveItem(
+                aid = itemAid,
+                bvid = entry.bvid,
+                title = entry.title,
+                coverUrl = entry.cover.toHttpsUrl(),
+                durationSeconds = entry.duration,
+                upName = entry.author,
+            )
+        },
+        hasNewer = hasPrev,
+        hasOlder = hasNext,
+        total = count.takeIf { it > 0 },
+        firstRawAid = item.firstNotNullOfOrNull { it.resolveAidOrNull() },
+        lastRawAid = item.asReversed().firstNotNullOfOrNull { it.resolveAidOrNull() },
+    )

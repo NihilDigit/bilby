@@ -309,9 +309,9 @@ class NightModeViewModel(
 
     private class UpCursor(
         val up: WhitelistedUp,
-        var nextPage: Int = 1,
+        var nextCursorAid: Long? = null,
+        var pageNumber: Int = 1,
         var hasMore: Boolean = true,
-        var fetchedCount: Int = 0,
         var total: Int = 0,
         val buffer: ArrayDeque<Pair<SpaceVideoItem, Int>> = ArrayDeque(),
     )
@@ -337,40 +337,47 @@ class NightModeViewModel(
             if (singleUpMode) {
                 val cursor = cursors.firstOrNull() ?: return BatchOutcome(emptyList(), false, false, null)
                 if (!cursor.hasMore) return BatchOutcome(emptyList(), false, true, null)
-                val requestedPage = cursor.nextPage
-                return when (
-                    val result = spaceRepository.loadArchives(
-                        mid = cursor.up.mid,
-                        page = requestedPage,
-                        order = SpaceArchiveOrder.Pubdate,
-                    )
-                ) {
-                    is BiliResult.Ok -> {
-                        val pageItems = result.value.items
-                        cursor.total = result.value.total
-                        cursor.fetchedCount += pageItems.size
-                        if (pageItems.isNotEmpty()) {
-                            cursor.nextPage = requestedPage + 1
-                        }
-                        cursor.hasMore = pageItems.isNotEmpty() && cursor.fetchedCount < result.value.total
-                        val items = pageItems
-                            .filter { seenBvids.add(it.bvid) }
-                            .map { NightVideoItem(cursor.up, it, requestedPage) }
-                        BatchOutcome(
-                            items = items,
-                            hasMore = cursor.hasMore,
-                            anySuccess = true,
-                            lastError = null,
+                val collected = ArrayList<NightVideoItem>()
+                var anySuccess = false
+                var lastError: StringResource? = null
+                var rounds = 0
+                while (collected.isEmpty() && cursor.hasMore && rounds < MAX_REFETCH_ROUNDS) {
+                    rounds += 1
+                    val requestedPage = cursor.pageNumber
+                    // 夜间白名单投稿列表走 App 端游标接口（notes/space-archive-cursor.md）。
+                    when (
+                        val result = spaceRepository.loadArchiveCursorPage(
+                            mid = cursor.up.mid,
+                            order = SpaceArchiveOrder.Pubdate,
+                            cursorAid = cursor.nextCursorAid,
                         )
-                    }
+                    ) {
+                        is BiliResult.Ok -> {
+                            anySuccess = true
+                            val page = result.value
+                            if (page.total > 0) cursor.total = page.total
+                            cursor.nextCursorAid = page.nextCursorAid
+                            cursor.hasMore = page.hasMore && page.nextCursorAid != null
+                            if (page.items.isNotEmpty() || cursor.hasMore) {
+                                cursor.pageNumber = requestedPage + 1
+                            }
+                            page.items
+                                .filter { seenBvids.add(it.bvid) }
+                                .mapTo(collected) { NightVideoItem(cursor.up, it, requestedPage) }
+                        }
 
-                    else -> BatchOutcome(
-                        items = emptyList(),
-                        hasMore = cursor.hasMore,
-                        anySuccess = false,
-                        lastError = result.errorTextRes("夜览取投稿"),
-                    )
+                        else -> {
+                            lastError = result.errorTextRes("夜览取投稿")
+                            break
+                        }
+                    }
                 }
+                return BatchOutcome(
+                    items = collected,
+                    hasMore = cursor.hasMore,
+                    anySuccess = anySuccess,
+                    lastError = lastError,
+                )
             }
 
             val batch = ArrayList<NightVideoItem>(BATCH_SIZE)
@@ -386,15 +393,17 @@ class NightModeViewModel(
                     refetchRounds += 1
                     val responses = coroutineScope {
                         needFetch.map { cursor ->
-                            val requestedPage = cursor.nextPage
+                            val requestedPage = cursor.pageNumber
+                            val requestedCursorAid = cursor.nextCursorAid
                             async {
                                 Triple(
                                     cursor,
                                     requestedPage,
-                                    spaceRepository.loadArchives(
+                                    // 夜间多 UP 归并走 App 端游标接口（notes/space-archive-cursor.md）。
+                                    spaceRepository.loadArchiveCursorPage(
                                         mid = cursor.up.mid,
-                                        page = requestedPage,
                                         order = SpaceArchiveOrder.Pubdate,
+                                        cursorAid = requestedCursorAid,
                                     ),
                                 )
                             }
@@ -404,14 +413,14 @@ class NightModeViewModel(
                         when (result) {
                             is BiliResult.Ok -> {
                                 anySuccess = true
-                                val pageItems = result.value.items
-                                cursor.total = result.value.total
-                                cursor.fetchedCount += pageItems.size
-                                pageItems.forEach { video -> cursor.buffer.addLast(video to requestedPage) }
-                                if (pageItems.isNotEmpty()) {
-                                    cursor.nextPage = requestedPage + 1
+                                val page = result.value
+                                if (page.total > 0) cursor.total = page.total
+                                page.items.forEach { video -> cursor.buffer.addLast(video to requestedPage) }
+                                cursor.nextCursorAid = page.nextCursorAid
+                                cursor.hasMore = page.hasMore && page.nextCursorAid != null
+                                if (page.items.isNotEmpty() || cursor.hasMore) {
+                                    cursor.pageNumber = requestedPage + 1
                                 }
-                                cursor.hasMore = pageItems.isNotEmpty() && cursor.fetchedCount < result.value.total
                             }
 
                             else -> {
@@ -422,7 +431,7 @@ class NightModeViewModel(
                     }
                 }
 
-                // 某个 UP 本页拉取失败时保留其 nextPage 与 hasMore，停在这里交给重试，不越过它继续吐旧视频。
+                // 某个 UP 本页拉取失败时保留其 nextCursorAid 与 hasMore，停在这里交给重试，不越过它继续吐旧视频。
                 if (fetchFailed) break
                 // 仍有待补页的 UP 还没拿到这一段头部数据时不再继续吐旧视频，保证跨 UP 时间倒序不乱序。
                 if (cursors.any { it.buffer.isEmpty() && it.hasMore }) continue

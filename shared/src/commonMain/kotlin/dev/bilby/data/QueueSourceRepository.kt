@@ -122,18 +122,24 @@ class QueueSourceRepository(
             )
         }
         val selectedUp = context.ups.firstOrNull { it.mid == selectedMid }
-        val feed = PagedFeed(context.anchorPage, SpaceRepository.ARCHIVE_PAGE_SIZE) { page ->
-            when (val r = spaceRepository.loadArchives(selectedMid, page, SpaceArchiveOrder.Pubdate)) {
-                is BiliResult.Ok -> FeedPage(
-                    items = r.value.items.map { it.toQueueItem(fallbackUpName = selectedUp?.name.orEmpty()) },
-                    hasMore = page * SpaceRepository.ARCHIVE_PAGE_SIZE < r.value.total,
-                    total = r.value.total,
+        val fallbackUpName = selectedUp?.name.orEmpty()
+        // 单 UP 定时白名单走 App 端游标接口（notes/space-archive-cursor.md），避免深页号 web 风控。
+        val feed = ArchiveCursorFeed { aid, newer, includeCursor ->
+            when (
+                val r = spaceRepository.loadArchiveCursor(
+                    mid = selectedMid,
+                    aid = aid,
+                    newer = newer,
+                    includeCursor = includeCursor,
+                    order = SpaceArchiveOrder.Pubdate,
                 )
-                else -> null.also { BiliLog.w("队列:定时白名单拉取投稿第 $page 页失败 mid=$selectedMid") }
+            ) {
+                is BiliResult.Ok -> r.value.withFallbackUpName(fallbackUpName)
+                else -> null.also { BiliLog.w("队列:定时白名单游标拉取投稿失败 mid=$selectedMid aid=$aid newer=$newer") }
             }
         }
         val items = feed.open(bvid) ?: return null
-        val upName = selectedUp?.name?.takeIf { it.isNotBlank() }
+        val upName = fallbackUpName.takeIf { it.isNotBlank() }
             ?: items.firstOrNull { it.upName.isNotBlank() }?.upName.orEmpty()
         val label = if (upName.isNotBlank()) {
             getString(Res.string.queue_source_night_up, prefix, upName)
@@ -144,14 +150,47 @@ class QueueSourceRepository(
     }
 
     private suspend fun openUpArchive(context: QueueContext.UpArchive, bvid: String): OpenedQueue? {
-        val feed = PagedFeed(context.page, SpaceRepository.ARCHIVE_PAGE_SIZE) { page ->
-            when (val r = spaceRepository.loadArchives(context.mid, page, context.order, context.keyword)) {
-                is BiliResult.Ok -> FeedPage(
-                    items = r.value.items.map { it.toQueueItem(fallbackUpName = context.upName) },
-                    hasMore = page * SpaceRepository.ARCHIVE_PAGE_SIZE < r.value.total,
-                    total = r.value.total,
-                )
-                else -> null.also { BiliLog.w("队列:拉取投稿第 $page 页失败 mid=${context.mid}") }
+        val feed: QueueFeed = when {
+            context.keyword.isNotBlank() -> PagedFeed(context.page, SpaceRepository.ARCHIVE_PAGE_SIZE) { page ->
+                when (val r = spaceRepository.loadArchives(context.mid, page, context.order, context.keyword)) {
+                    is BiliResult.Ok -> FeedPage(
+                        items = r.value.items.map { it.toQueueItem(fallbackUpName = context.upName) },
+                        hasMore = page * SpaceRepository.ARCHIVE_PAGE_SIZE < r.value.total,
+                        total = r.value.total,
+                    )
+                    else -> null.also { BiliLog.w("队列:拉取投稿搜索第 $page 页失败 mid=${context.mid}") }
+                }
+            }
+
+            context.order == SpaceArchiveOrder.Pubdate -> {
+                // 非关键词最新排序走 App 端双向游标（notes/space-archive-cursor.md）。
+                ArchiveCursorFeed { aid, newer, includeCursor ->
+                    when (
+                        val r = spaceRepository.loadArchiveCursor(
+                            mid = context.mid,
+                            aid = aid,
+                            newer = newer,
+                            includeCursor = includeCursor,
+                            order = SpaceArchiveOrder.Pubdate,
+                        )
+                    ) {
+                        is BiliResult.Ok -> r.value.withFallbackUpName(context.upName)
+                        else -> null.also { BiliLog.w("队列:游标拉取投稿失败 mid=${context.mid} aid=$aid newer=$newer") }
+                    }
+                }
+            }
+
+            else -> {
+                // 非关键词最多播放排序走 App 端正向游标（notes/space-archive-cursor.md）。
+                ArchiveForwardCursorFeed(
+                    maxOpenPages = (context.page * 2 + 4).coerceAtLeast(DEFAULT_CLICK_OPEN_PAGES),
+                    fallbackUpName = context.upName,
+                ) { cursorAid ->
+                    when (val r = spaceRepository.loadArchiveCursorPage(context.mid, context.order, cursorAid)) {
+                        is BiliResult.Ok -> r.value
+                        else -> null.also { BiliLog.w("队列:游标拉取最多播放投稿失败 mid=${context.mid} cursorAid=$cursorAid") }
+                    }
+                }
             }
         }
         val items = feed.open(bvid) ?: return null
@@ -395,6 +434,13 @@ class QueueSourceRepository(
         durationSeconds = parseDurationText(durationText),
     )
 
+    private fun CursorArchivePage.withFallbackUpName(fallbackUpName: String): CursorArchivePage =
+        if (fallbackUpName.isBlank()) {
+            this
+        } else {
+            copy(items = items.map { if (it.upName.isBlank()) it.copy(upName = fallbackUpName) else it })
+        }
+
     private companion object {
         /** 最多看这位 UP 的前几个系列。列表按更新时间排,在播的那个系列排在前面。 */
         const val SERIES_SCAN_LIMIT = 4
@@ -404,6 +450,9 @@ class QueueSourceRepository(
 
         /** 从别处点开动态视频时,最多翻这位 UP 的前几页动态去找它。 */
         const val STORY_SCAN_PAGES = 3
+
+        /** 非关键词最多播放排序按游标打开队列时的最少搜索页数上限。 */
+        const val DEFAULT_CLICK_OPEN_PAGES = 10
     }
 }
 

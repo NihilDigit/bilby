@@ -161,11 +161,15 @@ class ArchiveCursorFeed(
         seenAids.clear()
         val items = (newer?.items.orEmpty() + older.items).filter { seenAids.add(it.aid) }
         loadedSize = items.size
-        newestAid = items.first().aid
-        oldestAid = items.last().aid
+        newestAid = newer?.firstRawAid ?: items.first().aid
+        oldestAid = older.lastRawAid ?: items.last().aid
         // 取更新那一段失败时仍标记为"前面还有",下次滚到头再试。
-        newerLeft = if (newer == null) true else newer.hasNewer && newer.items.isNotEmpty()
-        olderLeft = older.hasOlder && older.items.isNotEmpty()
+        newerLeft = if (newer == null) {
+            true
+        } else {
+            newer.hasNewer && (newer.firstRawAid != null || newer.items.isNotEmpty())
+        }
+        olderLeft = older.hasOlder && (older.lastRawAid != null || older.items.isNotEmpty())
         return items.map { it.toQueueItem() }
     }
 
@@ -173,8 +177,9 @@ class ArchiveCursorFeed(
         if (!newerLeft) return emptyList()
         val page = load(newestAid, true, false) ?: return null
         page.total?.let { upstreamTotal = it }
-        newerLeft = page.hasNewer && page.items.isNotEmpty()
-        page.items.firstOrNull()?.let { newestAid = it.aid }
+        val nextNewest = page.firstRawAid ?: page.items.firstOrNull()?.aid
+        newerLeft = page.hasNewer && nextNewest != null && nextNewest != newestAid
+        if (nextNewest != null) newestAid = nextNewest
         val fresh = page.items.filter { seenAids.add(it.aid) }
         loadedSize += fresh.size
         return fresh.map { it.toQueueItem() }
@@ -184,8 +189,9 @@ class ArchiveCursorFeed(
         if (!olderLeft) return emptyList()
         val page = load(oldestAid, false, false) ?: return null
         page.total?.let { upstreamTotal = it }
-        olderLeft = page.hasOlder && page.items.isNotEmpty()
-        page.items.lastOrNull()?.let { oldestAid = it.aid }
+        val nextOldest = page.lastRawAid ?: page.items.lastOrNull()?.aid
+        olderLeft = page.hasOlder && nextOldest != null && nextOldest != oldestAid
+        if (nextOldest != null) oldestAid = nextOldest
         val fresh = page.items.filter { seenAids.add(it.aid) }
         loadedSize += fresh.size
         return fresh.map { it.toQueueItem() }
@@ -198,6 +204,88 @@ class ArchiveCursorFeed(
         coverUrl = coverUrl,
         durationSeconds = durationSeconds,
     )
+}
+
+/**
+ * 沿 App 端游标接口 `x/v2/space/archive/cursor` 正向翻页的队列来源
+ * （用于 `order=click` 最多播放等非时间游标排序，notes/space-archive-cursor.md）。
+ *
+ * 从首页（`cursorAid = null`）起逐页按 `nextCursorAid` 推进直到命中目标视频并按 [QUEUE_WINDOW]
+ * 补齐后续窗口，全程不触发 web `x/space/wbi/arc/search`。
+ */
+class ArchiveForwardCursorFeed(
+    private val maxOpenPages: Int = DEFAULT_MAX_OPEN_PAGES,
+    private val fallbackUpName: String = "",
+    private val loadPage: suspend (cursorAid: Long?) -> SpaceArchiveCursorPage?,
+) : QueueFeed {
+    private var nextCursorAid: Long? = null
+    private var more = false
+    private var openedFromTop = false
+    private var upstreamTotal: Int? = null
+    private var loadedCount = 0
+    private val seenBvids = HashSet<String>()
+
+    override val hasBefore: Boolean get() = false
+    override val hasAfter: Boolean get() = more
+    override val offsetOfFirst: Int? get() = if (openedFromTop) 0 else null
+    override val total: Int?
+        get() = if (openedFromTop && !more) loadedCount.takeIf { it > 0 } else upstreamTotal
+
+    override suspend fun open(bvid: String): List<QueueItem>? {
+        val collected = ArrayList<QueueItem>()
+        seenBvids.clear()
+        var cursorAid: Long? = null
+        repeat(maxOpenPages.coerceAtLeast(1)) {
+            val page = loadPage(cursorAid) ?: return null
+            if (page.total > 0) upstreamTotal = page.total
+            nextCursorAid = page.nextCursorAid
+            more = page.hasMore && page.nextCursorAid != null
+            collected += page.items.toFreshQueueItems()
+            if (collected.any { it.bvid == bvid }) {
+                openedFromTop = true
+                val window = fillWindow(this, collected, bvid)
+                loadedCount = window.size
+                return window
+            }
+            if (!more) return null
+            cursorAid = nextCursorAid
+        }
+        return null
+    }
+
+    override suspend fun loadBefore(): List<QueueItem> = emptyList()
+
+    override suspend fun loadAfter(): List<QueueItem>? {
+        repeat(MAX_EMPTY_AFTER_ROUNDS) {
+            if (!more) return emptyList()
+            val page = loadPage(nextCursorAid) ?: return null
+            if (page.total > 0) upstreamTotal = page.total
+            nextCursorAid = page.nextCursorAid
+            more = page.hasMore && page.nextCursorAid != null
+            val fresh = page.items.toFreshQueueItems()
+            if (fresh.isNotEmpty()) {
+                loadedCount += fresh.size
+                return fresh
+            }
+        }
+        return emptyList()
+    }
+
+    private fun List<SpaceVideoItem>.toFreshQueueItems(): List<QueueItem> = mapNotNull { item ->
+        if (!seenBvids.add(item.bvid)) return@mapNotNull null
+        QueueItem(
+            bvid = item.bvid,
+            title = item.title,
+            upName = item.upName.ifBlank { fallbackUpName },
+            coverUrl = item.coverUrl,
+            durationSeconds = parseDurationSeconds(item.durationText),
+        )
+    }
+
+    private companion object {
+        const val DEFAULT_MAX_OPEN_PAGES = 10
+        const val MAX_EMPTY_AFTER_ROUNDS = 4
+    }
 }
 
 /** 动态接口的一页里带视频的那些条目。[nextOffset] 为 null 或 [hasMore] 为 false 即到底。 */
@@ -280,13 +368,14 @@ class DynamicVideoFeed(
 }
 
 /**
- * 夜间模式「全部」视图的跨 UP 归并队列:按 `publishedAtEpochSeconds` 全局倒序归并多位白名单 UP 主的投稿。
+ * 夜间模式「全部」视图的跨 UP 归并队列:按 `publishedAtEpochSeconds` 全局倒序归并多位白名单 UP 主的投稿，
+ * 底层走 App 端投稿游标接口 `x/v2/space/archive/cursor`（notes/space-archive-cursor.md）。
  */
 class NightMergeFeed(
     ups: List<WhitelistedUp>,
-    private val batchSize: Int = SpaceRepository.ARCHIVE_PAGE_SIZE,
+    private val batchSize: Int = SpaceRepository.ARCHIVE_CURSOR_PAGE_SIZE,
     private val maxOpenBatches: Int = DEFAULT_MAX_OPEN_BATCHES,
-    private val loadPage: suspend (mid: Long, page: Int) -> SpaceArchivePage?,
+    private val loadPage: suspend (mid: Long, cursorAid: Long?) -> SpaceArchiveCursorPage?,
 ) : QueueFeed {
 
     constructor(
@@ -294,19 +383,18 @@ class NightMergeFeed(
         ups: List<WhitelistedUp>,
     ) : this(
         ups = ups,
-        loadPage = { mid, page ->
-            when (val r = spaceRepository.loadArchives(mid, page, SpaceArchiveOrder.Pubdate)) {
+        loadPage = { mid, cursorAid ->
+            when (val r = spaceRepository.loadArchiveCursorPage(mid, SpaceArchiveOrder.Pubdate, cursorAid)) {
                 is BiliResult.Ok -> r.value
-                else -> null.also { BiliLog.w("队列:夜间归并拉取投稿第 $page 页失败 mid=$mid") }
+                else -> null.also { BiliLog.w("队列:夜间归并游标拉取投稿失败 mid=$mid cursorAid=$cursorAid") }
             }
         },
     )
 
     private class UpCursor(
         val up: WhitelistedUp,
-        var nextPage: Int = 1,
+        var nextCursorAid: Long? = null,
         var hasMore: Boolean = true,
-        var fetchedCount: Int = 0,
         var total: Int = 0,
         val buffer: ArrayDeque<SpaceVideoItem> = ArrayDeque(),
     )
@@ -383,26 +471,18 @@ class NightMergeFeed(
                 refetchRounds += 1
                 val responses = coroutineScope {
                     needFetch.map { cursor ->
-                        val requestedPage = cursor.nextPage
+                        val requestedCursorAid = cursor.nextCursorAid
                         async {
-                            Triple(
-                                cursor,
-                                requestedPage,
-                                loadPage(cursor.up.mid, requestedPage),
-                            )
+                            cursor to loadPage(cursor.up.mid, requestedCursorAid)
                         }
                     }.awaitAll()
                 }
-                for ((cursor, requestedPage, page) in responses) {
+                for ((cursor, page) in responses) {
                     if (page != null) {
-                        val pageItems = page.items
-                        cursor.total = page.total
-                        cursor.fetchedCount += pageItems.size
-                        pageItems.forEach { video -> cursor.buffer.addLast(video) }
-                        if (pageItems.isNotEmpty()) {
-                            cursor.nextPage = requestedPage + 1
-                        }
-                        cursor.hasMore = pageItems.isNotEmpty() && cursor.fetchedCount < page.total
+                        if (page.total > 0) cursor.total = page.total
+                        page.items.forEach { video -> cursor.buffer.addLast(video) }
+                        cursor.nextCursorAid = page.nextCursorAid
+                        cursor.hasMore = page.hasMore && page.nextCursorAid != null
                     } else {
                         fetchFailed = true
                     }

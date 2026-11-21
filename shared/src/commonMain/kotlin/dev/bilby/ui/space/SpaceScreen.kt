@@ -45,7 +45,6 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.Headphones
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Search
@@ -57,7 +56,6 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
-import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialExpressiveTheme
@@ -132,6 +130,7 @@ import dev.bilby.data.RelationRepository
 import dev.bilby.data.SettingsStore
 import dev.bilby.data.SidePanelId
 import dev.bilby.data.SideSheetPrefs
+import dev.bilby.data.SpaceArchiveCursorPage
 import dev.bilby.data.SpaceArchiveOrder
 import dev.bilby.data.SpaceCollectionItem
 import dev.bilby.data.SpaceDynamicItem
@@ -269,7 +268,10 @@ data class SpaceArchiveTabState(
      */
     val appliedKeyword: String = "",
     val items: List<SpaceVideoItem> = emptyList(),
+    /** 仅在空间内关键词搜索（web `arc/search`）时使用的页号；非搜索态走 [nextCursorAid]。 */
     val page: Int = 1,
+    /** 非关键词浏览（app `x/v2/space/archive/cursor`）下一页要传的 `aid` 游标，首屏为 null。 */
+    val nextCursorAid: Long? = null,
     val total: Int = 0,
     val loading: Boolean = false,
     val appending: Boolean = false,
@@ -308,18 +310,24 @@ data class SpaceCollectionsTabState(
 /**
  * 一次投稿请求的身份。响应回来时用它回答"这份结果还属于列表现在的样子吗"。
  *
- * 三个字段就是接口的全部可变入参:排序、生效中的关键词、页号。再加一个请求代次,处理刷新
- * 时同一页会重发的情况 —— 这时旧请求和新请求的三个入参完全一样,只靠入参无法区分。
+ * 关键词搜索按页号匹配，非关键词浏览按游标 `aid` 匹配；代次区分刷新重发。
  */
 private data class ArchiveRequest(
     val order: SpaceArchiveOrder,
     val keyword: String,
     val page: Int,
+    val cursorAid: Long?,
     val generation: Long,
 ) {
+    val isKeywordSearch: Boolean get() = keyword.isNotBlank()
+
     fun matches(state: SpaceArchiveTabState): Boolean =
-        state.order == order && state.appliedKeyword == keyword && state.page == page
+        state.order == order &&
+            state.appliedKeyword == keyword &&
+            if (isKeywordSearch) state.page == page else state.nextCursorAid == cursorAid
 }
+
+private const val MAX_EMPTY_CURSOR_ROUNDS = 5
 
 // ---------------- ViewModel ----------------
 
@@ -494,6 +502,7 @@ class SpaceViewModel(
                 _state.update {
                     it.copy(archives = it.archives.copy(
                         page = 1,
+                        nextCursorAid = null,
                         loading = false, appending = false, hasMore = true, error = null,
                     ))
                 }
@@ -556,7 +565,7 @@ class SpaceViewModel(
             it.copy(
                 archives = it.archives.copy(
                     appliedKeyword = it.archives.keyword,
-                    items = emptyList(), page = 1, total = 0,
+                    items = emptyList(), page = 1, nextCursorAid = null, total = 0,
                     loading = false, appending = false, hasMore = true, error = null,
                 ),
             )
@@ -572,51 +581,119 @@ class SpaceViewModel(
             order = current.order,
             keyword = current.appliedKeyword,
             page = if (replace) 1 else current.page,
+            cursorAid = if (replace) null else current.nextCursorAid,
             generation = archivesGeneration,
         )
         _state.update {
             it.copy(archives = it.archives.copy(loading = firstPage, appending = !firstPage, error = null))
         }
         viewModelScope.launch {
-            val result = repository.loadArchives(mid, requested.page, requested.order, requested.keyword)
-            _state.update { state ->
-                val archives = state.archives
-                if (requested.generation != archivesGeneration || !requested.matches(archives)) return@update state
-                when (result) {
-                    is BiliResult.Ok -> {
-                        val pageItems = result.value.items
-                        val merged = if (replace) {
-                            pageItems.distinctBy { it.bvid }
-                        } else {
-                            archives.items.appendDistinctBy(pageItems) { v -> v.bvid }
+            if (requested.isKeywordSearch) {
+                val result = repository.loadArchives(mid, requested.page, requested.order, requested.keyword)
+                _state.update { state ->
+                    val archives = state.archives
+                    if (requested.generation != archivesGeneration || !requested.matches(archives)) return@update state
+                    when (result) {
+                        is BiliResult.Ok -> {
+                            val pageItems = result.value.items
+                            val merged = if (replace) {
+                                pageItems.distinctBy { it.bvid }
+                            } else {
+                                archives.items.appendDistinctBy(pageItems) { v -> v.bvid }
+                            }
+                            state.copy(
+                                refreshing = false,
+                                archives = archives.copy(
+                                    items = merged,
+                                    page = if (pageItems.isEmpty()) archives.page else requested.page + 1,
+                                    total = result.value.total,
+                                    loading = false,
+                                    appending = false,
+                                    hasMore = pageItems.isNotEmpty() && merged.size < result.value.total,
+                                ),
+                            )
                         }
+
+                        else -> state.copy(
+                            refreshing = false,
+                            archivesAvailable = state.archivesAvailable ?: true,
+                            archives = archives.copy(
+                                loading = false,
+                                appending = false,
+                                error = result.errorTextRes("空间页取投稿"),
+                            ),
+                        )
+                    }
+                }
+            } else {
+                // 非关键词浏览（最新 / 最多播放）统一走 App 端游标接口（notes/space-archive-cursor.md）。
+                var cursorAid = requested.cursorAid
+                val collected = ArrayList<SpaceVideoItem>()
+                var lastPage: SpaceArchiveCursorPage? = null
+                var failure: BiliResult<SpaceArchiveCursorPage>? = null
+                var rounds = 0
+                while (rounds < MAX_EMPTY_CURSOR_ROUNDS) {
+                    rounds += 1
+                    when (
+                        val result = repository.loadArchiveCursorPage(
+                            mid = mid,
+                            order = requested.order,
+                            cursorAid = cursorAid,
+                        )
+                    ) {
+                        is BiliResult.Ok -> {
+                            val page = result.value
+                            lastPage = page
+                            collected += page.items
+                            cursorAid = page.nextCursorAid
+                            if (collected.isNotEmpty() || !page.hasMore || cursorAid == null) break
+                        }
+
+                        else -> {
+                            failure = result
+                            break
+                        }
+                    }
+                }
+                _state.update { state ->
+                    val archives = state.archives
+                    if (requested.generation != archivesGeneration || !requested.matches(archives)) return@update state
+                    val page = lastPage
+                    if (page != null && (collected.isNotEmpty() || failure == null)) {
+                        val merged = if (replace) {
+                            collected.distinctBy { it.bvid }
+                        } else {
+                            archives.items.appendDistinctBy(collected) { v -> v.bvid }
+                        }
+                        val resolvedTotal = page.total.takeIf { it > 0 } ?: archives.total
                         state.copy(
                             refreshing = false,
-                            archivesAvailable = if (requested.page == 1 && requested.keyword.isBlank()) {
-                                result.value.total > 0 || merged.isNotEmpty()
+                            archivesAvailable = if (requested.cursorAid == null) {
+                                resolvedTotal > 0 || merged.isNotEmpty() || page.hasMore
                             } else {
                                 state.archivesAvailable
                             },
                             archives = archives.copy(
                                 items = merged,
-                                page = if (pageItems.isEmpty()) archives.page else requested.page + 1,
-                                total = result.value.total,
+                                nextCursorAid = page.nextCursorAid,
+                                total = resolvedTotal,
                                 loading = false,
                                 appending = false,
-                                hasMore = pageItems.isNotEmpty() && merged.size < result.value.total,
+                                hasMore = page.hasMore && page.nextCursorAid != null,
+                            ),
+                        )
+                    } else {
+                        state.copy(
+                            refreshing = false,
+                            archivesAvailable = state.archivesAvailable ?: true,
+                            archives = archives.copy(
+                                nextCursorAid = cursorAid,
+                                loading = false,
+                                appending = false,
+                                error = failure?.errorTextRes("空间页取投稿"),
                             ),
                         )
                     }
-
-                    else -> state.copy(
-                        refreshing = false,
-                        archivesAvailable = state.archivesAvailable ?: true,
-                        archives = archives.copy(
-                            loading = false,
-                            appending = false,
-                            error = result.errorTextRes("空间页取投稿"),
-                        ),
-                    )
                 }
             }
         }
@@ -797,7 +874,7 @@ fun SpaceScreen(
     onCloseGroupPicker: () -> Unit,
     onToggleGroup: (Long) -> Unit,
     onSaveGroups: () -> Unit,
-    onListenUp: () -> Unit,
+    @Suppress("UNUSED_PARAMETER") onListenUp: () -> Unit = {},
     onBack: () -> Unit,
     onRetry: () -> Unit,
     /** 分享要给出 `space.bilibili.com/<mid>`,而 mid 不在 [state] 里。 */
@@ -992,7 +1069,6 @@ fun SpaceScreen(
                                 PaneTitle(stringResource(tabs.first().label), Modifier.weight(1f))
                             }
                             if (tabs.getOrNull(pagerState.currentPage) == SpaceTab.Archives) {
-                                ArchiveListenButton(state.archives, onListenUp)
                                 ArchiveSortMenu(state.archives, onArchiveOrderChanged)
                             }
                         }
@@ -1022,7 +1098,6 @@ fun SpaceScreen(
                                 SpaceTab.Archives -> ArchivesTab(
                                     state.archives,
                                     onOrderChanged = onArchiveOrderChanged,
-                                    onListenUp = onListenUp,
                                     onLoadMore = onLoadMoreArchives,
                                     onVideoClick = onVideoClick,
                                     columns = listColumns,
@@ -1925,7 +2000,6 @@ private val ArchiveOrders = listOf(
 private fun ArchivesTab(
     state: SpaceArchiveTabState,
     onOrderChanged: (SpaceArchiveOrder) -> Unit,
-    onListenUp: () -> Unit,
     onLoadMore: () -> Unit,
     onVideoClick: (SpaceVideoItem) -> Unit,
     columns: GridCells,
@@ -1953,43 +2027,16 @@ private fun ArchivesTab(
             {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.End,
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(vertical = Spacing.Tight),
                 ) {
-                    ArchiveListenButton(state, onListenUp)
-                    Spacer(modifier = Modifier.weight(1f))
                     ArchiveSortMenu(state, onOrderChanged)
                 }
             }
         },
     )
-}
-
-@OptIn(ExperimentalMaterial3ExpressiveApi::class)
-@Composable
-private fun ArchiveListenButton(
-    state: SpaceArchiveTabState,
-    onListenUp: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    FilledTonalButton(
-        onClick = onListenUp,
-        enabled = state.items.isNotEmpty(),
-        contentPadding = PaddingValues(horizontal = Spacing.Cozy, vertical = Spacing.Hair),
-        modifier = modifier,
-    ) {
-        Icon(
-            Icons.Filled.Headphones,
-            contentDescription = null,
-            modifier = Modifier.size(Dimens.IconInline),
-        )
-        Text(
-            stringResource(Res.string.space_listen_up),
-            style = MaterialTheme.typography.labelLargeEmphasized,
-            modifier = Modifier.padding(start = Spacing.Hair + 2.dp),
-        )
-    }
 }
 
 @Composable
