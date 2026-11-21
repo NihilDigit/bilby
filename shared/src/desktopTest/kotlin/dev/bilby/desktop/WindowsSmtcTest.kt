@@ -88,16 +88,19 @@ class WindowsSmtcTest {
     fun `COM 回调对象处理非对齐 QueryInterface 并通过槽位 6 派发全部 5 个媒体按键`() {
         val dispatched = mutableListOf<String>()
         Arena.ofConfined().use { arena ->
-            val callback = TestButtonPressedCallback(arena) { button ->
-                dispatched += when (button) {
-                    BUTTON_PLAY -> "play"
-                    BUTTON_PAUSE -> "pause"
-                    BUTTON_STOP -> "stop"
-                    BUTTON_NEXT -> "next"
-                    BUTTON_PREVIOUS -> "previous"
-                    else -> "unknown($button)"
-                }
-            }
+            val callback = TestButtonPressedCallback(
+                arena = arena,
+                onButton = { button ->
+                    dispatched += when (button) {
+                        BUTTON_PLAY -> "play"
+                        BUTTON_PAUSE -> "pause"
+                        BUTTON_STOP -> "stop"
+                        BUTTON_NEXT -> "next"
+                        BUTTON_PREVIOUS -> "previous"
+                        else -> "unknown($button)"
+                    }
+                },
+            )
             val linker = Linker.nativeLinker()
             val vtbl = callback.segment.get(ADDRESS, 0L).reinterpret(ADDRESS.byteSize() * 4L)
             val qiDowncall = linker.downcallHandle(
