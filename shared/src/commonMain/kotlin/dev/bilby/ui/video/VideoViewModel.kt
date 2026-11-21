@@ -850,8 +850,11 @@ class VideoViewModel(
         }
     }
 
-    /** 撞 -412 时 [dev.bilby.data.SubtitleRepository] 会退避重试,见 [loadSubtitleTracks]。 */
+    /** 字幕轨拉取任务(主接口失败时由 [dev.bilby.data.SubtitleRepository] 自动回退 DmView)。 */
     private var subtitleTracksJob: Job? = null
+
+    /** 当前字幕正文拉取任务:快速切换语言或关闭字幕时取消上一条,避免迟到正文覆盖新选择。 */
+    private var subtitleCuesJob: Job? = null
 
     /**
      * 字幕轨随 cid 变,原因和 [observeCurrentPart] 一样:分 P 各有各的轨,播放器全 app
@@ -864,12 +867,10 @@ class VideoViewModel(
             .map { it.cidOf(target) }
             .distinctUntilChanged()
             .collect { cid ->
-                // 换 cid 就取消上一条还没跑完的加载——它可能正卡在限流退避的 delay 里。
-                // 不取消的话,这个 collect 会等旧的退避结束(最坏 2 分钟)才轮到处理新 cid,
-                // 表现为切视频之后字幕迟迟不出来,而退避本来只该拖慢它自己那一条。
-                //
-                // 这条 Job 挡的是**同一条视频内换分 P**;换视频由 videoScope 整组取消负责。
+                // 换 cid 就取消上一条还没跑完的轨道与正文加载。
+                // 这两条 Job 挡的是**同一条视频内换分 P**;换视频由 videoScope 整组取消负责。
                 subtitleTracksJob?.cancel()
+                subtitleCuesJob?.cancel()
                 if (cid == 0L) {
                     // 哪一 P 还没有答案(换 P 按下的那一刻,服务的 playPart 就报 0)。
                     // 正在显示的那一句属于上一 P,清掉——和弹幕池同一条决策(owner 定:切 P 把
@@ -887,24 +888,36 @@ class VideoViewModel(
         _subtitleTracks.value = tracks
         // 换 P 或换视频之后继续用上次选的那条(按语言代码找);找不到就关掉,不自动挑一条——
         // "默认关"是产品要求,不是"还没设置过"才关。
-        val track = tracks.firstOrNull { it.lan == _subtitleLan.value }
-        _subtitleCues.value = track?.let { subtitleRepository.getCues(it.subtitleUrl) }.orEmpty()
+        val selectedLan = _subtitleLan.value
+        val track = tracks.firstOrNull { it.lan == selectedLan }
+        if (track == null) {
+            _subtitleCues.value = emptyList()
+            return
+        }
+        val cues = subtitleRepository.getCues(track.subtitleUrl)
+        if (_subtitleLan.value == selectedLan) {
+            _subtitleCues.value = cues
+        }
     }
 
     /** 用户在控制条的字幕菜单里选了一条轨(或选了"关")。[lan] 为空字符串表示关。 */
     fun selectSubtitle(lan: String) {
         _subtitleLan.value = lan
+        subtitleCuesJob?.cancel()
         // persistScope:选完字幕紧接着退出页面是常见操作,而退出会取消 viewModelScope,
         // DataStore 的 edit 又是挂起函数,不脱离页面的话这次选择会在写盘前被砍掉。
         persistScope.launch { settings.saveSubtitleLan(lan) }
         val track = _subtitleTracks.value.firstOrNull { it.lan == lan }
-        if (track == null) {
-            _subtitleCues.value = emptyList()
-            return
-        }
+        _subtitleCues.value = emptyList()
+        if (track == null) return
         // videoScope:切走之后这一次拉取的结果不该再落到新视频的字幕上。落盘那一句在上面,
         // 走的是 persistScope,不受这里的取消影响。
-        videoScope.launch { _subtitleCues.value = subtitleRepository.getCues(track.subtitleUrl) }
+        subtitleCuesJob = videoScope.launch {
+            val cues = subtitleRepository.getCues(track.subtitleUrl)
+            if (_subtitleLan.value == lan) {
+                _subtitleCues.value = cues
+            }
+        }
     }
 
     /**

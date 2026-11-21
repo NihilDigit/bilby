@@ -46,7 +46,7 @@ data class SubtitleTrackDto(
     @SerialName("lan_doc") val lanDoc: String = "",
     /** 1 = AI 生成。 */
     val type: Int = 0,
-    /** 协议相对地址(`//aisubtitle.hdslb.com/...`),取正文前要自己补 `https:`。 */
+    /** 协议相对(`//aisubtitle.hdslb.com/...`)或 `http://` 地址,取正文前要统一经 `toHttpsUrl()` 升为 `https://`。 */
     @SerialName("subtitle_url") val subtitleUrl: String = "",
 )
 
