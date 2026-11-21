@@ -67,6 +67,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.PlaylistPlay
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Search
@@ -3788,7 +3789,7 @@ private fun OfflineRoute(
         if (trimmedQuery.isEmpty()) {
             items
         } else {
-            items.filter { matchesLibraryQuery(trimmedQuery, it.title, it.partTitle, it.upName, it.bvid) }
+            items.filter { matchesLibraryQuery(trimmedQuery, it.title, it.partTitle, it.upName, it.bvid, it.seasonTitle) }
         }
     }
     val selected = items.filter { it.id in selectedIds.orEmpty() }
@@ -3869,6 +3870,13 @@ private fun OfflineRoute(
                 val ids = selectedIds ?: emptySet()
                 val all = remember(visibleItems) { visibleItems.map { it.id }.toSet() }
                 val allSelected = all.isNotEmpty() && ids == all
+                val hasPausable = selected.any {
+                    it.status == OfflineStatus.Queued || it.status == OfflineStatus.Running
+                }
+                val hasResumable = selected.any {
+                    it.status == OfflineStatus.Paused || it.status == OfflineStatus.Failed
+                }
+                val toolbarActionPadding = PaddingValues(horizontal = Spacing.Cozy, vertical = Spacing.Hair)
                 HorizontalFloatingToolbar(
                     expanded = true,
                     colors = FloatingToolbarDefaults.standardFloatingToolbarColors(),
@@ -3876,10 +3884,63 @@ private fun OfflineRoute(
                     ToggleButton(
                         checked = allSelected,
                         onCheckedChange = { selectedIds = if (allSelected) emptySet() else all },
+                        contentPadding = toolbarActionPadding,
                     ) {
-                        Icon(Icons.Outlined.SelectAll, contentDescription = null)
+                        Icon(
+                            Icons.Outlined.SelectAll,
+                            contentDescription = null,
+                            modifier = Modifier.size(Dimens.IconInline),
+                        )
                         Spacer(Modifier.width(Spacing.Hair))
-                        Text(stringResource(Res.string.offline_sheet_select_all))
+                        Text(
+                            stringResource(Res.string.offline_sheet_select_all),
+                            maxLines = 1,
+                            softWrap = false,
+                        )
+                    }
+                    if (hasPausable) {
+                        Spacer(Modifier.width(Spacing.Tight))
+                        FilledTonalButton(
+                            onClick = {
+                                vm.pauseSelected(ids)
+                                selectedIds = null
+                            },
+                            contentPadding = toolbarActionPadding,
+                        ) {
+                            Icon(
+                                Icons.Filled.Pause,
+                                contentDescription = null,
+                                modifier = Modifier.size(Dimens.IconInline),
+                            )
+                            Spacer(Modifier.width(Spacing.Hair))
+                            Text(
+                                stringResource(Res.string.player_pause),
+                                maxLines = 1,
+                                softWrap = false,
+                            )
+                        }
+                    }
+                    if (hasResumable) {
+                        Spacer(Modifier.width(Spacing.Tight))
+                        FilledTonalButton(
+                            onClick = {
+                                vm.resumeSelected(ids)
+                                selectedIds = null
+                            },
+                            contentPadding = toolbarActionPadding,
+                        ) {
+                            Icon(
+                                Icons.Filled.PlayArrow,
+                                contentDescription = null,
+                                modifier = Modifier.size(Dimens.IconInline),
+                            )
+                            Spacer(Modifier.width(Spacing.Hair))
+                            Text(
+                                stringResource(Res.string.offline_action_resume),
+                                maxLines = 1,
+                                softWrap = false,
+                            )
+                        }
                     }
                     Spacer(Modifier.width(Spacing.Tight))
                     DestructiveConfirmButton(
@@ -3887,7 +3948,7 @@ private fun OfflineRoute(
                         enabled = selected.isNotEmpty(),
                         onClick = {
                             // 一个字节都还没下的那些直接删,理由同单条(见 OfflineScreen)。
-                            if (selected.all { it.status == OfflineStatus.Queued }) {
+                            if (selected.all { it.status == OfflineStatus.Queued && it.downloadedBytes == 0L }) {
                                 vm.deleteAll(selected)
                                 selectedIds = null
                             } else {
