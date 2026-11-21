@@ -19,12 +19,15 @@ import java.lang.foreign.ValueLayout.JAVA_CHAR
 import java.lang.foreign.ValueLayout.JAVA_INT
 import java.lang.foreign.ValueLayout.JAVA_INT_UNALIGNED
 import java.lang.foreign.ValueLayout.JAVA_LONG
+import java.lang.foreign.ValueLayout.JAVA_LONG_UNALIGNED
 import java.lang.foreign.ValueLayout.JAVA_SHORT_UNALIGNED
 import java.lang.invoke.MethodHandle
 import java.lang.invoke.MethodHandles
 import java.lang.invoke.MethodType
 import java.util.UUID
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 import javax.swing.SwingUtilities
 
@@ -69,6 +72,7 @@ private class WindowsSmtcBridge(private val playback: DesktopPlaybackHost) {
     private var eventToken: Long = 0L
     private var hasEventToken = false
     private var callbackArena: Arena? = null
+    private var callback: ButtonPressedComCallback? = null
     private var initialized = false
     private var closed = false
 
@@ -104,12 +108,21 @@ private class WindowsSmtcBridge(private val playback: DesktopPlaybackHost) {
     }
 
     fun close() {
-        executor.execute {
-            if (closed) return@execute
-            closed = true
-            runCatching { releaseOnWorker() }
-                .onFailure { BiliLog.w("SMTC 释放失败", it) }
-        }
+        val latch = CountDownLatch(1)
+        runCatching {
+            executor.execute {
+                try {
+                    if (!closed) {
+                        closed = true
+                        runCatching { releaseOnWorker() }
+                            .onFailure { BiliLog.w("SMTC 释放失败", it) }
+                    }
+                } finally {
+                    latch.countDown()
+                }
+            }
+        }.onFailure { latch.countDown() }
+        runCatching { latch.await(2, TimeUnit.SECONDS) }
         executor.shutdown()
     }
 
@@ -163,19 +176,21 @@ private class WindowsSmtcBridge(private val playback: DesktopPlaybackHost) {
             }
 
             val cbArena = Arena.ofShared()
-            val handlerObj = ButtonPressedComCallback(playback, cbArena).segment
+            val cb = ButtonPressedComCallback(playback, cbArena)
             val outToken = local.allocate(JAVA_LONG)
             val addPressed = vtableCall(
                 smtc,
                 SLOT_SMTC_ADD_BUTTON_PRESSED,
                 FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, ADDRESS),
             )
-            val hrAdd = addPressed.invokeExact(smtc, handlerObj, outToken) as Int
+            val hrAdd = addPressed.invokeExact(smtc, cb.segment, outToken) as Int
             if (hrAdd >= 0) {
                 callbackArena = cbArena
+                callback = cb
                 eventToken = outToken.get(JAVA_LONG, 0L)
                 hasEventToken = true
             } else {
+                BiliLog.w("SMTC add_ButtonPressed 失败: HRESULT=0x%08X".format(hrAdd))
                 cbArena.close()
             }
             initialized = true
@@ -271,6 +286,10 @@ private class WindowsSmtcBridge(private val playback: DesktopPlaybackHost) {
             hasEventToken = false
         }
         if (updater != MemorySegment.NULL) {
+            val clearAll = vtableCall(updater, SLOT_UPDATER_CLEAR_ALL, FunctionDescriptor.of(JAVA_INT, ADDRESS))
+            clearAll.invokeExact(updater) as Int
+            val update = vtableCall(updater, SLOT_UPDATER_UPDATE, FunctionDescriptor.of(JAVA_INT, ADDRESS))
+            update.invokeExact(updater) as Int
             releaseCom(updater)
             updater = MemorySegment.NULL
         }
@@ -279,6 +298,8 @@ private class WindowsSmtcBridge(private val playback: DesktopPlaybackHost) {
             releaseCom(smtc)
             smtc = MemorySegment.NULL
         }
+        // 在 remove_ButtonPressed 返回后再释放回调强引用与 Arena,避免 WinRT 仍在持有函数指针时释放内存
+        callback = null
         callbackArena?.close()
         callbackArena = null
     }
@@ -504,8 +525,10 @@ private fun Arena.guid(spec: String): MemorySegment {
     return seg
 }
 
+/** Windows COM GUID 按 4 字节对齐,不能按 8 字节对齐的 JAVA_LONG 读取。 */
 private fun guidEquals(a: MemorySegment, b: MemorySegment): Boolean =
-    a.get(JAVA_LONG, 0L) == b.get(JAVA_LONG, 0L) && a.get(JAVA_LONG, 8L) == b.get(JAVA_LONG, 8L)
+    a.get(JAVA_LONG_UNALIGNED, 0L) == b.get(JAVA_LONG_UNALIGNED, 0L) &&
+        a.get(JAVA_LONG_UNALIGNED, 8L) == b.get(JAVA_LONG_UNALIGNED, 8L)
 
 private val isWindowsOs: Boolean =
     System.getProperty("os.name").orEmpty().contains("Windows", ignoreCase = true)
@@ -526,16 +549,17 @@ private const val RO_INIT_MULTITHREADED = 1
 private const val SLOT_IUNKNOWN_RELEASE = 2
 private const val SLOT_INTEROP_GET_FOR_WINDOW = 6
 
+// 全部槽位对照 Windows SDK 10.0.26100.0 (SystemMediaTransportControlsInterop.h & winrt/windows.media.h) 逐项核对
 private const val SLOT_SMTC_PUT_PLAYBACK_STATUS = 7
 private const val SLOT_SMTC_GET_DISPLAY_UPDATER = 8
 private const val SLOT_SMTC_PUT_IS_ENABLED = 11
 private const val SLOT_SMTC_PUT_IS_PLAY_ENABLED = 13
 private const val SLOT_SMTC_PUT_IS_STOP_ENABLED = 15
 private const val SLOT_SMTC_PUT_IS_PAUSE_ENABLED = 17
-private const val SLOT_SMTC_PUT_IS_PREVIOUS_ENABLED = 23
-private const val SLOT_SMTC_PUT_IS_NEXT_ENABLED = 25
-private const val SLOT_SMTC_ADD_BUTTON_PRESSED = 30
-private const val SLOT_SMTC_REMOVE_BUTTON_PRESSED = 31
+private const val SLOT_SMTC_PUT_IS_PREVIOUS_ENABLED = 25
+private const val SLOT_SMTC_PUT_IS_NEXT_ENABLED = 27
+private const val SLOT_SMTC_ADD_BUTTON_PRESSED = 32
+private const val SLOT_SMTC_REMOVE_BUTTON_PRESSED = 33
 
 private const val SLOT_UPDATER_PUT_TYPE = 7
 private const val SLOT_UPDATER_GET_MUSIC_PROPS = 12
