@@ -1,6 +1,5 @@
 package dev.bilby.desktop
 
-import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -299,7 +298,7 @@ internal fun FrameWindowScope.WindowFrame(
             }
 
             val appFullscreen = LocalAppFullscreen.current
-            AnimatedVisibility(
+            androidx.compose.animation.AnimatedVisibility(
                 visible = fullscreenRevealBar && revealOpen,
                 enter = slideInVertically(
                     animationSpec = MaterialTheme.motionScheme.fastSpatialSpec(),
