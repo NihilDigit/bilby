@@ -31,6 +31,17 @@ plugins {
     alias(libs.plugins.kotlin.compose)
 }
 
+val isReleaseTaskRequested = gradle.startParameter.taskNames.any {
+    it.contains("Release", ignoreCase = true)
+}
+val enableAbiSplits = providers.gradleProperty("bilby.enableAbiSplits")
+    .map { it.toBoolean() }
+    .orElse(isReleaseTaskRequested)
+val ciKeystorePath = providers.environmentVariable("BILBY_KEYSTORE")
+val ciKeystorePassword = providers.environmentVariable("BILBY_KEYSTORE_PASSWORD")
+val ciKeyAlias = providers.environmentVariable("BILBY_KEY_ALIAS")
+val ciKeyPassword = providers.environmentVariable("BILBY_KEY_PASSWORD")
+
 android {
     // dev.bilby 归 :shared(R 类在那边),这里只生成 BuildConfig
     namespace = "dev.bilby.app"
@@ -51,10 +62,11 @@ android {
      * 按 ABI 拆包,外加一个通用包。三个单架构变体各只带自己那一份 `.so`(media3 与
      * datastore 都有原生库),体积更小;通用包是给不知道自己该下哪个的人和存档用的,
      * 侧载分发没有商店替用户挑架构,少了它每次都要先问一句"你的机器是什么架构"。
+     * 本地 Debug 默认关闭拆包以缩短构建图生成时间,Release 构建自动开启。
      */
     splits {
         abi {
-            isEnable = true
+            isEnable = enableAbiSplits.get()
             reset()
             include("armeabi-v7a", "arm64-v8a", "x86_64")
             isUniversalApk = true
@@ -69,10 +81,10 @@ android {
      */
     signingConfigs {
         create("ci") {
-            storeFile = System.getenv("BILBY_KEYSTORE")?.let(::file)
-            storePassword = System.getenv("BILBY_KEYSTORE_PASSWORD")
-            keyAlias = System.getenv("BILBY_KEY_ALIAS")
-            keyPassword = System.getenv("BILBY_KEY_PASSWORD")
+            storeFile = ciKeystorePath.orNull?.let(::file)
+            storePassword = ciKeystorePassword.orNull
+            keyAlias = ciKeyAlias.orNull
+            keyPassword = ciKeyPassword.orNull
         }
     }
 
@@ -91,7 +103,7 @@ android {
             buildConfigField("String", "LLM_API_KEY", "\"\"")
             buildConfigField("String", "LLM_MODEL", "\"\"")
             signingConfig = signingConfigs.getByName(
-                if (System.getenv("BILBY_KEYSTORE") != null) "ci" else "debug",
+                if (ciKeystorePath.isPresent) "ci" else "debug",
             )
             isMinifyEnabled = true
             isShrinkResources = true

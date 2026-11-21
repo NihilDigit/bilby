@@ -92,7 +92,7 @@ val mpvRuntimeJar = configurations.detachedConfiguration(dependencies.create(mpv
 val zstdJniJar = configurations.detachedConfiguration(
     dependencies.create("${libs.zstd.jni.get()}:$zstdClassifier"),
 ).apply { isTransitive = false }
-val bundledAppResources by tasks.registering(Sync::class) {
+val bundledAppResources = tasks.register<Sync>("bundledAppResources") {
     from({ mpvRuntimeJar.map { zipTree(it) } }) {
         include("*.dll", "*.txt")
         into("mpv")
@@ -443,4 +443,65 @@ tasks.register<CaptureScreenshotsTask>("captureScreenshots") {
     workingDirectoryPath = rootProject.projectDir.absolutePath
     versionName = releaseVersionName
     argFile = layout.buildDirectory.file("screenshot/jvm.args")
+}
+
+/**
+ * 导出开发版独立启动参数文件(@argfile)与 Azul JDK 25 可执行路径,配合 scripts/run-desktop.ps1 直接拉起桌面窗口,
+ * 避免 `./gradlew :desktop:run` 在窗口运行期间持续占用 Gradle Daemon。
+ */
+abstract class WriteDevLaunchArgsTask : DefaultTask() {
+    @get:Input
+    abstract val javaExecutable: Property<String>
+
+    @get:Input
+    abstract val mainClass: Property<String>
+
+    @get:Input
+    abstract val jvmArgs: ListProperty<String>
+
+    @get:Input
+    abstract val appResourcesDir: Property<String>
+
+    @get:Classpath
+    abstract val runtimeClasspath: ConfigurableFileCollection
+
+    @get:OutputDirectory
+    abstract val outputDir: DirectoryProperty
+
+    @TaskAction
+    fun write() {
+        val dir = outputDir.get().asFile.apply { mkdirs() }
+        dir.resolve("java-exec.txt").writeText(javaExecutable.get(), Charsets.UTF_8)
+        val cp = runtimeClasspath.files.joinToString(File.pathSeparator) { it.absolutePath }
+        val lines = buildList {
+            jvmArgs.get().forEach { add(quoteArg(it)) }
+            add(quoteArg("-Dcompose.application.resources.dir=${appResourcesDir.get()}"))
+            add("-cp")
+            add(quoteArg(cp))
+            add(mainClass.get())
+        }
+        dir.resolve("bilby.args").writeText(lines.joinToString("\n", postfix = "\n"), Charsets.UTF_8)
+    }
+
+    private fun quoteArg(value: String): String =
+        "\"" + value.replace("\\", "\\\\").replace("\"", "\\\"") + "\""
+}
+
+tasks.register<WriteDevLaunchArgsTask>("prepareDevLaunch") {
+    dependsOn("jar", bundledAppResources)
+    javaExecutable.set(packagingLauncher.map { it.executablePath.asFile.absolutePath })
+    mainClass.set("dev.bilby.desktop.MainKt")
+    jvmArgs.set(
+        buildList {
+            add("--enable-native-access=ALL-UNNAMED")
+            add("-XX:+ExplicitGCInvokesConcurrent")
+            add("-Dbilby.version=$releaseVersionName")
+            add("-Dbilby.upgrade-code=$msiUpgradeUuid")
+            providers.gradleProperty("bilbyDebug").orNull?.let { add("-Dbilby.debug=$it") }
+        },
+    )
+    appResourcesDir.set(bundledAppResources.map { it.destinationDir.absolutePath })
+    runtimeClasspath.from(tasks.named("jar"))
+    runtimeClasspath.from(configurations.named("runtimeClasspath"))
+    outputDir.set(layout.buildDirectory.dir("dev-launch"))
 }
