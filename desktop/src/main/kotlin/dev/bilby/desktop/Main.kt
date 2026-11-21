@@ -291,11 +291,10 @@ fun main(args: Array<String>) {
                             icon = appIcon,
                             // 全屏与小窗里整个窗口都是画面。
                             showTitleBar = !windowsFullscreen.isFullscreen && !windowsPip.active,
-                            fullscreenRevealBar = windowsFullscreen.isFullscreen &&
+                            inAppFullscreen = windowsFullscreen.isFullscreen &&
                                 appFullscreen &&
                                 !playerFullscreen &&
                                 !windowsPip.active,
-                            onRequestClose = quit,
                         ) {
                             // 换语言:整棵界面拆掉一帧再建回来,等价于 Android 上换语言时 Activity 重建。
                             // 已经组合出来的文案不会因为默认 Locale 变了而自己重取,只有重新组合才会。

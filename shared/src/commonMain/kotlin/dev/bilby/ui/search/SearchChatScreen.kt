@@ -3,7 +3,6 @@ package dev.bilby.ui.search
 import dev.bilby.ui.BackHandler
 import dev.bilby.ui.CaptionDragHeight
 import dev.bilby.ui.CaptionSlot
-import dev.bilby.ui.LocalWindowCaption
 import dev.bilby.ui.components.BilbyTooltip
 import dev.bilby.ui.rememberCaptionSlot
 import dev.bilby.ui.windowDragArea
@@ -717,8 +716,8 @@ private fun LandingTopBar(
     wide: Boolean,
     trailing: (@Composable () -> Unit)?,
 ) {
-    if (LocalWindowCaption.current == null && trailing == null) return
     val captionSlot = rememberCaptionSlot()
+    if (!captionSlot.active && captionSlot.buttons == null && trailing == null) return
     val hasTrailing = trailing != null || captionSlot.buttons != null
     Row(
         verticalAlignment = Alignment.CenterVertically,

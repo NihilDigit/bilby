@@ -209,8 +209,8 @@ fun RefreshBox(
 
 /**
  * 顶栏上的刷新按钮：
- * - 始终通过 [RegisterPageRefresh] 登记当前页面的刷新能力（供 `F5` / `Ctrl+R` 与桌面标题栏/全屏唤出栏调用）。
- * - 桌面窗口（[LocalIsDesktopWindow]）中刷新已统一收归至右上角与窗口控制键平级的位置，此处不再绘制行内图标按钮。
+ * - 始终通过 [RegisterPageRefresh] 登记当前页面的刷新能力（供 `F5` / `Ctrl+R` 与桌面右上角窗口动作区调用）。
+ * - 桌面窗口（[LocalIsDesktopWindow]）中刷新已统一收归至右上角与全屏/窗口控制键平级的位置（同样仅在非触控模式下显示），此处不再绘制行内图标按钮。
  * - 非桌面端仅在键鼠模式（`!isTouchLike`）下绘制行内刷新按钮；触屏端由 [RefreshBox] 下拉手势承担，避免双入口。
  */
 @Composable
