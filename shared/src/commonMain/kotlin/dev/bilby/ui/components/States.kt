@@ -45,8 +45,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import dev.bilby.resources.*
-import dev.bilby.ui.LocalAppFullscreen
-import dev.bilby.ui.LocalWindowCaption
+import dev.bilby.ui.LocalIsDesktopWindow
 import dev.bilby.ui.theme.Spacing
 import dev.bilby.ui.theme.rememberReducedMotion
 
@@ -209,19 +208,16 @@ fun RefreshBox(
 }
 
 /**
- * 顶栏上的刷新按钮,给用鼠标的人:鼠标没法下拉,[RefreshBox] 在最近一次输入是鼠标时关掉了
- * 下拉手势,刷新入口就挪到这里。**用手指时不出现**:那时下拉就是刷新入口,顶栏再摆一个是
- * 同一件事的两个入口。判据跟 [RefreshBox] 是同一个([PointerSource]),两者此消彼长。
- *
- * 刷新中转圈而不是禁用:按下之后看得出它在做事,也不会连点出第二次请求。
+ * 顶栏上的刷新按钮：
+ * - 始终通过 [RegisterPageRefresh] 登记当前页面的刷新能力（供 `F5` / `Ctrl+R` 与桌面标题栏/全屏唤出栏调用）。
+ * - 桌面窗口（[LocalIsDesktopWindow]）中刷新已统一收归至右上角与窗口控制键平级的位置，此处不再绘制行内图标按钮。
+ * - 非桌面端仅在键鼠模式（`!isTouchLike`）下绘制行内刷新按钮；触屏端由 [RefreshBox] 下拉手势承担，避免双入口。
  */
 @Composable
 fun RefreshAction(refreshing: Boolean, onRefresh: () -> Unit) {
     RegisterPageRefresh(refreshing = refreshing, onRefresh = onRefresh)
-    if (LocalPointerSource.current.isTouchLike &&
-        LocalAppFullscreen.current == null &&
-        LocalWindowCaption.current == null
-    ) return
+    if (LocalIsDesktopWindow.current) return
+    if (LocalPointerSource.current.isTouchLike) return
     if (refreshing) {
         Box(modifier = Modifier.size(48.dp), contentAlignment = Alignment.Center) { LoadingSpinner() }
     } else {

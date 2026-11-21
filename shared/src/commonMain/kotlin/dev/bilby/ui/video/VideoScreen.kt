@@ -3,6 +3,7 @@ package dev.bilby.ui.video
 import dev.bilby.ui.BackHandler
 import dev.bilby.ui.DesktopIslandFrame
 import dev.bilby.ui.DesktopIslandSurface
+import dev.bilby.ui.LocalIsDesktopWindow
 import dev.bilby.ui.LocalPlaybackHost
 import dev.bilby.ui.LocalSystemActions
 import dev.bilby.ui.LocalWindowCaption
@@ -112,6 +113,7 @@ import dev.bilby.data.DanmakuPrefsEditor
 import dev.nihildigit.danmaku.Danmaku
 import dev.nihildigit.danmaku.SpecialDanmaku
 import dev.bilby.ui.comment.CommentSection
+import dev.bilby.ui.comment.CommentSortMenu
 import dev.bilby.ui.comment.CommentUiState
 import dev.bilby.ui.listen.ListenScreen
 import dev.bilby.ui.CaptionDragHeight
@@ -141,13 +143,14 @@ import dev.bilby.ui.components.SidePaneLayer
 import dev.bilby.ui.components.collapsingHeader
 import dev.bilby.ui.components.rememberSidePaneState
 import dev.bilby.ui.components.rememberCollapsingHeaderState
-import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.width
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import dev.bilby.data.SideSheetPrefs
 import dev.bilby.ui.components.SplitPaneResizeHandle
 import dev.bilby.ui.player.PlayerTooltip
+import dev.bilby.ui.theme.Breakpoints
 
 /**
  * 视频页在队列栈里的那一帧(docs/queue-redesign.md 决定 3):帧 id 与点开时的入口上下文,
@@ -267,7 +270,11 @@ fun VideoScreen(
     val system = LocalSystemActions.current
     var controller by remember { mutableStateOf<PlayerHandle?>(null) }
     var fullscreen by rememberSaveable { mutableStateOf(false) }
-    RegisterPlayerFullscreenExit(isFullscreen = fullscreen, onExit = { fullscreen = false })
+    // 进入听视频时同步退出播放器全屏（应用级全屏保持不变），避免退出听视频后画面反跳回播放器全屏。
+    LaunchedEffect(listening) {
+        if (listening && fullscreen) fullscreen = false
+    }
+    RegisterPlayerFullscreenExit(isFullscreen = fullscreen && !listening, onExit = { fullscreen = false })
 
     val currentOnAuthorResolved by rememberUpdatedState(onAuthorResolved)
     LaunchedEffect(state.detail?.bvid, state.detail?.up?.mid, state.detail?.staff, bvid) {
@@ -462,6 +469,10 @@ fun VideoScreen(
             errorAfter = queue.errorAfter,
             remainingBefore = queue.remainingBefore,
             remainingAfter = queue.remainingAfter,
+            loadingAll = queue.loadingAll,
+            onLoadAll = { send(PlaybackCommand.LoadAllQueue) },
+            onCancelLoadAll = { send(PlaybackCommand.CancelLoadAllQueue) },
+            totalCount = queue.sourceTotal,
         )
     }
 
@@ -665,25 +676,28 @@ fun VideoScreen(
      *
      * @param refreshEnabled 播放器收起着的时候下滑的意思是"把它拉回来",不是刷新(见 CommentSection)。
      */
-    val commentsPane: @Composable (Modifier, Boolean) -> Unit = { paneModifier, refreshEnabled ->
-        paneStates.SaveableStateProvider(CommentsStateKey) {
-            CommentSection(
-                state = commentState,
-                onSort = onCommentSort,
-                onRefresh = onCommentRefresh,
-                refreshEnabled = refreshEnabled,
-                onLoadMore = onCommentLoadMore,
-                onExpandReplies = onExpandReplies,
-                onSend = onSendComment,
-                onLike = onLikeComment,
-                onDelete = onDeleteComment,
-                onSeek = seekToTimestamp,
-                onUserClick = onUpClick,
-                onOpenLink = onOpenLink,
-                modifier = paneModifier,
-            )
+    val commentsPane: @Composable (Modifier, Boolean, Boolean, Boolean) -> Unit =
+        { paneModifier, refreshEnabled, showInlineSortBar, registerPageRefresh ->
+            paneStates.SaveableStateProvider(CommentsStateKey) {
+                CommentSection(
+                    state = commentState,
+                    onSort = onCommentSort,
+                    onRefresh = onCommentRefresh,
+                    refreshEnabled = refreshEnabled,
+                    showInlineSortBar = showInlineSortBar,
+                    registerPageRefresh = registerPageRefresh,
+                    onLoadMore = onCommentLoadMore,
+                    onExpandReplies = onExpandReplies,
+                    onSend = onSendComment,
+                    onLike = onLikeComment,
+                    onDelete = onDeleteComment,
+                    onSeek = seekToTimestamp,
+                    onUserClick = onUpClick,
+                    onOpenLink = onOpenLink,
+                    modifier = paneModifier,
+                )
+            }
         }
-    }
 
     // TODO(动效):听视频与全屏在 M3 里都属于 container transform 的 "within a screen"
     // 子类——同一个容器改形态,播放器是 persistent element。现在三种形态是三段各自 return
@@ -736,7 +750,7 @@ fun VideoScreen(
                 subtitleLan = subtitleLan,
                 onSelectSubtitle = onSelectSubtitle,
                 subtitleCues = subtitleCues,
-                comments = { paneModifier -> commentsPane(paneModifier, true) },
+                comments = { paneModifier -> commentsPane(paneModifier, true, true, true) },
                 // 听视频这一屏是普通页面(封面 + 控件),不是全出血的媒体,所以要像导航层那样
                 // 躲开横向挖孔 —— 播放页整个目的地被排除在 `CutoutSafe` 之外,这里没人替它做。
                 modifier = listenModifier,
@@ -746,7 +760,7 @@ fun VideoScreen(
         DesktopIslandFrame {
             if (nightBanner == null) {
                 renderListen(baseListenModifier)
-            } else if (LocalWindowCaption.current == null) {
+            } else if (!LocalIsDesktopWindow.current) {
                 Column(modifier = baseListenModifier) {
                     Box(
                         modifier = Modifier
@@ -1219,9 +1233,20 @@ fun VideoScreen(
                 onLoadTags = onLoadTags,
                 onTagClick = onTagClick,
                 commentTotal = commentState.total,
-                comments = { commentModifier ->
+                comments = { commentModifier, showInlineSortBar, registerPageRefresh ->
                     // 画面收起着的时候下滑先把它拉回来,那一下不该被读成刷新。
-                    commentsPane(commentModifier, commentsRefreshEnabled)
+                    commentsPane(
+                        commentModifier,
+                        commentsRefreshEnabled,
+                        showInlineSortBar,
+                        registerPageRefresh,
+                    )
+                },
+                commentHeaderAction = {
+                    CommentSortMenu(
+                        sort = commentState.sort,
+                        onSort = onCommentSort,
+                    )
                 },
                 // 点闪光:没问过就发起检索,问过就只是把 sheet 再打开 —— 再点一次重跑
                 // 会把已有结果冲掉,而用户此刻多半只是想再看一眼。
@@ -1231,7 +1256,10 @@ fun VideoScreen(
                         relatedOpen = true
                     }
                 },
-                onListen = { onListeningChange(true) },
+                onListen = {
+                    fullscreen = false
+                    onListeningChange(true)
+                },
                 danmakuInput = DanmakuInput(
                     open = danmakuInputOpen,
                     draft = { danmakuDraftState.value },
@@ -1320,16 +1348,23 @@ fun VideoScreen(
         if (!immersive) LocalWindowCaption.current?.Host()
         // 主区约三分之二,和规范给的比例一致。**全屏也走这个分支**,只是右栏不组合、
         // 左栏权重给满 —— 这样进出全屏时布局树的形状不变,播放器不会重挂。
+        val density = LocalDensity.current
+        var containerWidth by remember { mutableStateOf(0.dp) }
+        val effectiveWidth = if (containerWidth > 0.dp) containerWidth else Breakpoints.Expanded
         CompositionLocalProvider(LocalSidePane provides sidePane) {
-        BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .onSizeChanged { containerWidth = with(density) { it.width.toDp() } },
+        ) {
             var draggingWidth by remember { mutableStateOf<Dp?>(null) }
             val minPanelWidth = 320.dp
-            val maxPanelWidth = (maxWidth - 440.dp).coerceAtLeast(minPanelWidth)
-            val defaultPanelWidth = (maxWidth / 3).coerceIn(minPanelWidth, 440.dp)
+            val maxPanelWidth = (effectiveWidth - 440.dp).coerceAtLeast(minPanelWidth)
+            val defaultPanelWidth = (effectiveWidth / 3).coerceIn(minPanelWidth, 440.dp)
             val panelWidth = (draggingWidth ?: panelPrefs?.widthDp?.dp ?: defaultPanelWidth)
                 .coerceIn(minPanelWidth, maxPanelWidth)
 
-            val desktopFramed = !immersive && LocalWindowCaption.current != null
+            val desktopFramed = !immersive && LocalIsDesktopWindow.current
             val frameBezel = if (desktopFramed) Spacing.Tight else 0.dp
             val leftPlayerShape = when {
                 immersive -> RectangleShape

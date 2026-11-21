@@ -213,6 +213,7 @@ import dev.bilby.ui.components.SectionHeader
 import dev.bilby.ui.components.StatRow
 import dev.bilby.ui.components.VideoRow
 import dev.bilby.ui.components.VideoRowUi
+import dev.bilby.ui.LocalWindowCaption
 import dev.bilby.ui.rememberCaptionSlot
 import dev.bilby.ui.theme.Dimens
 import dev.bilby.ui.theme.Spacing
@@ -306,6 +307,8 @@ data class QueueUiState(
 )
 
 private const val VideoTabIntro = 0
+private const val VideoTabComments = 1
+private val TabBarInlineSortMinWidth = 420.dp
 
 const val VideoTabCount = 2
 
@@ -330,8 +333,13 @@ fun VideoTabs(
     onTagClick: ((String) -> Unit)?,
     /** 服务端给的评论总数,标签上用。 */
     commentTotal: Int,
-    /** 评论页的内容。由 VideoScreen 搭好,听视频那一屏用的是同一份,见那里的 commentsPane。 */
-    comments: @Composable (Modifier) -> Unit,
+    /**
+     * 评论页的内容。由 VideoScreen 搭好,听视频那一屏用的是同一份,见那里的 commentsPane。
+     * `showInlineSortBar` 为 false 时表示排序菜单已并入顶部标签行；`registerPageRefresh` 标明评论页此刻是否为激活页。
+     */
+    comments: @Composable (modifier: Modifier, showInlineSortBar: Boolean, registerPageRefresh: Boolean) -> Unit,
+    /** 双栏无弹幕胶囊且处于评论页时，并入顶部标签行的轻量排序菜单。 */
+    commentHeaderAction: (@Composable () -> Unit)? = null,
     onFindRelated: (() -> Unit)?,
     /** 写弹幕,见 [DanmakuInput]。 */
     danmakuInput: DanmakuInput,
@@ -421,10 +429,17 @@ fun VideoTabs(
          * **不画底下那条通栏分割线。** 它标的是"铺满全宽的标签栏"的下沿;标签靠左之后线还画到头,
          * 读起来是一条和标签无关的横杠。和窄屏那一行一样,与下面的内容只靠留白分开。
          */
+        val onCommentsTab = pagerState.currentPage == VideoTabComments
+        var stripWidth by remember { mutableStateOf(0.dp) }
+        val hasDesktopCaption = LocalWindowCaption.current != null
+        val hoistSortToTabBar = !showDanmakuCapsule &&
+            commentHeaderAction != null &&
+            (!hasDesktopCaption || stripWidth == 0.dp || stripWidth >= TabBarInlineSortMinWidth)
         if (!showDanmakuCapsule) {
-            val captionSlot = rememberCaptionSlot()
+            val captionSlot = rememberCaptionSlot(
+                dragGap = if (hoistSortToTabBar && onCommentsTab) Spacing.Hair else null,
+            )
             val density = LocalDensity.current
-            var stripWidth by remember { mutableStateOf(0.dp) }
             Box(
                 modifier = captionSlot.modifier
                     .fillMaxWidth()
@@ -456,6 +471,15 @@ fun VideoTabs(
                             .height(48.dp)
                             .windowDragArea(captionSlot.atTop),
                     )
+                    if (hoistSortToTabBar && onCommentsTab && commentHeaderAction != null) {
+                        Box(
+                            modifier = Modifier.padding(
+                                end = if (captionSlot.buttons != null) 0.dp else Spacing.Tight,
+                            ),
+                        ) {
+                            commentHeaderAction()
+                        }
+                    }
                     captionSlot.buttons?.invoke()
                 }
             }
@@ -573,7 +597,11 @@ fun VideoTabs(
                     onSeek = onSeek,
                 )
 
-                else -> comments(Modifier.fillMaxSize())
+                else -> comments(
+                    Modifier.fillMaxSize(),
+                    !hoistSortToTabBar,
+                    pagerState.currentPage == VideoTabComments,
+                )
             }
         }
         }

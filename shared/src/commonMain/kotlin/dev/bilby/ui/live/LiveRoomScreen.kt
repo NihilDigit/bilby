@@ -4,6 +4,7 @@ import dev.bilby.ui.BackHandler
 import dev.bilby.ui.CaptionDragHeight
 import dev.bilby.ui.CaptionLeadWithDrag
 import dev.bilby.ui.DesktopIslandSurface
+import dev.bilby.ui.LocalIsDesktopWindow
 import dev.bilby.ui.LocalWindowCaption
 import dev.bilby.ui.RegisterPlayerFullscreenExit
 import dev.bilby.ui.rememberCaptionSlot
@@ -282,8 +283,9 @@ fun LiveRoomScreen(
     onPanelWidthChange: (Float) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
-    var fullscreen by remember { mutableStateOf(false) }
-    var locked by remember { mutableStateOf(false) }
+    var fullscreen by rememberSaveable { mutableStateOf(false) }
+    var locked by rememberSaveable { mutableStateOf(false) }
+    LaunchedEffect(fullscreen) { if (!fullscreen) locked = false }
     RegisterPlayerFullscreenExit(isFullscreen = fullscreen, onExit = {
         fullscreen = false
         locked = false
@@ -603,7 +605,7 @@ fun LiveRoomScreen(
             val panelWidth = (draggingWidth ?: panelPrefs?.widthDp?.dp ?: defaultPanelWidth)
                 .coerceIn(minPanelWidth, maxPanelWidth)
 
-            val desktopFramed = !immersive && LocalWindowCaption.current != null
+            val desktopFramed = !immersive && LocalIsDesktopWindow.current
             val frameBezel = if (desktopFramed) Spacing.Tight else 0.dp
             val leftPlayerShape = when {
                 immersive -> RectangleShape
@@ -1040,7 +1042,7 @@ private fun LiveAnchorRow(
     onToggleFollow: () -> Unit,
 ) {
     val captionSlot = rememberCaptionSlot()
-    val hasWindowCaption = LocalWindowCaption.current != null
+    val hasWindowCaption = LocalIsDesktopWindow.current
     val copy = rememberCopyAction()
     val copyTitleLabel = stringResource(Res.string.action_copy_live_title)
     val copyUpNameLabel = stringResource(Res.string.action_copy_up_name)

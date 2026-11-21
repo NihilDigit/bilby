@@ -3,21 +3,33 @@ package dev.bilby.ui.components
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.Stable
 import androidx.compose.runtime.compositionLocalOf
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 
 /**
- * 当前页面刷新的栈式注册表,供桌面端 `F5` / `Ctrl+R` 调用最上层页面的刷新动作。
+ * 当前页面刷新的栈式注册表,供桌面端 `F5` / `Ctrl+R` 以及窗口标题栏/全屏唤出栏的平级刷新按钮
+ * 读取状态并调用最上层页面的刷新动作。
  *
  * 栈尾始终是最近进入组合的那一层(二级面板盖在页面上时先刷面板,收起后回到页面本身)。
  */
+@Stable
 class PageRefreshRegistry {
     private class Entry(
-        var refreshing: Boolean,
+        refreshing: Boolean,
         var onRefresh: () -> Unit,
-    )
+    ) {
+        var refreshing: Boolean by mutableStateOf(refreshing)
+    }
 
-    private val entries = ArrayList<Entry>()
+    private val entries = mutableStateListOf<Entry>()
+
+    val canRefresh: Boolean get() = entries.isNotEmpty()
+    val refreshing: Boolean get() = entries.lastOrNull()?.refreshing == true
 
     @Composable
     fun Register(refreshing: Boolean, onRefresh: () -> Unit) {
@@ -39,7 +51,21 @@ class PageRefreshRegistry {
     }
 }
 
-val LocalPageRefreshRegistry = compositionLocalOf { PageRefreshRegistry() }
+private val DefaultPageRefreshRegistry = PageRefreshRegistry()
+
+val LocalPageRefreshRegistry = compositionLocalOf { DefaultPageRefreshRegistry }
+
+/**
+ * 若外层宿主(如桌面入口 `Main.kt`)已提供 [LocalPageRefreshRegistry] 则直接复用，使窗口标题栏与
+ * 全屏顶部唤出栏与页面内容共享同一份注册表；否则为当前根节点新建一份独立实例。
+ */
+@Composable
+fun rememberPageRefreshRegistry(): PageRefreshRegistry {
+    val current = LocalPageRefreshRegistry.current
+    return remember(current) {
+        if (current !== DefaultPageRefreshRegistry) current else PageRefreshRegistry()
+    }
+}
 
 @Composable
 fun RegisterPageRefresh(refreshing: Boolean = false, onRefresh: () -> Unit) {
