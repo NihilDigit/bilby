@@ -1163,4 +1163,13 @@
     <string name="nav_custom_settings_required_hint">Required entry, cannot be hidden</string>
     <string name="nav_custom_move_up">Move up</string>
     <string name="nav_custom_move_down">Move down</string>
+
+    <!-- Motion style -->
+    <string name="settings_motion_style">Motion</string>
+    <string name="settings_motion_reduced">Reduced</string>
+    <string name="settings_motion_standard">Standard</string>
+    <string name="settings_motion_expressive">Expressive</string>
+    <string name="settings_motion_reduced_subtitle">Use simple fades and disable spring and continuous decorative motion</string>
+    <string name="settings_motion_standard_subtitle">Crisp, controlled springs with minimal bounce</string>
+    <string name="settings_motion_expressive_subtitle">Bouncy Material 3 Expressive physics motion</string>
 </resources>

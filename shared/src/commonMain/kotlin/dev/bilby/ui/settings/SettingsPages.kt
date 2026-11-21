@@ -24,6 +24,7 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.material.icons.automirrored.outlined.AltRoute
 import androidx.compose.material.icons.outlined.AccessTime
 import androidx.compose.material.icons.outlined.Add
+import androidx.compose.material.icons.outlined.Animation
 import androidx.compose.material.icons.outlined.Api
 import androidx.compose.material.icons.outlined.Block
 import androidx.compose.material.icons.outlined.Campaign
@@ -195,6 +196,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import kotlin.math.roundToInt
 import dev.bilby.data.AppearancePrefs
+import dev.bilby.data.MotionStyle
 import dev.bilby.data.StartTab
 import dev.bilby.data.ThemeMode
 import dev.bilby.ui.AppLanguage
@@ -205,6 +207,7 @@ import dev.bilby.ui.theme.LocalIsDarkTheme
 import dev.bilby.ui.theme.PaletteSchemes
 import dev.bilby.ui.theme.ThemePalette
 import dev.bilby.ui.theme.dynamicColorAvailable
+import dev.bilby.ui.theme.platformSupportsPredictiveBack
 import dev.bilby.ui.theme.tabular
 
 /**
@@ -626,6 +629,7 @@ fun AppearanceSettingsPage(
     onModeChange: (ThemeMode) -> Unit,
     onPureBlackChange: (Boolean) -> Unit,
     onPaletteChange: (String) -> Unit,
+    onMotionStyleChange: (MotionStyle) -> Unit = {},
     onStartTabChange: (StartTab) -> Unit = {},
     onSearchLandingChange: (Boolean) -> Unit = {},
     onPredictiveBackChange: (Boolean) -> Unit = {},
@@ -655,6 +659,13 @@ fun AppearanceSettingsPage(
                 PaletteRow(position = position, selected = appearance.palette, onSelect = onPaletteChange)
             }
             row { position ->
+                MotionStyleRow(
+                    position = position,
+                    selected = appearance.motionStyle,
+                    onSelect = onMotionStyleChange,
+                )
+            }
+            row { position ->
                 StartTabRow(position = position, selected = appearance.startTab, onSelect = onStartTabChange)
             }
             row { position ->
@@ -666,15 +677,17 @@ fun AppearanceSettingsPage(
                     onCheckedChange = onSearchLandingChange,
                 )
             }
-            row { position ->
-                ToggleSettingRow(
-                    position = position,
-                    icon = Icons.Outlined.Gesture,
-                    title = stringResource(Res.string.settings_predictive_back),
-                    subtitle = stringResource(Res.string.settings_predictive_back_subtitle),
-                    checked = appearance.predictiveBack,
-                    onCheckedChange = onPredictiveBackChange,
-                )
+            if (platformSupportsPredictiveBack) {
+                row { position ->
+                    ToggleSettingRow(
+                        position = position,
+                        icon = Icons.Outlined.Gesture,
+                        title = stringResource(Res.string.settings_predictive_back),
+                        subtitle = stringResource(Res.string.settings_predictive_back_subtitle),
+                        checked = appearance.predictiveBack,
+                        onCheckedChange = onPredictiveBackChange,
+                    )
+                }
             }
             row { position ->
                 VideoGridColumnsRow(
@@ -706,6 +719,83 @@ private val ThemeMode.label: StringResource
         ThemeMode.Light -> Res.string.settings_theme_light
         ThemeMode.Dark -> Res.string.settings_theme_dark
     }
+
+private val MotionStyle.label: StringResource
+    get() = when (this) {
+        MotionStyle.Reduced -> Res.string.settings_motion_reduced
+        MotionStyle.Standard -> Res.string.settings_motion_standard
+        MotionStyle.Expressive -> Res.string.settings_motion_expressive
+    }
+
+private val MotionStyle.subtitle: StringResource
+    get() = when (this) {
+        MotionStyle.Reduced -> Res.string.settings_motion_reduced_subtitle
+        MotionStyle.Standard -> Res.string.settings_motion_standard_subtitle
+        MotionStyle.Expressive -> Res.string.settings_motion_expressive_subtitle
+    }
+
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
+@Composable
+private fun MotionStyleRow(position: RowPosition, selected: MotionStyle, onSelect: (MotionStyle) -> Unit) {
+    val options = MotionStyle.entries
+    val interactionSources = remember(options.size) { List(options.size) { MutableInteractionSource() } }
+    val tonalColors = FilledTonalToggleButtonDefaults.colors()
+    ControlSettingRow(
+        position = position,
+        icon = Icons.Outlined.Animation,
+        title = stringResource(Res.string.settings_motion_style),
+        value = stringResource(selected.subtitle),
+    ) {
+        val labels = options.map { stringResource(it.label) }
+        ButtonGroup(
+            overflowIndicator = { menuState ->
+                IconButton(onClick = { menuState.show() }) {
+                    Icon(
+                        Icons.Outlined.MoreHoriz,
+                        contentDescription = stringResource(Res.string.menu_item_actions),
+                    )
+                }
+            },
+            horizontalArrangement = Arrangement.spacedBy(ButtonGroupDefaults.ConnectedSpaceBetween),
+            modifier = Modifier.fillMaxWidth().selectableGroup(),
+        ) {
+            options.forEachIndexed { index, option ->
+                val label = labels[index]
+                val interactionSource = interactionSources[index]
+                val itemModifier = Modifier.weight(1f).animateWidth(interactionSource)
+                customItem(
+                    buttonGroupContent = {
+                        ToggleButton(
+                            checked = option == selected,
+                            onCheckedChange = { onSelect(option) },
+                            shapes = when (index) {
+                                0 -> ButtonGroupDefaults.connectedLeadingButtonShapes()
+                                options.lastIndex -> ButtonGroupDefaults.connectedTrailingButtonShapes()
+                                else -> ButtonGroupDefaults.connectedMiddleButtonShapes()
+                            },
+                            colors = tonalColors,
+                            contentPadding = PaddingValues(horizontal = Spacing.Tight),
+                            interactionSource = interactionSource,
+                            modifier = itemModifier.semantics { role = Role.RadioButton },
+                        ) {
+                            Text(label, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        }
+                    },
+                    menuContent = { menuState ->
+                        DropdownMenuItem(
+                            onClick = {
+                                menuState.dismiss()
+                                onSelect(option)
+                            },
+                            text = { Text(label) },
+                            shape = menuItemShape(index, options.size),
+                        )
+                    },
+                )
+            }
+        }
+    }
+}
 
 private val StartTab.label: StringResource
     get() = when (this) {

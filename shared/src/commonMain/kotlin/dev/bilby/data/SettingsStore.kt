@@ -15,6 +15,7 @@ import dev.bilby.api.toHttpsUrl
 import dev.bilby.player.DEFAULT_PREFERRED_CODECS
 import dev.bilby.player.AUDIO_QUALITY_BEST
 import dev.bilby.player.VideoCodecId
+import dev.bilby.ui.theme.platformUsesStandardMotion
 import dev.nihildigit.danmaku.DanmakuDensity
 import dev.nihildigit.danmaku.DanmakuFrameRateCap
 import kotlinx.coroutines.flow.Flow
@@ -267,6 +268,7 @@ class SettingsStore(private val store: DataStore<Preferences>) {
             predictiveBack = p[KEY_PREDICTIVE_BACK] ?: true,
             videoGridColumns = (p[KEY_VIDEO_GRID_COLUMNS] ?: AppearancePrefs.DEFAULT_VIDEO_GRID_COLUMNS)
                 .coerceIn(AppearancePrefs.MIN_VIDEO_GRID_COLUMNS, AppearancePrefs.MAX_VIDEO_GRID_COLUMNS),
+            motionStyle = MotionStyle.fromPrefs(p[KEY_MOTION_STYLE]),
         )
     }
 
@@ -335,6 +337,10 @@ class SettingsStore(private val store: DataStore<Preferences>) {
     suspend fun saveVideoGridColumns(columns: Int) {
         val clamped = columns.coerceIn(AppearancePrefs.MIN_VIDEO_GRID_COLUMNS, AppearancePrefs.MAX_VIDEO_GRID_COLUMNS)
         store.edit { p -> p[KEY_VIDEO_GRID_COLUMNS] = clamped }
+    }
+
+    suspend fun saveMotionStyle(style: MotionStyle) {
+        store.edit { p -> p[KEY_MOTION_STYLE] = style.name }
     }
 
     /**
@@ -688,6 +694,7 @@ class SettingsStore(private val store: DataStore<Preferences>) {
         private val KEY_SEARCH_LANDING = booleanPreferencesKey("search_landing")
         private val KEY_PREDICTIVE_BACK = booleanPreferencesKey("predictive_back")
         private val KEY_VIDEO_GRID_COLUMNS = intPreferencesKey("video_grid_columns")
+        private val KEY_MOTION_STYLE = stringPreferencesKey("theme_motion_style")
         private val KEY_SESSDATA = stringPreferencesKey("sessdata")
         private val KEY_BILI_JCT = stringPreferencesKey("bili_jct")
         private val KEY_DEDE_USER_ID = stringPreferencesKey("dede_user_id")
@@ -1036,6 +1043,25 @@ enum class ThemeMode { System, Light, Dark }
 /** 冷启动时默认落到哪一栏:订阅、搜索或我的。默认保持 [Feed]。 */
 enum class StartTab { Feed, Search, Profile }
 
+/**
+ * 界面动效程度。未在偏好里显式存储时，按平台直接落到对应默认档：
+ * Windows / 桌面端默认 [Standard]，Android 默认 [Expressive]。
+ */
+enum class MotionStyle {
+    Reduced,
+    Standard,
+    Expressive,
+    ;
+
+    companion object {
+        fun defaultFor(usesStandardMotion: Boolean = platformUsesStandardMotion): MotionStyle =
+            if (usesStandardMotion) Standard else Expressive
+
+        fun fromPrefs(name: String?, usesStandardMotion: Boolean = platformUsesStandardMotion): MotionStyle =
+            entries.firstOrNull { it.name == name } ?: defaultFor(usesStandardMotion)
+    }
+}
+
 data class AppearancePrefs(
     val mode: ThemeMode = ThemeMode.System,
     /**
@@ -1054,6 +1080,7 @@ data class AppearancePrefs(
     val searchLanding: Boolean = true,
     val predictiveBack: Boolean = true,
     val videoGridColumns: Int = DEFAULT_VIDEO_GRID_COLUMNS,
+    val motionStyle: MotionStyle = MotionStyle.defaultFor(),
 ) {
     companion object {
         const val DYNAMIC = "dynamic"

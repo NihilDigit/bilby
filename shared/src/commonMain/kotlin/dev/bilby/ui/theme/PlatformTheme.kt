@@ -27,9 +27,12 @@ expect val NoFontPadding: PlatformTextStyle?
 expect val CjkFontFamily: FontFamily
 
 /**
- * 桌面等精确指针平台使用 M3 `MotionScheme.standard()`,触控平台使用 `MotionScheme.expressive()`。
+ * 桌面等精确指针平台默认使用 M3 `MotionScheme.standard()`,触控平台默认使用 `MotionScheme.expressive()`。
  */
 expect val platformUsesStandardMotion: Boolean
+
+/** 当前平台是否支持系统预测性返回手势（Android 支持，Windows 桌面端不支持）。 */
+expect val platformSupportsPredictiveBack: Boolean
 
 /**
  * 系统的"减弱动效"开着没有。

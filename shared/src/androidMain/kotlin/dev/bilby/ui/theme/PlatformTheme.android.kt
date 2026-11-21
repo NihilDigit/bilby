@@ -25,6 +25,8 @@ actual val CjkFontFamily: FontFamily = FontFamily.Default
 
 actual val platformUsesStandardMotion: Boolean = false
 
+actual val platformSupportsPredictiveBack: Boolean = true
+
 @Composable
 internal actual fun dynamicColorSchemes(): PaletteSchemes {
     val context = LocalContext.current

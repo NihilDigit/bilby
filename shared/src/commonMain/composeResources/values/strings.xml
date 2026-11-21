@@ -1226,4 +1226,13 @@
     <string name="nav_custom_settings_required_hint">核心入口，不可隐藏</string>
     <string name="nav_custom_move_up">上移</string>
     <string name="nav_custom_move_down">下移</string>
+
+    <!-- 动画程度 -->
+    <string name="settings_motion_style">动画程度</string>
+    <string name="settings_motion_reduced">减弱</string>
+    <string name="settings_motion_standard">标准</string>
+    <string name="settings_motion_expressive">灵动</string>
+    <string name="settings_motion_reduced_subtitle">简化页面转场并关闭弹簧与持续装饰动效</string>
+    <string name="settings_motion_standard_subtitle">干脆平稳的物理弹簧，减少回弹</string>
+    <string name="settings_motion_expressive_subtitle">带弹性回弹的 Material 3 Expressive 物理动效</string>
 </resources>

@@ -8,6 +8,7 @@ import dev.bilby.data.FollowOrder
 import dev.bilby.data.FollowRepository
 import dev.bilby.data.HistoryRepository
 import dev.bilby.data.AppearancePrefs
+import dev.bilby.data.MotionStyle
 import dev.bilby.data.NightModePrefs
 import dev.bilby.data.ScheduleRule
 import dev.bilby.data.StartTab
@@ -494,6 +495,11 @@ class SettingsViewModel(
         val clamped = columns.coerceIn(AppearancePrefs.MIN_VIDEO_GRID_COLUMNS, AppearancePrefs.MAX_VIDEO_GRID_COLUMNS)
         _state.update { it.copy(appearance = it.appearance.copy(videoGridColumns = clamped)) }
         persist { settings.saveVideoGridColumns(clamped) }
+    }
+
+    fun setMotionStyle(style: MotionStyle) {
+        _state.update { it.copy(appearance = it.appearance.copy(motionStyle = style)) }
+        persist { settings.saveMotionStyle(style) }
     }
 
     fun setOfflineConcurrency(value: Int) {

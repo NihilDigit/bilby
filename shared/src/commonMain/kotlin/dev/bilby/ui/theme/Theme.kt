@@ -15,6 +15,7 @@ import androidx.compose.material3.ColorScheme
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.lerp
 import dev.bilby.data.AppearancePrefs
+import dev.bilby.data.MotionStyle
 import dev.bilby.data.ThemeMode
 
 /**
@@ -24,7 +25,10 @@ import dev.bilby.data.ThemeMode
  */
 val LocalMentionColor = staticCompositionLocalOf { FixedColors.MentionLight }
 
-/** 主题根提供的系统「减弱动效」开关，避免列表卡片各自注册 Android ContentObserver。 */
+/** 主题根缓存的系统级「减弱动效」状态，避免嵌套主题或列表卡片重复注册监听。 */
+private val LocalPlatformReducedMotion = compositionLocalOf<Boolean?> { null }
+
+/** 主题根提供的最终「减弱动效」开关（系统无障碍减弱动效或应用内选为减弱时均为真）。 */
 internal val LocalReducedMotion = compositionLocalOf<Boolean?> { null }
 
 /**
@@ -63,12 +67,16 @@ fun BilbyTheme(
     }
     val schemes = resolveSchemes(appearance)
     val colorScheme = if (darkTheme) schemes.dark else schemes.light
-    val reducedMotion = LocalReducedMotion.current ?: rememberPlatformReducedMotion()
+    val platformReduced = LocalPlatformReducedMotion.current ?: rememberPlatformReducedMotion()
+    val reducedMotion = platformReduced || appearance.motionStyle == MotionStyle.Reduced
+    val motionScheme = when (appearance.motionStyle) {
+        MotionStyle.Expressive -> MotionScheme.expressive()
+        MotionStyle.Standard, MotionStyle.Reduced -> MotionScheme.standard()
+    }
 
     MaterialExpressiveTheme(
         colorScheme = colorScheme,
-        // 触控端取 expressive(回弹确认感),桌面端取 standard(指针交互干脆直达,不过冲)。
-        motionScheme = if (platformUsesStandardMotion) MotionScheme.standard() else MotionScheme.expressive(),
+        motionScheme = motionScheme,
         typography = BilbyTypography,
         shapes = BilbyShapes,
     ) {
@@ -76,6 +84,7 @@ fun BilbyTheme(
             LocalMentionColor provides if (darkTheme) FixedColors.MentionDark else FixedColors.MentionLight,
             LocalPlayerColorScheme provides schemes.dark,
             LocalIsDarkTheme provides darkTheme,
+            LocalPlatformReducedMotion provides platformReduced,
             LocalReducedMotion provides reducedMotion,
         ) {
             // MaterialTheme 只给配色方案,不设 LocalContentColor —— 它的默认值是纯黑,

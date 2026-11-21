@@ -26,6 +26,8 @@ internal actual fun dynamicColorSchemes(): PaletteSchemes = error("桌面没有�
 
 actual val platformUsesStandardMotion: Boolean = true
 
+actual val platformSupportsPredictiveBack: Boolean = false
+
 /** 读取并跟随 Windows 的「设置 → 辅助功能 → 视觉效果 → 动画效果」开关,见 [SystemReducedMotion]。 */
 @Composable
 internal actual fun rememberPlatformReducedMotion(): Boolean {
