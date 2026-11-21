@@ -12,6 +12,7 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
@@ -90,6 +91,7 @@ import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -110,6 +112,8 @@ import dev.bilby.resources.*
 import dev.bilby.stringResource
 import dev.bilby.ui.AdaptiveVideoGridContent
 import dev.bilby.ui.BackHandler
+import dev.bilby.ui.isExpanded
+import dev.bilby.ui.rememberBilbyWindowSize
 import dev.bilby.ui.components.Avatar
 import dev.bilby.ui.components.BiliAsyncImage
 import dev.bilby.ui.components.BilbyTooltip
@@ -121,6 +125,7 @@ import dev.bilby.ui.components.EmptyState
 import dev.bilby.ui.components.ListScrollbar
 import dev.bilby.ui.components.MetaSeparator
 import dev.bilby.ui.components.VideoCommonMenuItems
+import dev.bilby.ui.components.VideoCover
 import dev.bilby.ui.components.VideoGridCard
 import dev.bilby.ui.components.VideoRow
 import dev.bilby.ui.components.VideoRowUi
@@ -133,6 +138,7 @@ import dev.bilby.ui.theme.Dimens
 import dev.bilby.ui.theme.FixedColors
 import dev.bilby.ui.theme.Spacing
 import dev.bilby.ui.theme.interactiveCard
+import dev.bilby.ui.theme.rememberReducedMotion
 import dev.bilby.ui.theme.tabular
 import kotlin.math.roundToInt
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -189,6 +195,24 @@ class OfflineViewModel(
     fun pause(item: OfflineItem) = downloader.pause(item.bvid, item.cid)
 
     fun resume(item: OfflineItem) = downloader.resume(item.bvid, item.cid)
+
+    fun pauseSelected(ids: Set<String>) {
+        if (ids.isEmpty()) return
+        items.value.forEach { item ->
+            if (item.id in ids && (item.status == OfflineStatus.Queued || item.status == OfflineStatus.Running)) {
+                downloader.pause(item.bvid, item.cid)
+            }
+        }
+    }
+
+    fun resumeSelected(ids: Set<String>) {
+        if (ids.isEmpty()) return
+        items.value.forEach { item ->
+            if (item.id in ids && (item.status == OfflineStatus.Paused || item.status == OfflineStatus.Failed)) {
+                downloader.resume(item.bvid, item.cid)
+            }
+        }
+    }
 
     fun pauseAll() = downloader.pauseAll()
 
@@ -315,7 +339,9 @@ fun OfflineScreen(
             return@AdaptiveVideoGridContent
         }
 
+        val windowSize = rememberBilbyWindowSize()
         val multiColumn = columnCount > 1
+        val twoColumnTransfers = windowSize.isExpanded
         val effectiveColumns = GridCells.Fixed(columnCount)
         val gridPadding = if (multiColumn) {
             PaddingValues(
@@ -451,7 +477,13 @@ fun OfflineScreen(
 
                     trimmedQuery.isNotEmpty() -> {
                         if (inFlight.isNotEmpty()) {
-                            offlineRows(inFlight, rowScope, multiColumn)
+                            offlineTransferRows(
+                                rows = inFlight,
+                                scope = rowScope,
+                                multiColumn = multiColumn,
+                                twoColumnTransfers = twoColumnTransfers,
+                                horizontalPadding = headerHorizontalPadding,
+                            )
                         }
                         if (completed.isNotEmpty()) {
                             offlineRows(completed, rowScope, multiColumn)
@@ -459,37 +491,46 @@ fun OfflineScreen(
                     }
 
                     else -> {
-                        item(key = "summary-card", span = { GridItemSpan(maxLineSpan) }) {
-                            OfflineSummaryCard(
-                                completedCount = completed.size,
-                                usedBytes = usedBytes,
-                                modifier = Modifier
-                                    .padding(horizontal = headerHorizontalPadding, vertical = Spacing.Tight)
-                                    .animateItem(),
-                            )
-                        }
-
                         if (inFlight.isNotEmpty()) {
                             item(key = "queue-card", span = { GridItemSpan(maxLineSpan) }) {
                                 OfflineQueueCard(
                                     summary = queueSummary,
+                                    storageSummary = if (completed.isEmpty() && usedBytes > 0L) {
+                                        formatBytes(usedBytes)
+                                    } else {
+                                        null
+                                    },
                                     enabled = selectedIds == null,
                                     onPauseAll = onPauseAll,
                                     onResumeAll = onResumeAll,
                                     onRetryAllFailed = onRetryAllFailed,
                                     onRequestClearQueue = { confirmingClearQueue = true },
                                     modifier = Modifier
-                                        .padding(horizontal = headerHorizontalPadding, vertical = Spacing.Hair)
+                                        .padding(
+                                            start = headerHorizontalPadding,
+                                            end = headerHorizontalPadding,
+                                            top = Spacing.Tight,
+                                            bottom = Spacing.Hair,
+                                        )
                                         .animateItem(),
                                 )
                             }
-                            offlineRows(inFlight, rowScope, multiColumn)
+                            offlineTransferRows(
+                                rows = inFlight,
+                                scope = rowScope,
+                                multiColumn = multiColumn,
+                                twoColumnTransfers = twoColumnTransfers,
+                                horizontalPadding = headerHorizontalPadding,
+                            )
                         }
 
                         if (completed.isNotEmpty()) {
                             item(key = "completed-view-switcher", span = { GridItemSpan(maxLineSpan) }) {
-                                OfflineCompletedViewSwitcher(
+                                OfflineCompletedHeader(
                                     selected = activeTab,
+                                    completedCount = completed.size,
+                                    usedBytes = usedBytes,
+                                    multiColumn = multiColumn,
                                     onSelect = { tab ->
                                         activeTab = tab
                                         openedSeasonId = null
@@ -499,7 +540,7 @@ fun OfflineScreen(
                                         .padding(
                                             start = headerHorizontalPadding,
                                             end = headerHorizontalPadding,
-                                            top = if (inFlight.isNotEmpty()) Spacing.Cozy else Spacing.Hair,
+                                            top = if (inFlight.isNotEmpty()) Spacing.Cozy else Spacing.Tight,
                                             bottom = Spacing.Tight,
                                         )
                                         .animateItem(),
@@ -682,45 +723,11 @@ fun OfflineScreen(
     }
 }
 
-@OptIn(ExperimentalMaterial3ExpressiveApi::class)
-@Composable
-private fun OfflineSummaryCard(
-    completedCount: Int,
-    usedBytes: Long,
-    modifier: Modifier = Modifier,
-) {
-    val primarySummary = if (completedCount > 0) {
-        stringResource(Res.string.offline_count, completedCount) + MetaSeparator + formatBytes(usedBytes)
-    } else {
-        formatBytes(usedBytes)
-    }
-
-    Surface(
-        color = MaterialTheme.colorScheme.surfaceContainer,
-        shape = MaterialTheme.shapes.large,
-        modifier = modifier.fillMaxWidth(),
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = Spacing.Comfortable, vertical = Spacing.Cozy),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(
-                text = primarySummary,
-                style = MaterialTheme.typography.titleSmallEmphasized.tabular,
-                color = MaterialTheme.colorScheme.onSurface,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-        }
-    }
-}
-
 @OptIn(ExperimentalLayoutApi::class, ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 private fun OfflineQueueCard(
     summary: OfflineQueueSummary,
+    storageSummary: String?,
     enabled: Boolean,
     onPauseAll: () -> Unit,
     onResumeAll: () -> Unit,
@@ -738,6 +745,9 @@ private fun OfflineQueueCard(
         if (summary.failedCount > 0) {
             add(stringResource(Res.string.offline_queue_failed_count, summary.failedCount))
         }
+        if (!storageSummary.isNullOrBlank()) {
+            add(storageSummary)
+        }
     }
     val breakdown = breakdownParts.joinToString(MetaSeparator)
 
@@ -746,24 +756,29 @@ private fun OfflineQueueCard(
         shape = MaterialTheme.shapes.large,
         modifier = modifier.fillMaxWidth(),
     ) {
-        Column(
+        FlowRow(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = Spacing.Comfortable, vertical = Spacing.Cozy),
+                .padding(horizontal = Spacing.Comfortable, vertical = QueueHeaderVerticalPadding),
+            horizontalArrangement = Arrangement.SpaceBetween,
             verticalArrangement = Arrangement.spacedBy(Spacing.Tight),
+            itemVerticalAlignment = Alignment.CenterVertically,
         ) {
-            Column(verticalArrangement = Arrangement.spacedBy(Spacing.Hair / 2)) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.padding(end = Spacing.Cozy),
+            ) {
                 Text(
                     text = stringResource(Res.string.offline_queue_title, summary.totalCount),
                     style = MaterialTheme.typography.titleSmallEmphasized.tabular,
                     color = MaterialTheme.colorScheme.onSurface,
                     maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
+                    softWrap = false,
                 )
                 if (breakdown.isNotEmpty()) {
                     Text(
-                        text = breakdown,
-                        style = MaterialTheme.typography.labelMedium.tabular,
+                        text = MetaSeparator + breakdown,
+                        style = MaterialTheme.typography.bodyMedium.tabular,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
@@ -772,9 +787,9 @@ private fun OfflineQueueCard(
             }
 
             FlowRow(
-                horizontalArrangement = Arrangement.spacedBy(Spacing.Tight, Alignment.End),
+                horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
                 verticalArrangement = Arrangement.spacedBy(Spacing.Hair),
-                modifier = Modifier.fillMaxWidth(),
+                itemVerticalAlignment = Alignment.CenterVertically,
             ) {
                 if (summary.hasActive) {
                     FilledTonalButton(
@@ -858,10 +873,13 @@ private fun OfflineQueueCard(
     }
 }
 
-@OptIn(ExperimentalMaterial3ExpressiveApi::class)
+@OptIn(ExperimentalLayoutApi::class, ExperimentalMaterial3ExpressiveApi::class)
 @Composable
-private fun OfflineCompletedViewSwitcher(
+private fun OfflineCompletedHeader(
     selected: OfflineViewTab,
+    completedCount: Int,
+    usedBytes: Long,
+    multiColumn: Boolean,
     onSelect: (OfflineViewTab) -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -873,8 +891,15 @@ private fun OfflineCompletedViewSwitcher(
     )
     val interactionSources = remember(options.size) { List(options.size) { MutableInteractionSource() } }
     val tonalColors = FilledTonalToggleButtonDefaults.colors()
+    val storageSummary = stringResource(Res.string.offline_count, completedCount) +
+        MetaSeparator + formatBytes(usedBytes)
 
-    Box(modifier = modifier.fillMaxWidth()) {
+    FlowRow(
+        modifier = modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalArrangement = Arrangement.spacedBy(Spacing.Tight),
+        itemVerticalAlignment = Alignment.CenterVertically,
+    ) {
         ButtonGroup(
             overflowIndicator = { menuState ->
                 IconButton(onClick = { menuState.show() }) {
@@ -885,10 +910,17 @@ private fun OfflineCompletedViewSwitcher(
                 }
             },
             horizontalArrangement = Arrangement.spacedBy(ButtonGroupDefaults.ConnectedSpaceBetween),
-            modifier = Modifier
-                .widthIn(max = ViewSwitcherMaxWidth)
-                .fillMaxWidth()
-                .selectableGroup(),
+            modifier = if (multiColumn) {
+                Modifier
+                    .padding(end = Spacing.Cozy)
+                    .widthIn(max = ViewSwitcherMaxWidth)
+                    .fillMaxWidth()
+                    .selectableGroup()
+            } else {
+                Modifier
+                    .fillMaxWidth()
+                    .selectableGroup()
+            },
         ) {
             options.forEachIndexed { index, tab ->
                 val label = labels[index]
@@ -927,6 +959,14 @@ private fun OfflineCompletedViewSwitcher(
                 )
             }
         }
+
+        Text(
+            text = storageSummary,
+            style = MaterialTheme.typography.bodyMedium.tabular,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
     }
 }
 
@@ -1342,6 +1382,480 @@ private class OfflineRowScope(
     val onDeleteRequest: (OfflineItem) -> Unit,
 )
 
+private fun LazyGridScope.offlineTransferRows(
+    rows: List<OfflineItem>,
+    scope: OfflineRowScope,
+    multiColumn: Boolean,
+    twoColumnTransfers: Boolean,
+    horizontalPadding: Dp,
+) {
+    if (twoColumnTransfers && rows.size >= 2) {
+        val pairs = rows.chunked(2)
+        items(
+            items = pairs,
+            key = { pair -> "transfer-pair-${pair.joinToString("-") { it.id }}" },
+            span = { GridItemSpan(maxLineSpan) },
+        ) { pair ->
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = horizontalPadding, vertical = Spacing.Hair)
+                    .animateItem(),
+                horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
+            ) {
+                OfflineTransferCard(
+                    item = pair[0],
+                    scope = scope,
+                    multiColumn = multiColumn,
+                    modifier = Modifier.weight(1f),
+                )
+                if (pair.size > 1) {
+                    OfflineTransferCard(
+                        item = pair[1],
+                        scope = scope,
+                        multiColumn = multiColumn,
+                        modifier = Modifier.weight(1f),
+                    )
+                } else {
+                    Spacer(modifier = Modifier.weight(1f))
+                }
+            }
+        }
+    } else {
+        items(
+            items = rows,
+            key = { it.id },
+            span = { GridItemSpan(maxLineSpan) },
+        ) { item ->
+            OfflineTransferCard(
+                item = item,
+                scope = scope,
+                multiColumn = multiColumn,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = horizontalPadding, vertical = Spacing.Hair)
+                    .animateItem(),
+            )
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3ExpressiveApi::class, ExperimentalFoundationApi::class)
+@Composable
+private fun OfflineTransferCard(
+    item: OfflineItem,
+    scope: OfflineRowScope,
+    multiColumn: Boolean,
+    modifier: Modifier = Modifier,
+) {
+    val colorScheme = MaterialTheme.colorScheme
+    val selecting = scope.selectedIds != null
+    val isSelected = scope.selectedIds != null && item.id in scope.selectedIds
+    val haptics = LocalHapticFeedback.current
+    val fadeSpec = MaterialTheme.motionScheme.defaultEffectsSpec<Float>()
+
+    val onCardClick: () -> Unit = {
+        when {
+            selecting -> scope.onToggleSelection(item)
+            item.status == OfflineStatus.Failed -> scope.onRetry(item)
+            item.status == OfflineStatus.Paused -> scope.onResume(item)
+            else -> scope.onPlay(item)
+        }
+    }
+    val onCardLongClick: () -> Unit = {
+        if (!selecting) haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+        scope.onToggleSelection(item)
+    }
+
+    val subtitle = listOfNotNull(
+        item.upName.takeIf { it.isNotBlank() },
+        item.partTitle.takeIf { it.isNotBlank() },
+        item.qualityLabel.takeIf { it.isNotBlank() },
+    ).joinToString(MetaSeparator)
+
+    val byteSummary = if (item.totalBytes > 0L) {
+        "${formatBytes(item.downloadedBytes)} / ${formatBytes(item.totalBytes)}"
+    } else {
+        null
+    }
+    val statusText = when (item.status) {
+        OfflineStatus.Queued -> stringResource(Res.string.offline_status_queued)
+        OfflineStatus.Running -> listOfNotNull(
+            item.progress
+                ?.let { stringResource(Res.string.offline_status_running, (it * 100).toInt()) }
+                ?: stringResource(Res.string.offline_status_running_unknown),
+            byteSummary,
+            item.speedBytesPerSecond.takeIf { it > 0L }?.let { formatSpeed(it) },
+        ).joinToString(MetaSeparator)
+        OfflineStatus.Paused -> listOfNotNull(
+            stringResource(Res.string.offline_status_paused),
+            item.progress?.takeIf { it > 0f }?.let { "${(it * 100).toInt()}%" },
+            byteSummary.takeIf { item.downloadedBytes > 0L },
+        ).joinToString(MetaSeparator)
+        OfflineStatus.Failed -> item.error ?: stringResource(Res.string.offline_status_failed)
+        OfflineStatus.Completed -> formatBytes(item.effectiveBytes)
+    }
+    val statusColor = if (item.status == OfflineStatus.Failed) {
+        colorScheme.error
+    } else {
+        colorScheme.onSurfaceVariant
+    }
+    val showDownloadBar = item.status == OfflineStatus.Running ||
+        (item.status == OfflineStatus.Paused && (item.progress ?: 0f) > 0f)
+
+    val selectionModifier = if (selecting) {
+        Modifier.semantics { this.selected = isSelected }
+    } else {
+        Modifier
+    }
+
+    val cardModifier = Modifier
+        .fillMaxWidth()
+        .interactiveCard(
+            shape = MaterialTheme.shapes.large,
+            baseColor = if (isSelected) colorScheme.secondaryContainer else colorScheme.surfaceContainerLow,
+            hoverColor = if (isSelected) colorScheme.secondaryContainer else colorScheme.surfaceContainer,
+        )
+        .combinedClickable(
+            role = Role.Button,
+            onClick = onCardClick,
+            onLongClick = onCardLongClick,
+        )
+        .then(selectionModifier)
+
+    val cardBody: @Composable () -> Unit = {
+        if (multiColumn) {
+            Row(
+                modifier = cardModifier.padding(
+                    start = Spacing.Cozy,
+                    end = Spacing.Tight,
+                    top = Spacing.Cozy,
+                    bottom = Spacing.Cozy,
+                ),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(Spacing.Cozy),
+            ) {
+                VideoCover(
+                    url = item.coverUrl,
+                    durationText = if (item.durationSeconds > 0) formatDurationSeconds(item.durationSeconds) else "",
+                    typeBadge = chargingBadgeText(item.chargingOnly),
+                    cornerRadius = TransferCoverCornerRadius,
+                    modifier = Modifier.width(TransferCoverWidth),
+                )
+                Column(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(Spacing.Hair),
+                ) {
+                    Text(
+                        text = item.title,
+                        style = MaterialTheme.typography.bodyLargeEmphasized,
+                        color = colorScheme.onSurface,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    if (subtitle.isNotEmpty()) {
+                        Text(
+                            text = subtitle,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                    if (showDownloadBar) {
+                        DownloadProgressBar(
+                            progressProvider = { item.progress },
+                            determinate = item.progress != null,
+                            paused = item.status == OfflineStatus.Paused,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(top = Spacing.Hair / 2),
+                        )
+                    }
+                    Text(
+                        text = statusText,
+                        style = MaterialTheme.typography.labelMedium.tabular,
+                        color = statusColor,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                AnimatedContent(
+                    targetState = selecting,
+                    transitionSpec = { fadeIn(fadeSpec) togetherWith fadeOut(fadeSpec) },
+                    label = "offline-transfer-actions",
+                ) { inSelection ->
+                    if (inSelection) {
+                        Box(
+                            modifier = Modifier.size(Dimens.MinTouchTarget),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Checkbox(checked = isSelected, onCheckedChange = null)
+                        }
+                    } else {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            OfflineTransferStateButton(item = item, scope = scope)
+                            val deleteLabel = stringResource(Res.string.offline_delete, item.title)
+                            BilbyTooltip(text = deleteLabel) {
+                                IconButton(onClick = { scope.onDeleteRequest(item) }) {
+                                    Icon(
+                                        Icons.Outlined.DeleteOutline,
+                                        contentDescription = deleteLabel,
+                                        tint = colorScheme.onSurfaceVariant,
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        } else {
+            Column(
+                modifier = cardModifier.padding(
+                    start = Spacing.Cozy,
+                    end = Spacing.Hair,
+                    top = Spacing.Cozy,
+                    bottom = Spacing.Tight,
+                ),
+                verticalArrangement = Arrangement.spacedBy(Spacing.Tight),
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(Spacing.Cozy),
+                ) {
+                    VideoCover(
+                        url = item.coverUrl,
+                        durationText = if (item.durationSeconds > 0) formatDurationSeconds(item.durationSeconds) else "",
+                        typeBadge = chargingBadgeText(item.chargingOnly),
+                        cornerRadius = TransferCoverCornerRadius,
+                        modifier = Modifier.width(TransferCoverCompactWidth),
+                    )
+                    Column(
+                        modifier = Modifier.weight(1f),
+                        verticalArrangement = Arrangement.spacedBy(Spacing.Hair / 2),
+                    ) {
+                        Text(
+                            text = item.title,
+                            style = MaterialTheme.typography.bodyLargeEmphasized,
+                            color = colorScheme.onSurface,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        if (subtitle.isNotEmpty()) {
+                            Text(
+                                text = subtitle,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                    }
+                    AnimatedContent(
+                        targetState = selecting,
+                        transitionSpec = { fadeIn(fadeSpec) togetherWith fadeOut(fadeSpec) },
+                        label = "offline-transfer-top-action",
+                    ) { inSelection ->
+                        if (inSelection) {
+                            Box(
+                                modifier = Modifier.size(Dimens.MinTouchTarget),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                Checkbox(checked = isSelected, onCheckedChange = null)
+                            }
+                        } else {
+                            OfflineTransferStateButton(item = item, scope = scope)
+                        }
+                    }
+                }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .weight(1f)
+                            .padding(end = if (selecting) Spacing.Tight else 0.dp),
+                        verticalArrangement = Arrangement.spacedBy(Spacing.Hair),
+                    ) {
+                        if (showDownloadBar) {
+                            DownloadProgressBar(
+                                progressProvider = { item.progress },
+                                determinate = item.progress != null,
+                                paused = item.status == OfflineStatus.Paused,
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                        }
+                        Text(
+                            text = statusText,
+                            style = MaterialTheme.typography.labelMedium.tabular,
+                            color = statusColor,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                    if (!selecting) {
+                        val deleteLabel = stringResource(Res.string.offline_delete, item.title)
+                        BilbyTooltip(text = deleteLabel) {
+                            IconButton(onClick = { scope.onDeleteRequest(item) }) {
+                                Icon(
+                                    Icons.Outlined.DeleteOutline,
+                                    contentDescription = deleteLabel,
+                                    tint = colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if (selecting) {
+        Box(modifier = modifier) {
+            cardBody()
+        }
+    } else {
+        ContextMenuBox(
+            onClick = null,
+            menuLabel = stringResource(Res.string.menu_item_actions),
+            modifier = modifier,
+            menu = { close -> OfflineItemMenuContent(item = item, scope = scope, close = close) },
+        ) { _ ->
+            cardBody()
+        }
+    }
+}
+
+@Composable
+private fun OfflineTransferStateButton(
+    item: OfflineItem,
+    scope: OfflineRowScope,
+) {
+    when (item.status) {
+        OfflineStatus.Queued, OfflineStatus.Running -> {
+            val pauseLabel = stringResource(Res.string.player_pause)
+            BilbyTooltip(text = pauseLabel) {
+                IconButton(onClick = { scope.onPause(item) }) {
+                    Icon(
+                        Icons.Filled.Pause,
+                        contentDescription = pauseLabel,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+        }
+        OfflineStatus.Paused -> {
+            val resumeLabel = stringResource(Res.string.offline_action_resume)
+            BilbyTooltip(text = resumeLabel) {
+                IconButton(onClick = { scope.onResume(item) }) {
+                    Icon(
+                        Icons.Filled.PlayArrow,
+                        contentDescription = resumeLabel,
+                        tint = MaterialTheme.colorScheme.primary,
+                    )
+                }
+            }
+        }
+        OfflineStatus.Failed -> {
+            val retryLabel = stringResource(Res.string.action_retry)
+            BilbyTooltip(text = retryLabel) {
+                IconButton(onClick = { scope.onRetry(item) }) {
+                    Icon(
+                        Icons.Filled.Refresh,
+                        contentDescription = retryLabel,
+                        tint = MaterialTheme.colorScheme.primary,
+                    )
+                }
+            }
+        }
+        OfflineStatus.Completed -> Unit
+    }
+}
+
+@Composable
+private fun ColumnScope.OfflineItemMenuContent(
+    item: OfflineItem,
+    scope: OfflineRowScope,
+    close: () -> Unit,
+) {
+    val hasStateAction = item.status != OfflineStatus.Completed
+    val leadingCount = if (hasStateAction) 3 else 2
+    val totalCount = leadingCount + videoCommonMenuItemCount(
+        bvid = item.bvid,
+        title = item.title,
+    )
+    var nextIdx = 0
+    if (hasStateAction) {
+        when (item.status) {
+            OfflineStatus.Queued, OfflineStatus.Running -> {
+                DropdownMenuItem(
+                    onClick = {
+                        close()
+                        scope.onPause(item)
+                    },
+                    text = { Text(stringResource(Res.string.player_pause)) },
+                    leadingIcon = { Icon(Icons.Filled.Pause, contentDescription = null) },
+                    shape = menuItemShape(nextIdx++, totalCount),
+                )
+            }
+            OfflineStatus.Paused -> {
+                DropdownMenuItem(
+                    onClick = {
+                        close()
+                        scope.onResume(item)
+                    },
+                    text = { Text(stringResource(Res.string.offline_action_resume)) },
+                    leadingIcon = { Icon(Icons.Filled.PlayArrow, contentDescription = null) },
+                    shape = menuItemShape(nextIdx++, totalCount),
+                )
+            }
+            OfflineStatus.Failed -> {
+                DropdownMenuItem(
+                    onClick = {
+                        close()
+                        scope.onRetry(item)
+                    },
+                    text = { Text(stringResource(Res.string.action_retry)) },
+                    leadingIcon = { Icon(Icons.Filled.Refresh, contentDescription = null) },
+                    shape = menuItemShape(nextIdx++, totalCount),
+                )
+            }
+            OfflineStatus.Completed -> Unit
+        }
+    }
+    DropdownMenuItem(
+        onClick = {
+            close()
+            scope.onToggleSelection(item)
+        },
+        text = { Text(stringResource(Res.string.action_select)) },
+        leadingIcon = { Icon(Icons.Outlined.Checklist, contentDescription = null) },
+        shape = menuItemShape(nextIdx++, totalCount),
+    )
+    DropdownMenuItem(
+        onClick = {
+            close()
+            scope.onDeleteRequest(item)
+        },
+        text = { Text(stringResource(Res.string.action_delete)) },
+        leadingIcon = { Icon(Icons.Outlined.DeleteOutline, contentDescription = null) },
+        shape = menuItemShape(nextIdx++, totalCount),
+    )
+    VideoCommonMenuItems(
+        bvid = item.bvid,
+        title = item.title,
+        close = close,
+        coverUrl = item.coverUrl,
+        upName = item.upName,
+        durationSeconds = item.durationSeconds,
+        startIndex = leadingCount,
+        totalCount = totalCount,
+    )
+}
+
 private fun LazyGridScope.offlineRows(
     rows: List<OfflineItem>,
     scope: OfflineRowScope,
@@ -1397,45 +1911,7 @@ private fun OfflineRow(
                 }
             } else {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    when (item.status) {
-                        OfflineStatus.Queued, OfflineStatus.Running -> {
-                            val pauseLabel = stringResource(Res.string.player_pause)
-                            BilbyTooltip(text = pauseLabel) {
-                                IconButton(onClick = { scope.onPause(item) }) {
-                                    Icon(
-                                        Icons.Filled.Pause,
-                                        contentDescription = pauseLabel,
-                                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    )
-                                }
-                            }
-                        }
-                        OfflineStatus.Paused -> {
-                            val resumeLabel = stringResource(Res.string.offline_action_resume)
-                            BilbyTooltip(text = resumeLabel) {
-                                IconButton(onClick = { scope.onResume(item) }) {
-                                    Icon(
-                                        Icons.Filled.PlayArrow,
-                                        contentDescription = resumeLabel,
-                                        tint = MaterialTheme.colorScheme.primary,
-                                    )
-                                }
-                            }
-                        }
-                        OfflineStatus.Failed -> {
-                            val retryLabel = stringResource(Res.string.action_retry)
-                            BilbyTooltip(text = retryLabel) {
-                                IconButton(onClick = { scope.onRetry(item) }) {
-                                    Icon(
-                                        Icons.Filled.Refresh,
-                                        contentDescription = retryLabel,
-                                        tint = MaterialTheme.colorScheme.primary,
-                                    )
-                                }
-                            }
-                        }
-                        OfflineStatus.Completed -> Unit
-                    }
+                    OfflineTransferStateButton(item = item, scope = scope)
                     val deleteLabel = stringResource(Res.string.offline_delete, item.title)
                     BilbyTooltip(text = deleteLabel) {
                         IconButton(onClick = { scope.onDeleteRequest(item) }) {
@@ -1520,81 +1996,7 @@ private fun OfflineRow(
             onClick = null,
             menuLabel = stringResource(Res.string.menu_item_actions),
             modifier = modifier,
-            menu = { close ->
-                val hasStateAction = item.status != OfflineStatus.Completed
-                val leadingCount = if (hasStateAction) 3 else 2
-                val totalCount = leadingCount + videoCommonMenuItemCount(
-                    bvid = item.bvid,
-                    title = item.title,
-                )
-                var nextIdx = 0
-                if (hasStateAction) {
-                    when (item.status) {
-                        OfflineStatus.Queued, OfflineStatus.Running -> {
-                            DropdownMenuItem(
-                                onClick = {
-                                    close()
-                                    scope.onPause(item)
-                                },
-                                text = { Text(stringResource(Res.string.player_pause)) },
-                                leadingIcon = { Icon(Icons.Filled.Pause, contentDescription = null) },
-                                shape = menuItemShape(nextIdx++, totalCount),
-                            )
-                        }
-                        OfflineStatus.Paused -> {
-                            DropdownMenuItem(
-                                onClick = {
-                                    close()
-                                    scope.onResume(item)
-                                },
-                                text = { Text(stringResource(Res.string.offline_action_resume)) },
-                                leadingIcon = { Icon(Icons.Filled.PlayArrow, contentDescription = null) },
-                                shape = menuItemShape(nextIdx++, totalCount),
-                            )
-                        }
-                        OfflineStatus.Failed -> {
-                            DropdownMenuItem(
-                                onClick = {
-                                    close()
-                                    scope.onRetry(item)
-                                },
-                                text = { Text(stringResource(Res.string.action_retry)) },
-                                leadingIcon = { Icon(Icons.Filled.Refresh, contentDescription = null) },
-                                shape = menuItemShape(nextIdx++, totalCount),
-                            )
-                        }
-                        OfflineStatus.Completed -> Unit
-                    }
-                }
-                DropdownMenuItem(
-                    onClick = {
-                        close()
-                        scope.onToggleSelection(item)
-                    },
-                    text = { Text(stringResource(Res.string.action_select)) },
-                    leadingIcon = { Icon(Icons.Outlined.Checklist, contentDescription = null) },
-                    shape = menuItemShape(nextIdx++, totalCount),
-                )
-                DropdownMenuItem(
-                    onClick = {
-                        close()
-                        scope.onDeleteRequest(item)
-                    },
-                    text = { Text(stringResource(Res.string.action_delete)) },
-                    leadingIcon = { Icon(Icons.Outlined.DeleteOutline, contentDescription = null) },
-                    shape = menuItemShape(nextIdx++, totalCount),
-                )
-                VideoCommonMenuItems(
-                    bvid = item.bvid,
-                    title = item.title,
-                    close = close,
-                    coverUrl = item.coverUrl,
-                    upName = item.upName,
-                    durationSeconds = item.durationSeconds,
-                    startIndex = leadingCount,
-                    totalCount = totalCount,
-                )
-            },
+            menu = { close -> OfflineItemMenuContent(item = item, scope = scope, close = close) },
         ) { _ ->
             itemBody()
         }
@@ -1608,13 +2010,14 @@ private fun DownloadProgressBar(
     paused: Boolean,
     modifier: Modifier = Modifier,
 ) {
+    val reducedMotion = rememberReducedMotion()
     val trackColor = MaterialTheme.colorScheme.surfaceContainerHighest
     val indicatorColor = if (paused) {
         MaterialTheme.colorScheme.onSurfaceVariant
     } else {
         MaterialTheme.colorScheme.primary
     }
-    if (determinate) {
+    if (determinate || reducedMotion) {
         LinearProgressIndicator(
             progress = { progressProvider() ?: 0f },
             color = indicatorColor,
@@ -1719,4 +2122,8 @@ internal fun formatBytes(bytes: Long): String {
 private val FolderLipHeight = 6.dp
 private val FolderLipGap = 2.dp
 private val ViewSwitcherMaxWidth = 360.dp
+private val QueueHeaderVerticalPadding = 10.dp
 private val QueueActionPadding = PaddingValues(horizontal = Spacing.Cozy, vertical = Spacing.Hair)
+private val TransferCoverWidth = 112.dp
+private val TransferCoverCompactWidth = 96.dp
+private val TransferCoverCornerRadius = 8.dp
