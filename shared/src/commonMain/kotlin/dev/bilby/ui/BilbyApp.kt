@@ -3227,6 +3227,7 @@ private fun SettingsPageRoute(
             onModeChange = vm::setThemeMode,
             onPureBlackChange = vm::setPureBlack,
             onPaletteChange = vm::setThemePalette,
+            onMotionStyleChange = vm::setMotionStyle,
             onStartTabChange = vm::setStartTab,
             onSearchLandingChange = vm::setSearchLanding,
             onPredictiveBackChange = vm::setPredictiveBack,
