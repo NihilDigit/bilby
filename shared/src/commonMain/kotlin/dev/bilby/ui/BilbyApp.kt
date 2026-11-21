@@ -8,7 +8,6 @@ import dev.bilby.ui.components.LocalPageRefreshRegistry
 import dev.bilby.ui.components.LocalPageSearchRegistry
 import dev.bilby.ui.components.LocalPointerSource
 import dev.bilby.ui.components.NeedsCopyNotice
-import dev.bilby.ui.components.PageRefreshRegistry
 import dev.bilby.ui.components.PageSearchRegistry
 import dev.bilby.ui.components.PointerSource
 import dev.bilby.ui.components.RegisterPageRefresh
@@ -16,6 +15,7 @@ import dev.bilby.ui.components.RegisterPageSearch
 import dev.bilby.ui.components.ShortcutsSheet
 import dev.bilby.ui.components.matchesLibraryQuery
 import dev.bilby.ui.components.readClipboardText
+import dev.bilby.ui.components.rememberPageRefreshRegistry
 import dev.bilby.ui.components.trackPointerSource
 import dev.bilby.data.HistoryItem
 import dev.bilby.data.SidePanelId
@@ -362,7 +362,7 @@ fun BilbyRoot(
         val snackbarHostState = remember { SnackbarHostState() }
         val pointerSource = remember { PointerSource() }
         val editableFocusTracker = remember { EditableFocusTracker() }
-        val pageRefreshRegistry = remember { PageRefreshRegistry() }
+        val pageRefreshRegistry = rememberPageRefreshRegistry()
         val pageSearchRegistry = remember { PageSearchRegistry() }
         val triggerBack = rememberBackTrigger()
         // 分享在桌面上是复制链接,按下去界面上看不出变化;报一句,见 SystemActions.shareCopiesLink。
@@ -1029,7 +1029,7 @@ private fun BilbyApp(
     // 返回用 PopLatest,一次出一条。默认的 PopUntilScaffoldValueChange 在两栏时出栈不改变
     // 分栏形态,会把整组一次退光,设置里从二级子页返回就退出了设置。
     val pushesAwaitingFirst = remember { mutableStateOf(false) }
-    val desktopFramed = LocalWindowCaption.current != null
+    val desktopFramed = LocalIsDesktopWindow.current
     val listDetailWide = rememberBilbyWindowSize().isAtLeast(BilbyWindowSize.Expanded)
     val listDetailDirective = remember(listDetailWide, desktopFramed) {
         PaneScaffoldDirective(
@@ -1218,7 +1218,7 @@ private fun BilbyApp(
             .focusRequester(rootFocusRequester)
             .focusable(),
     ) {
-    val navFramedBackdrop = LocalWindowCaption.current != null
+    val navFramedBackdrop = LocalIsDesktopWindow.current
     // 用 State 持有最新的开关值与 popBack，并在 remember(backStack) 之外更新：
     // 若在 remember(backStack) 内部直接捕获 Boolean 参数 predictiveBack，decorate 闭包会永久停在
     // 首帧默认值（true），设置页切换或 DataStore 异步回填后 BackHandler 永远不会启用。
@@ -1677,10 +1677,6 @@ private fun BilbyApp(
                                 container.partRequest.request(item.bvid, item.cid)
                                 push(Video(item.bvid, context = QueueContext.Offline))
                             },
-                            onListenAll = { item ->
-                                container.partRequest.request(item.bvid, item.cid)
-                                push(Video(item.bvid, listening = true, context = QueueContext.Offline))
-                            },
                             onBack = { backStack.removeLastOrNull() },
                         )
                     }
@@ -1780,7 +1776,6 @@ private fun BilbyApp(
                             mid = key.mid,
                             vodOnly = nightEngaged,
                             onVideoClick = { bvid, context -> push(Video(bvid, context = context)) },
-                            onListenUp = { bvid, context -> push(Video(bvid, listening = true, context = context)) },
                             onLiveClick = if (nightEngaged) null else { roomId -> push(LiveRoom(roomId)) },
                             onCollectionClick = {
                                 push(CollectionContents(key.mid, it.id, it.isSeason, it.name))
@@ -1800,7 +1795,6 @@ private fun BilbyApp(
                             container = container,
                             key = key,
                             onVideoClick = { bvid, context -> push(Video(bvid, context = context)) },
-                            onListenAll = { bvid, context -> push(Video(bvid, listening = true, context = context)) },
                             onBack = { backStack.removeLastOrNull() },
                         )
                     }
@@ -1911,8 +1905,8 @@ internal enum class DesktopPaneRole {
 
 /**
  * 桌面与宽屏主从双栏的统一圆角内容岛外壳:
- * - 桌面端(`LocalWindowCaption.current != null`)外框保持 `surfaceContainer` 底色与 8dp 顶栏拖拽边及四周内缩,
- *   消除根页与压栈二级页切换时右上角窗口控制按钮 8dp 跳变;
+ * - 桌面端(`LocalIsDesktopWindow.current`)外框保持 `surfaceContainer` 底色与 8dp 顶栏拖拽边及四周内缩,
+ *   消除根页与压栈二级页切换时右上角窗口控制按钮 8dp 跳变,全屏切换时也维持组合树稳定不丢状态;
  * - 主从双栏(`ListDetailSceneStrategy`)下左右两栏各自裁成独立的 `shapes.large` 圆角岛,中间由 8dp 隔断露出 `surfaceContainer` 底框。
  */
 @Composable
@@ -1920,7 +1914,7 @@ internal fun DesktopIslandFrame(
     role: DesktopPaneRole = DesktopPaneRole.Single,
     content: @Composable () -> Unit,
 ) {
-    val desktopFramed = LocalWindowCaption.current != null
+    val desktopFramed = LocalIsDesktopWindow.current
     if (!desktopFramed) {
         content()
         return
@@ -2160,7 +2154,7 @@ private fun RootTabs(
         }
     } else {
         LocalWindowCaption.current?.Host()
-        val desktopFramed = LocalWindowCaption.current != null
+        val desktopFramed = LocalIsDesktopWindow.current
         val isHeightCompact = rememberIsHeightCompact()
         val tabsScaffold: @Composable (Modifier) -> Unit = { scaffoldModifier ->
             Scaffold(modifier = scaffoldModifier) { insets ->
@@ -3689,7 +3683,7 @@ private fun listDetailMetadata(inListPane: Boolean, sceneKey: Any): Map<String, 
 @Composable
 private fun MessageDetailPlaceholder() {
     Column(modifier = Modifier.fillMaxSize()) {
-        if (LocalWindowCaption.current != null) {
+        if (LocalIsDesktopWindow.current) {
             BilbyTopBar(title = "")
         }
         EmptyState(
@@ -3764,7 +3758,6 @@ private fun WhisperRoute(
 private fun OfflineRoute(
     container: AppContainer,
     onPlay: (OfflineItem) -> Unit,
-    onListenAll: (OfflineItem) -> Unit,
     onBack: () -> Unit,
 ) {
     val vm: OfflineViewModel = viewModel(
@@ -3921,7 +3914,13 @@ private fun OfflineRoute(
             onPlay = onPlay,
             onDelete = vm::delete,
             onRetry = vm::retry,
-            onListenAll = onListenAll,
+            onPause = vm::pause,
+            onResume = vm::resume,
+            onPauseAll = vm::pauseAll,
+            onResumeAll = vm::resumeAll,
+            onRetryAllFailed = vm::retryAllFailed,
+            onClearQueue = vm::clearQueue,
+            onDeleteAll = vm::deleteAll,
             selectedIds = selectedIds,
             onToggleSelection = { item ->
                 if (searchOpen && searchQuery.isEmpty()) searchOpen = false
@@ -4076,7 +4075,6 @@ private fun ToViewListRoute(
             onDelete = { vm.delete(it) },
             onItemClick = { onVideoClick(it.bvid, QueueContext.ToView(state.asc)) },
             onRetry = vm::retry,
-            onListenAll = { onListen(it.bvid, QueueContext.ToView(state.asc)) },
             onAscChanged = vm::setAsc,
             onListenItem = { onListen(it.bvid, QueueContext.ToView(state.asc)) },
             onUpClick = onUpClick,
@@ -4169,7 +4167,7 @@ private fun FavFolderRoute(
             editor = editor,
             deletion = deletion,
             onItemClick = { item -> onVideoClick(item.bvid, queueContext(item)) },
-            onListen = { item -> onListen(item.bvid, queueContext(item)) },
+            onListenItem = { item -> onListen(item.bvid, queueContext(item)) },
             onOrderChanged = vm::setOrder,
             onLoadMore = vm::loadMore,
             onRetry = vm::retry,
@@ -4330,7 +4328,6 @@ private fun SpaceRoute(
     container: AppContainer,
     mid: Long,
     onVideoClick: (String, QueueContext) -> Unit,
-    onListenUp: (String, QueueContext) -> Unit,
     onLiveClick: ((Long) -> Unit)?,
     onCollectionClick: (SpaceCollectionItem) -> Unit,
     onDynamicAction: (DynamicAction) -> Unit,
@@ -4390,13 +4387,6 @@ private fun SpaceRoute(
         onCloseGroupPicker = vm::closeGroupPicker,
         onToggleGroup = vm::toggleGroup,
         onSaveGroups = vm::saveGroups,
-        // 听这位 UP 的投稿:挑第一条进播放页并直接以听的状态打开。**宿主只有播放页一个** ——
-        // 空间页不承载听视频界面,否则又会多出一处需要单独维护的生命周期。
-        onListenUp = {
-            state.archives.items.firstOrNull()?.let {
-                onListenUp(it.bvid, state.archives.queueContext(mid = mid, page = 1, upName = upName))
-            }
-        },
         onBack = onBack,
         onRetry = vm::retry,
         mid = mid,
@@ -4416,7 +4406,6 @@ private fun CollectionRoute(
     container: AppContainer,
     key: CollectionContents,
     onVideoClick: (String, QueueContext) -> Unit,
-    onListenAll: (String, QueueContext) -> Unit,
     onBack: () -> Unit,
 ) {
     val vm: CollectionViewModel = viewModel(
@@ -4439,11 +4428,6 @@ private fun CollectionRoute(
             val index = state.items.indexOf(item).coerceAtLeast(0)
             val page = index / SpaceRepository.COLLECTION_PAGE_SIZE + 1
             onVideoClick(item.bvid, QueueContext.Collection(key.mid, key.id, key.isSeason, key.name, page))
-        },
-        onListenAll = {
-            state.items.firstOrNull()?.let { first ->
-                onListenAll(first.bvid, QueueContext.Collection(key.mid, key.id, key.isSeason, key.name, page = 1))
-            }
         },
     )
 }

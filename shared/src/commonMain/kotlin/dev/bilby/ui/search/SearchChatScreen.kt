@@ -10,6 +10,7 @@ import dev.bilby.ui.windowDragArea
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.focusable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
@@ -87,10 +88,15 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.isAltPressed
+import androidx.compose.ui.input.key.isCtrlPressed
+import androidx.compose.ui.input.key.isMetaPressed
+import androidx.compose.ui.input.key.isShiftPressed
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
@@ -123,6 +129,7 @@ import dev.bilby.data.SearchVideo
 import dev.bilby.ui.components.EmptyState
 import dev.bilby.ui.components.KeepScrolledToBottom
 import dev.bilby.ui.components.ListScrollbar
+import dev.bilby.ui.components.LocalEditableFocusTracker
 import dev.bilby.ui.components.SearchField
 import dev.bilby.ui.components.SidePanelLayout
 import dev.bilby.ui.components.SidePanelToggle
@@ -422,10 +429,17 @@ private fun NormalSearch(
     var panelFocused by remember { mutableStateOf(false) }
     var historyDialogOpen by remember { mutableStateOf(false) }
     val inLanding = state.query.isEmpty() && searchLanding
+    val showBackToLanding = !inLanding && searchLanding
     val focused = barFocused || ((!wide || inLanding) && panelFocused) || historyDialogOpen
     val focusManager = LocalFocusManager.current
     val keyboard = LocalSoftwareKeyboardController.current
+    val editableFocus = LocalEditableFocusTracker.current
     val searchFocusRequester = remember { FocusRequester() }
+    val resultsFocusRequester = remember { FocusRequester() }
+    val backToLandingAction: () -> Unit = {
+        focusManager.clearFocus()
+        onBackToLanding()
+    }
     LaunchedEffect(wide, inLanding) {
         if (wide && !inLanding) panelFocused = false
     }
@@ -434,8 +448,13 @@ private fun NormalSearch(
             runCatching { searchFocusRequester.requestFocus() }
         }
     }
-    // 结果态未聚焦时,系统返回先退回着陆页/初始搜索页;展开态(搜索栏或建议面板有焦点)先收起焦点。
-    BackHandler(enabled = state.query.isNotEmpty() && !focused) { onBackToLanding() }
+    LaunchedEffect(showBackToLanding, focused) {
+        if (showBackToLanding && !focused && !editableFocus.isEditableFocused) {
+            runCatching { resultsFocusRequester.requestFocus() }
+        }
+    }
+    // 结果态未聚焦时,系统返回退回着陆页/初始搜索页;展开态(搜索栏或建议面板有焦点)先收起焦点。
+    BackHandler(enabled = state.query.isNotEmpty() && !focused) { backToLandingAction() }
     BackHandler(enabled = focused) { focusManager.clearFocus() }
 
     // 宽屏的助理是常驻侧栏,不要这个按钮(见 [AskAgentFab])。
@@ -485,6 +504,9 @@ private fun NormalSearch(
         when (event.key) {
             Key.Escape -> {
                 focusManager.clearFocus()
+                if (showBackToLanding) {
+                    runCatching { resultsFocusRequester.requestFocus() }
+                }
                 true
             }
             Key.DirectionDown -> if (typing) {
@@ -509,16 +531,42 @@ private fun NormalSearch(
         }
     }
 
+    val resultsKeyModifier = Modifier
+        .focusRequester(resultsFocusRequester)
+        .focusable()
+        .onPreviewKeyEvent { event ->
+            if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
+            val bare = !event.isCtrlPressed && !event.isAltPressed && !event.isShiftPressed && !event.isMetaPressed
+            if (bare && event.key == Key.Escape) {
+                when {
+                    focused -> {
+                        focusManager.clearFocus()
+                        if (showBackToLanding) {
+                            runCatching { resultsFocusRequester.requestFocus() }
+                        }
+                        true
+                    }
+                    showBackToLanding -> {
+                        backToLandingAction()
+                        true
+                    }
+                    else -> false
+                }
+            } else {
+                false
+            }
+        }
+
     val bar: @Composable ((@Composable (Modifier) -> Unit)?) -> Unit = { dropdown ->
         SearchBarRow(
             input = input,
             onInputChange = onInputChange,
             onSearch = onSearch,
-            focused = focused,
             onFocusChange = { barFocused = it },
-            onCollapse = { focusManager.clearFocus() },
-            // 宽屏与着陆页居中框不给返回箭头:前者点 scrim 收起,后者框在画面中央。
-            showBack = !wide && !inLanding,
+            onBackClick = if (showBackToLanding) backToLandingAction else { { focusManager.clearFocus() } },
+            // 开启着陆页时,结果页始终在顶栏最左保留返回着陆页箭头(宽窄屏、聚焦/失焦皆可见);
+            // 关闭着陆页时,仅在窄屏展开态给出收起焦点的返回箭头。
+            showBack = showBackToLanding || (!wide && !inLanding && focused),
             wide = wide,
             inLanding = inLanding,
             trailing = panelToggle.takeUnless { inLanding },
@@ -632,7 +680,7 @@ private fun NormalSearch(
 
     if (wide) {
         // 搜索栏叠在最上层:展开时它向下长成一张卡,压在结果与 scrim 之上。
-        Box(modifier = Modifier.fillMaxSize()) {
+        Box(modifier = Modifier.fillMaxSize().then(resultsKeyModifier)) {
             Column(modifier = Modifier.fillMaxSize()) {
                 Spacer(Modifier.height(WideBarHeight))
                 Box(modifier = Modifier.weight(1f)) { body() }
@@ -641,7 +689,7 @@ private fun NormalSearch(
             bar(dockedPanel)
         }
     } else {
-        Column(modifier = Modifier.fillMaxSize().nestedScroll(collapsing.connection)) {
+        Column(modifier = Modifier.fillMaxSize().then(resultsKeyModifier).nestedScroll(collapsing.connection)) {
             Box(modifier = collapsing.modifier) { bar(null) }
             Box(modifier = Modifier.weight(1f)) {
                 body()
@@ -745,9 +793,8 @@ private fun SearchBarRow(
     input: String,
     onInputChange: (String) -> Unit,
     onSearch: () -> Unit,
-    focused: Boolean,
     onFocusChange: (Boolean) -> Unit,
-    onCollapse: () -> Unit,
+    onBackClick: () -> Unit,
     showBack: Boolean,
     wide: Boolean,
     trailing: (@Composable () -> Unit)?,
@@ -758,7 +805,6 @@ private fun SearchBarRow(
     focusRequester: FocusRequester? = null,
     fieldModifier: Modifier = Modifier,
 ) {
-    val back = showBack && focused
     val captionSlot = if (inLanding) EmptyCaptionSlot else rememberCaptionSlot()
     val hasTrailing = trailing != null || captionSlot.buttons != null
     Row(
@@ -766,16 +812,16 @@ private fun SearchBarRow(
         modifier = captionSlot.modifier
             .fillMaxWidth()
             .padding(
-                start = if (back) Spacing.Hair else Spacing.Comfortable,
+                start = if (showBack) Spacing.Hair else Spacing.Comfortable,
                 end = if (hasTrailing) Spacing.Hair else Spacing.Comfortable,
             )
             // 宽屏与着陆页的上边距由外层给,框与侧栏卡片同一条上沿。
             .padding(top = if (wide || inLanding) 0.dp else Spacing.Tight, bottom = Spacing.Tight),
     ) {
-        if (back) {
+        if (showBack) {
             val backLabel = stringResource(Res.string.action_back)
             BilbyTooltip(text = backLabel, shortcut = "Esc") {
-                IconButton(onClick = onCollapse) {
+                IconButton(onClick = onBackClick) {
                     Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = backLabel)
                 }
             }

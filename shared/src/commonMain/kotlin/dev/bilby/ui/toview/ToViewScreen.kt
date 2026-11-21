@@ -1,47 +1,33 @@
 package dev.bilby.ui.toview
 
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.ExperimentalLayoutApi
-import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.calculateEndPadding
 import androidx.compose.foundation.layout.calculateStartPadding
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Headphones
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.Headphones as OutlinedHeadphones
-import androidx.compose.material.icons.outlined.KeyboardArrowDown
-import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.MenuDefaults
-import androidx.compose.material3.SplitButtonDefaults
-import androidx.compose.material3.SplitButtonLayout
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalLayoutDirection
-import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModel
@@ -73,7 +59,6 @@ import dev.bilby.ui.components.videoCommonMenuItemCount
 import dev.bilby.ui.errorTextRes
 import dev.bilby.ui.formatRelativeTime
 import dev.bilby.ui.theme.BilbyTheme
-import dev.bilby.ui.theme.Dimens
 import dev.bilby.ui.theme.Spacing
 import dev.bilby.ui.theme.tabular
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -249,7 +234,7 @@ class ToViewViewModel(private val repository: ToViewRepository) : ViewModel() {
 }
 
 /**
- * 稍后再看。清空在顶栏的菜单里(见 BilbyApp),这里是容量概览卡、听全部、排序和响应式网格/列表。
+ * 稍后再看。清空在顶栏的菜单里(见 BilbyApp),这里是容量概览卡、排序和响应式网格/列表。
  */
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
@@ -258,8 +243,6 @@ fun ToViewScreen(
     onDelete: (ToViewItem) -> Unit,
     onItemClick: (ToViewItem) -> Unit,
     onRetry: () -> Unit,
-    /** 听全部。给的是列表里第一条能放的,队列由播放页按同一个排序建。 */
-    onListenAll: (ToViewItem) -> Unit,
     onAscChanged: (Boolean) -> Unit,
     onListenItem: ((ToViewItem) -> Unit)? = null,
     onUpClick: (Long) -> Unit = {},
@@ -276,8 +259,6 @@ fun ToViewScreen(
             state.items.filter { matchesLibraryQuery(trimmedQuery, it.title, it.upName, it.bvid) }
         }
     }
-    val firstPlayable = remember(state.items) { state.items.firstOrNull { it.playable } }
-    val playableItems = remember(state.items) { state.items.filter { it.playable } }
     val layoutDirection = LocalLayoutDirection.current
 
     AdaptiveVideoGridContent(modifier = modifier) { columnCount ->
@@ -325,9 +306,6 @@ fun ToViewScreen(
                             count = state.count,
                             capacity = state.capacity,
                             asc = state.asc,
-                            canListen = firstPlayable != null,
-                            onListenAll = { firstPlayable?.let(onListenAll) },
-                            onListenRandom = { playableItems.randomOrNull()?.let(onListenAll) },
                             onAscChanged = onAscChanged,
                             modifier = Modifier.padding(
                                 horizontal = if (multiColumn) Spacing.Tight + 2.dp else Spacing.Comfortable,
@@ -448,26 +426,22 @@ private val AscOptions = listOf(
 )
 
 /**
- * 稍后再看概览卡:容量等宽读数 + 容量刻度条 + 听全部按钮与排序下拉。
+ * 稍后再看概览卡:容量等宽读数、右对齐排序下拉与容量刻度条。
  *
  * 上限是反囤积设计的一部分,要亮给用户看,不是藏起来的实现细节(DESIGN 2.5)。
  * 快满时转成 error 色 —— 这是少数几个用 error 色的地方,因为它确实要求用户做点什么(清一清)。
  */
-@OptIn(ExperimentalMaterial3ExpressiveApi::class, ExperimentalLayoutApi::class)
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 private fun ToViewSummaryCard(
     count: Int,
     capacity: Int,
     asc: Boolean,
-    canListen: Boolean,
-    onListenAll: () -> Unit,
-    onListenRandom: () -> Unit,
     onAscChanged: (Boolean) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val fraction = if (capacity > 0) (count.toFloat() / capacity).coerceIn(0f, 1f) else 0f
     val nearlyFull = fraction >= 0.9f
-    var listenMenuOpen by remember { mutableStateOf(false) }
     Surface(
         color = MaterialTheme.colorScheme.surfaceContainer,
         shape = MaterialTheme.shapes.large,
@@ -477,81 +451,19 @@ private fun ToViewSummaryCard(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = Spacing.Comfortable, vertical = Spacing.Cozy),
-            verticalArrangement = Arrangement.spacedBy(Spacing.Cozy),
+            verticalArrangement = Arrangement.spacedBy(Spacing.Tight),
         ) {
-            Column(verticalArrangement = Arrangement.spacedBy(Spacing.Tight)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
                 Text(
                     text = stringResource(Res.string.toview_capacity, count, capacity),
                     style = MaterialTheme.typography.titleSmallEmphasized.tabular,
                     color = if (nearlyFull) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.weight(1f),
                 )
-                // 这条不是等待指示,是容量刻度,所以留在 progress indicator 一侧,不换成 loading
-                // indicator:它读的是"已经占了多少",没有任何东西正在进行。
-                LinearProgressIndicator(
-                    progress = { fraction },
-                    color = if (nearlyFull) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
-                    trackColor = MaterialTheme.colorScheme.surfaceContainerHighest,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-            }
-            FlowRow(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalArrangement = Arrangement.spacedBy(Spacing.Tight),
-                itemVerticalAlignment = Alignment.CenterVertically,
-            ) {
-                Box {
-                    val moreOptionsLabel = stringResource(Res.string.listen_more_options)
-                    SplitButtonLayout(
-                        leadingButton = {
-                            SplitButtonDefaults.TonalLeadingButton(
-                                onClick = onListenAll,
-                                enabled = canListen,
-                            ) {
-                                Icon(
-                                    Icons.Filled.Headphones,
-                                    contentDescription = null,
-                                    modifier = Modifier.size(Dimens.IconInline),
-                                )
-                                Text(
-                                    stringResource(Res.string.toview_listen_all),
-                                    style = MaterialTheme.typography.labelLargeEmphasized,
-                                    modifier = Modifier.padding(start = Spacing.Hair + 2.dp),
-                                )
-                            }
-                        },
-                        trailingButton = {
-                            SplitButtonDefaults.TonalTrailingButton(
-                                checked = listenMenuOpen,
-                                onCheckedChange = { listenMenuOpen = it },
-                                enabled = canListen,
-                                modifier = Modifier.semantics { contentDescription = moreOptionsLabel },
-                            ) {
-                                Icon(
-                                    Icons.Outlined.KeyboardArrowDown,
-                                    contentDescription = null,
-                                    modifier = Modifier.size(SplitButtonDefaults.TrailingIconSize),
-                                )
-                            }
-                        },
-                    )
-                    DropdownMenu(
-                        expanded = listenMenuOpen,
-                        onDismissRequest = { listenMenuOpen = false },
-                        shape = MenuDefaults.shape,
-                        containerColor = MenuDefaults.containerColor,
-                    ) {
-                        DropdownMenuItem(
-                            onClick = {
-                                listenMenuOpen = false
-                                onListenRandom()
-                            },
-                            text = { Text(stringResource(Res.string.listen_start_random)) },
-                            shape = menuItemShape(0, 1),
-                        )
-                    }
-                }
-
                 SortMenu(
                     options = AscOptions,
                     selected = asc,
@@ -559,6 +471,14 @@ private fun ToViewSummaryCard(
                     preferButtonGroup = false,
                 )
             }
+            // 这条不是等待指示,是容量刻度,所以留在 progress indicator 一侧,不换成 loading
+            // indicator:它读的是"已经占了多少",没有任何东西正在进行。
+            LinearProgressIndicator(
+                progress = { fraction },
+                color = if (nearlyFull) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
+                trackColor = MaterialTheme.colorScheme.surfaceContainerHighest,
+                modifier = Modifier.fillMaxWidth(),
+            )
         }
     }
 }
@@ -622,7 +542,6 @@ private fun ToViewScreenPreview() {
             onDelete = {},
             onItemClick = {},
             onRetry = {},
-            onListenAll = {},
             onAscChanged = {},
         )
     }
@@ -641,7 +560,6 @@ private fun ToViewScreenNearlyFullPreview() {
             onDelete = {},
             onItemClick = {},
             onRetry = {},
-            onListenAll = {},
             onAscChanged = {},
         )
     }
@@ -651,6 +569,6 @@ private fun ToViewScreenNearlyFullPreview() {
 @Composable
 private fun ToViewScreenEmptyPreview() {
     BilbyTheme {
-        ToViewScreen(ToViewUiState(loading = false), {}, {}, {}, {}, {})
+        ToViewScreen(ToViewUiState(loading = false), {}, {}, {}, {})
     }
 }

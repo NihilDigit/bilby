@@ -196,7 +196,14 @@ class SearchChatViewModel(
         searchResolveJob?.cancel()
         searchResolveJob = null
         normal.clear()
-        _state.update { it.copy(input = "", suggestions = emptyList(), mode = SearchMode.Normal) }
+        _state.update {
+            it.copy(
+                input = "",
+                suggestions = emptyList(),
+                mode = SearchMode.Normal,
+                normal = normal.state.value,
+            )
+        }
     }
 
     /**

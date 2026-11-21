@@ -93,7 +93,7 @@ import dev.bilby.data.withScheme
 import dev.bilby.resources.*
 import dev.bilby.stringResource
 import dev.bilby.ui.AdaptiveContent
-import dev.bilby.ui.LocalWindowCaption
+import dev.bilby.ui.LocalIsDesktopWindow
 import dev.bilby.ui.components.BilbyTooltip
 import dev.bilby.ui.components.BilbyTopBar
 import dev.bilby.ui.components.DestructiveConfirmButton
@@ -397,7 +397,7 @@ private val CategoryIconBoxSize = 36.dp
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 internal fun SettingsTopBarTheme(content: @Composable () -> Unit) {
-    if (LocalWindowCaption.current == null) {
+    if (!LocalIsDesktopWindow.current) {
         content()
         return
     }

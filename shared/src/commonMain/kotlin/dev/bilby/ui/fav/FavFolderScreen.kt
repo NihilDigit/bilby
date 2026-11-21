@@ -3,45 +3,32 @@ package dev.bilby.ui.fav
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.ExperimentalLayoutApi
-import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.calculateEndPadding
 import androidx.compose.foundation.layout.calculateStartPadding
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Headphones
 import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.Headphones as OutlinedHeadphones
-import androidx.compose.material.icons.outlined.KeyboardArrowDown
-import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.MenuDefaults
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
-import androidx.compose.material3.SplitButtonDefaults
-import androidx.compose.material3.SplitButtonLayout
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalLayoutDirection
-import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -69,7 +56,6 @@ import dev.bilby.ui.components.rememberCopyAction
 import dev.bilby.ui.components.videoCommonMenuItemCount
 import dev.bilby.ui.errorTextRes
 import dev.bilby.ui.formatRelativeTime
-import dev.bilby.ui.theme.Dimens
 import dev.bilby.ui.theme.Spacing
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -310,14 +296,13 @@ fun FavFolderScreen(
     editor: FavFolderEditorState?,
     deletion: FavFolderDeletion?,
     onItemClick: (FavVideo) -> Unit,
-    /** 听收藏夹。给的是列表里第一条能放的,队列按同一份排序与搜索词建。 */
-    onListen: (FavVideo) -> Unit,
     onOrderChanged: (FavOrder) -> Unit,
     onNoticeShown: (FavNotice) -> Unit,
     onLoadMore: () -> Unit,
     onRetry: () -> Unit,
     editorActions: FavFolderEditorActions,
     deletionActions: FavFolderDeletionActions,
+    onListenItem: ((FavVideo) -> Unit)? = null,
     onUpClick: (Long) -> Unit = {},
     onRefresh: () -> Unit = {},
     modifier: Modifier = Modifier,
@@ -334,8 +319,6 @@ fun FavFolderScreen(
         onNoticeShown(notice)
     }
 
-    val firstPlayable = remember(state.items) { state.items.firstOrNull { it.playable } }
-    val playableItems = remember(state.items) { state.items.filter { it.playable } }
     Box(modifier = modifier.fillMaxSize()) {
         AdaptiveVideoGridContent(modifier = Modifier.fillMaxSize()) { columnCount ->
             val multiColumn = columnCount > 1
@@ -372,13 +355,10 @@ fun FavFolderScreen(
                         onRetry = onRetry,
                         contentPadding = gridPadding,
                         header = {
-                            // 页头卡片跟着列表一起滚走,理由同空间页投稿栏的表头。
+                            // 页头跟着列表一起滚走,理由同空间页投稿栏的表头。
                             FolderHeader(
                                 info = state.info,
                                 order = state.order,
-                                canListen = firstPlayable != null,
-                                onListen = { firstPlayable?.let(onListen) },
-                                onListenRandom = { playableItems.randomOrNull()?.let(onListen) },
                                 onOrderChanged = onOrderChanged,
                                 modifier = Modifier.padding(
                                     horizontal = if (multiColumn) Spacing.Tight + 2.dp else Spacing.Comfortable,
@@ -398,7 +378,8 @@ fun FavFolderScreen(
                                 onClick = null,
                                 menuLabel = stringResource(Res.string.menu_item_actions),
                                 menu = { close ->
-                                    val leadingCount = (if (item.playable) 1 else 0) + (if (copyFallbackTitle) 1 else 0)
+                                    val canListenOne = item.playable && onListenItem != null
+                                    val leadingCount = (if (canListenOne) 1 else 0) + (if (copyFallbackTitle) 1 else 0)
                                     val totalCount = leadingCount + videoCommonMenuItemCount(
                                         bvid = bvid,
                                         upMid = item.upMid,
@@ -406,14 +387,14 @@ fun FavFolderScreen(
                                         title = item.title,
                                     )
                                     var menuIndex = 0
-                                    if (item.playable) {
+                                    if (canListenOne) {
                                         val listenIdx = menuIndex++
                                         DropdownMenuItem(
                                             onClick = {
                                                 close()
-                                                onListen(item)
+                                                onListenItem.invoke(item)
                                             },
-                                            text = { Text(stringResource(Res.string.fav_listen)) },
+                                            text = { Text(stringResource(Res.string.video_action_listen)) },
                                             leadingIcon = {
                                                 Icon(Icons.Outlined.OutlinedHeadphones, contentDescription = null)
                                             },
@@ -496,103 +477,59 @@ fun FavFolderScreen(
 }
 
 /**
- * 收藏夹概览卡片：可选简介、听收藏夹按钮与排序下拉。
+ * 收藏夹页头：可选简介与右对齐排序下拉。
  *
- * 标题与条数/公开性均由顶栏呈现，不在此处重复；简介为空时那一行不画，不给占位文案。
+ * 标题与条数/公开性均由顶栏呈现，不在此处重复；简介为空时不画空卡片，直接右对齐放置排序下拉。
  */
-@OptIn(ExperimentalMaterial3ExpressiveApi::class, ExperimentalLayoutApi::class)
 @Composable
 private fun FolderHeader(
     info: FavFolderDetail?,
     order: FavOrder,
-    canListen: Boolean,
-    onListen: () -> Unit,
-    onListenRandom: () -> Unit,
     onOrderChanged: (FavOrder) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    var listenMenuOpen by remember { mutableStateOf(false) }
-    Surface(
-        color = MaterialTheme.colorScheme.surfaceContainer,
-        shape = MaterialTheme.shapes.large,
-        modifier = modifier.fillMaxWidth(),
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = Spacing.Comfortable, vertical = Spacing.Cozy),
-            verticalArrangement = Arrangement.spacedBy(Spacing.Tight),
+    val intro = info?.intro?.takeIf { it.isNotBlank() }
+    if (intro != null) {
+        Surface(
+            color = MaterialTheme.colorScheme.surfaceContainer,
+            shape = MaterialTheme.shapes.large,
+            modifier = modifier.fillMaxWidth(),
         ) {
-            if (info != null && info.intro.isNotBlank()) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = Spacing.Comfortable, vertical = Spacing.Cozy),
+                verticalArrangement = Arrangement.spacedBy(Spacing.Tight),
+            ) {
                 Text(
-                    text = info.intro,
+                    text = intro,
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-            }
-            FlowRow(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalArrangement = Arrangement.spacedBy(Spacing.Tight),
-                itemVerticalAlignment = Alignment.CenterVertically,
-            ) {
-                Box {
-                    val moreOptionsLabel = stringResource(Res.string.listen_more_options)
-                    SplitButtonLayout(
-                        leadingButton = {
-                            SplitButtonDefaults.TonalLeadingButton(
-                                onClick = onListen,
-                                enabled = canListen,
-                            ) {
-                                Icon(
-                                    Icons.Filled.Headphones,
-                                    contentDescription = null,
-                                    modifier = Modifier.size(Dimens.IconInline),
-                                )
-                                Text(
-                                    stringResource(Res.string.fav_listen),
-                                    style = MaterialTheme.typography.labelLargeEmphasized,
-                                    modifier = Modifier.padding(start = Spacing.Hair + 2.dp),
-                                )
-                            }
-                        },
-                        trailingButton = {
-                            SplitButtonDefaults.TonalTrailingButton(
-                                checked = listenMenuOpen,
-                                onCheckedChange = { listenMenuOpen = it },
-                                enabled = canListen,
-                                modifier = Modifier.semantics { contentDescription = moreOptionsLabel },
-                            ) {
-                                Icon(
-                                    Icons.Outlined.KeyboardArrowDown,
-                                    contentDescription = null,
-                                    modifier = Modifier.size(SplitButtonDefaults.TrailingIconSize),
-                                )
-                            }
-                        },
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.End,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    SortMenu(
+                        options = FavOrders,
+                        selected = order,
+                        onSelect = onOrderChanged,
                     )
-                    DropdownMenu(
-                        expanded = listenMenuOpen,
-                        onDismissRequest = { listenMenuOpen = false },
-                        shape = MenuDefaults.shape,
-                        containerColor = MenuDefaults.containerColor,
-                    ) {
-                        DropdownMenuItem(
-                            onClick = {
-                                listenMenuOpen = false
-                                onListenRandom()
-                            },
-                            text = { Text(stringResource(Res.string.listen_start_random)) },
-                            shape = menuItemShape(0, 1),
-                        )
-                    }
                 }
-                SortMenu(
-                    options = FavOrders,
-                    selected = order,
-                    onSelect = onOrderChanged,
-                )
             }
+        }
+    } else {
+        Row(
+            modifier = modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.End,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            SortMenu(
+                options = FavOrders,
+                selected = order,
+                onSelect = onOrderChanged,
+            )
         }
     }
 }
