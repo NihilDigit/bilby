@@ -506,4 +506,16 @@ class PlayerLayoutPrefsTest {
         )
         assertEquals(PlayerControlId.Share, (reordered.bottomBar[0] as PlayerPanelItem.Control).id)
     }
+
+    @Test
+    fun centerSlotScaleRatiosStaySubordinateAndDescending() {
+        assertEquals(0.78f, CenterSlotScale.Large.ratio, 1e-5f)
+        assertEquals(0.64f, CenterSlotScale.Medium.ratio, 1e-5f)
+        assertEquals(0.52f, CenterSlotScale.Small.ratio, 1e-5f)
+        assertEquals(0.42f, CenterSlotScale.ExtraSmall.ratio, 1e-5f)
+        assertTrue(CenterSlotScale.Large.ratio < 1f)
+        assertTrue(CenterSlotScale.Large.ratio > CenterSlotScale.Medium.ratio)
+        assertTrue(CenterSlotScale.Medium.ratio > CenterSlotScale.Small.ratio)
+        assertTrue(CenterSlotScale.Small.ratio > CenterSlotScale.ExtraSmall.ratio)
+    }
 }

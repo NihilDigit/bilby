@@ -322,6 +322,7 @@ class DesktopPlaybackHost(
             player = created
             applyAudioToPlayer()
             watchEnded(created)
+            watchPlaybackState(created)
             MpvPlayerHandle(created, this, scope).also { handle = it }
         }
         onConnected(handle)
@@ -378,8 +379,13 @@ class DesktopPlaybackHost(
         if (pendingPlayWhenReady != null) {
             pendingPlayWhenReady = value
         }
+        if (value) endHandled = false
         val mediamp = player?.mediamp ?: return
         if (value) mediamp.play() else mediamp.pause()
+        // 立刻同步对外状态，避免等半秒刻度或 mpv 异步事件回来期间按钮状态滞后。
+        val immediatePlaying = if (!value) false else mediamp.state.value.isPlaying
+        _state.update { it.copy(isPlaying = immediatePlaying, stoppedAtEnd = endHandled) }
+        emitPositionTick()
     }
 
     private fun setQueueOrder(order: QueueOrder) {
@@ -1142,6 +1148,22 @@ class DesktopPlaybackHost(
         scope.launch {
             player.mediamp.events.collect { event ->
                 if (event is PlaybackEvent.MediaEnded) onReachedEnd()
+            }
+        }
+    }
+
+    /** 实时跟随 mediamp 播放态变化，避免暂停/恢复要等 500ms 刻度才反映到 UI 与系统媒体控件。 */
+    private fun watchPlaybackState(player: DesktopPlayer) {
+        scope.launch {
+            var lastPlaying: Boolean? = null
+            player.mediamp.state.collect { state ->
+                val playing = state.isPlaying
+                if (playing) endHandled = false
+                if (lastPlaying != playing) {
+                    lastPlaying = playing
+                    _state.update { it.copy(isPlaying = playing, stoppedAtEnd = endHandled) }
+                    emitPositionTick()
+                }
             }
         }
     }

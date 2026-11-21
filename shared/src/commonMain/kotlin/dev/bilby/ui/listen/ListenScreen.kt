@@ -4,7 +4,11 @@ import androidx.compose.animation.core.Animatable
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.hoverable
+import androidx.compose.foundation.indication
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsHoveredAsState
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -54,16 +58,15 @@ import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material3.BottomSheetScaffold
 import androidx.compose.material3.ButtonGroup
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilledTonalIconButton
 import androidx.compose.material3.FloatingToolbarDefaults
 import androidx.compose.material3.HorizontalFloatingToolbar
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.IconButtonDefaults
-import androidx.compose.material3.LoadingIndicator
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ToggleButton
 import androidx.compose.material3.ToggleButtonDefaults
+import androidx.compose.material3.ripple
 import dev.bilby.ui.components.BilbyTooltip
 import dev.bilby.ui.components.PaneSheet
 import dev.bilby.ui.player.QueuePlaybackControls
@@ -78,6 +81,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.rememberBottomSheetScaffoldState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Stable
@@ -98,6 +102,7 @@ import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.ui.text.TextStyle
@@ -146,6 +151,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.bilby.player.PlayerHandle
 import dev.bilby.player.PlayerListener
+import dev.bilby.player.PlayerPhase
 import dev.bilby.ui.LocalPlaybackHost
 import dev.bilby.ui.LocalWindowVisible
 import dev.bilby.resources.*
@@ -165,6 +171,8 @@ import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onKeyEvent
 import androidx.compose.ui.input.key.type
 import dev.bilby.ui.components.LocalEditableFocusTracker
+import dev.bilby.ui.components.LocalPointerSource
+import dev.bilby.ui.components.rememberLoadingVisible
 import dev.bilby.ui.player.PlayerVolumeControl
 import dev.bilby.ui.video.PlayerSettingsContent
 import dev.bilby.data.CenterSlotAction
@@ -258,9 +266,6 @@ private const val DiscMinFrameIntervalNanos = 33_000_000L
 
 /** 歌词模式顶栏里那张封面的宽度。高度由 16:10 定,见风格指南 §1.3b。 */
 private val LyricsHeaderCoverWidth = 88.dp
-
-/** 上一条 / 下一条的图标尺寸。比控制条上的图标按钮大一档 —— 它们是这一屏的主要操作之一。 */
-private val SkipIconSize = 28.dp
 
 /** 倍速、定时那两枚 chip 里的图标,和视频控制条上的 chip 同一档。 */
 private val ChipIconSize = 18.dp
@@ -502,9 +507,6 @@ private fun Modifier.pullUp(amount: Dp): Modifier = layout { measurable, constra
 
 /** 进度条压进大数字行框的量:数字行框下半截和进度条触控区上半截都是空的。 */
 private val SeekBarOverlapAbove = 8.dp
-/** 控制行压进进度条触控区下半截的量。 */
-private val ControlsOverlapDisc = 16.dp
-private val ControlsOverlapLyrics = 6.dp
 
 /** 转唱片的取消区:离圆心超过半径的这么多倍。 */
 private const val CancelRadiusRatio = 1.5f
@@ -591,6 +593,9 @@ fun ListenScreen(
     var commentsOpen by rememberSaveable { mutableStateOf(false) }
     var resumeAfterDrag by remember { mutableStateOf(false) }
     var speed by remember { mutableStateOf(1f) }
+    var isPlaying by remember(player) { mutableStateOf(player?.isPlaying ?: state.isPlaying) }
+    var playWhenReady by remember(player) { mutableStateOf(player?.playWhenReady ?: state.isPlaying) }
+    var buffering by remember(player) { mutableStateOf(player?.playbackState == PlayerPhase.BUFFERING) }
     var sleepSheetOpen by remember { mutableStateOf(false) }
     var audioSheetOpen by remember { mutableStateOf(false) }
     val playback = LocalPlaybackHost.current
@@ -632,15 +637,64 @@ fun ListenScreen(
     DisposableEffect(player) {
         val listener = object : PlayerListener {
             @Suppress("PARAMETER_NAME_CHANGED_ON_OVERRIDE")
+            override fun onIsPlayingChanged(playingNow: Boolean) {
+                isPlaying = playingNow
+            }
+
+            @Suppress("PARAMETER_NAME_CHANGED_ON_OVERRIDE")
+            override fun onPlayWhenReadyChanged(ready: Boolean) {
+                playWhenReady = ready
+            }
+
+            override fun onPlaybackStateChanged(playbackState: Int) {
+                buffering = playbackState == PlayerPhase.BUFFERING
+            }
+
+            @Suppress("PARAMETER_NAME_CHANGED_ON_OVERRIDE")
             override fun onPlaybackSpeedChanged(newSpeed: Float) {
                 speed = newSpeed
             }
         }
         player?.let {
+            isPlaying = it.isPlaying
+            playWhenReady = it.playWhenReady
+            buffering = it.playbackState == PlayerPhase.BUFFERING
             speed = it.playbackSpeed
             it.addListener(listener)
+        } ?: run {
+            isPlaying = state.isPlaying
+            playWhenReady = state.isPlaying
+            buffering = false
         }
         onDispose { player?.removeListener(listener) }
+    }
+
+    LaunchedEffect(player, state.loading) {
+        player?.let {
+            isPlaying = it.isPlaying
+            playWhenReady = it.playWhenReady
+            buffering = it.playbackState == PlayerPhase.BUFFERING
+        }
+    }
+
+    val effectivePlayWhenReady = playWhenReady && !state.stoppedAtEnd
+    val togglePlayPause: () -> Unit = {
+        val activePlayer = player
+        if (activePlayer != null) {
+            val nextPlayWhenReady = !effectivePlayWhenReady
+            playWhenReady = nextPlayWhenReady
+            if (nextPlayWhenReady) {
+                activePlayer.playOrReplay(playback)
+            } else {
+                activePlayer.pause()
+            }
+        }
+    }
+    val waitingToPlay = effectivePlayWhenReady && (state.loading || buffering)
+    val showPlayLoading = when {
+        !waitingToPlay -> false
+        state.loading -> true
+        else -> rememberLoadingVisible()
     }
 
     // 拖动进度的三步,进度条和唱片共用(见 DiscView):按下先停,拖动只改显示的位置,松手才真
@@ -697,9 +751,7 @@ fun ListenScreen(
                     return@onKeyEvent true
                 }
                 when (event.key) {
-                    Key.Spacebar -> {
-                        if (activePlayer.playWhenReady) activePlayer.pause() else activePlayer.playOrReplay(playback)
-                    }
+                    Key.Spacebar -> togglePlayPause()
                     Key.DirectionLeft, Key.DirectionRight -> {
                         val step = if (event.isShiftPressed) 60_000L else 10_000L
                         val delta = if (event.key == Key.DirectionLeft) -step else step
@@ -879,6 +931,7 @@ fun ListenScreen(
                     } else {
                         DiscView(
                             state = state,
+                            isPlaying = isPlaying,
                             queue = queue,
                             coverStyle = listenLayout.coverStyle,
                             onOpenQueueSource = onOpenQueueSource,
@@ -912,7 +965,7 @@ fun ListenScreen(
                     // 窗口不可见时传 false 以自动摘除波浪进度条的 rememberInfiniteTransition。
                     BoundListenSeekBar(
                         progress = progress,
-                        playing = state.isPlaying && windowVisible,
+                        playing = isPlaying && windowVisible,
                         speed = speed,
                         onSeekStart = seekStart,
                         onSeekTo = seekTo,
@@ -928,17 +981,17 @@ fun ListenScreen(
                 }
 
                 PlaybackControls(
-                    // 歌词模式下进度条底下叠着两端的时间,只能压得浅一点。
-                    modifier = Modifier.pullUp(if (showLyrics) ControlsOverlapLyrics else ControlsOverlapDisc),
-                    isPlaying = state.isPlaying,
-                    loading = state.loading,
+                    // 绝不向上负偏移压进 SeekBar 的 48dp 触控区，保证整条悬浮工具栏与播放键 100% 独立响应点击。
+                    modifier = if (showLyrics) Modifier.padding(top = Spacing.Hair) else Modifier,
+                    isPlaying = effectivePlayWhenReady,
+                    loading = showPlayLoading,
                     speed = speed,
                     hasPrevious = state.queue.canPrevious,
                     hasNext = state.queue.canNext,
                     sleepTimer = sleepTimer,
                     progress = progress,
                     listenLayout = listenLayout,
-                    onPlayPause = { if (player.playWhenReady) player.pause() else player.playOrReplay(playback) },
+                    onPlayPause = togglePlayPause,
                     onPrevious = onPrevious,
                     onNext = onNext,
                     onSeekBySeconds = seekBySeconds,
@@ -1105,6 +1158,7 @@ private val SheetDragHandleHeight = 4.dp
 @Composable
 private fun DiscView(
     state: AudioPlaybackUiState,
+    isPlaying: Boolean,
     queue: QueueUiState,
     coverStyle: ListenCoverStyle,
     onOpenQueueSource: (QueueSource) -> Unit,
@@ -1162,7 +1216,7 @@ private fun DiscView(
                     VinylDiscArt(
                         coverUrl = item.coverUrl,
                         discSize = discSize,
-                        isPlaying = state.isPlaying,
+                        isPlaying = isPlaying,
                         speed = speed,
                         progress = progress,
                         onScrubStart = onScrubStart,
@@ -1587,8 +1641,9 @@ private fun VinylDiscArt(
 }
 
 /**
- * 底部悬浮传输工具栏([HorizontalFloatingToolbar])承载 5 槽位对称动作组([ButtonGroup]):
- * `[倍速] [外左] [内左] [▶] [内右] [外右] [定时]`，各按钮按压时触发物理 `animateWidth` 膨胀让位。
+ * 底部悬浮传输工具栏([HorizontalFloatingToolbar])承载对称传输动作组([ButtonGroup]):
+ * `[倍速] [外左] [内左] [▶] [内右] [外右] [定时]`。
+ * 播放键固定槽宽且不膨胀挤压兄弟控件，触控端避免在播放键外层套用会拦截慢点按的 TooltipBox。
  */
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalMaterial3ExpressiveApi::class)
 @Composable
@@ -1613,6 +1668,7 @@ private fun PlaybackControls(
     onAudioChange: (Int) -> Unit = {},
 ) {
     var speedSheetOpen by remember { mutableStateOf(false) }
+    val isTouchLike = LocalPointerSource.current.isTouchLike
     val speedLabel = stringResource(Res.string.player_speed)
     val playLabel = stringResource(if (isPlaying) Res.string.player_pause else Res.string.player_play)
 
@@ -1644,25 +1700,37 @@ private fun PlaybackControls(
         listenLayout.innerRight,
         listenLayout.outerRight,
     ).count { it.action != CenterSlotAction.None }
-    val groupSpacing = if (activeSideCount >= 3) Spacing.Hair else Spacing.Tight
+    val compactCluster = activeSideCount >= 3
+    val groupSpacing = if (compactCluster) 2.dp else Spacing.Hair
+    val sideMinTouchWidth = if (compactCluster) 36.dp else 44.dp
+    val pillHorizontalPadding = if (compactCluster) Spacing.Tight else Spacing.Cozy
 
     Box(
         modifier = modifier
             .fillMaxWidth()
-            .padding(horizontal = Spacing.Comfortable, vertical = Spacing.Tight),
+            .padding(
+                start = Spacing.Comfortable,
+                end = Spacing.Comfortable,
+                top = Spacing.Hair,
+                bottom = Spacing.Tight,
+            ),
         contentAlignment = Alignment.Center,
     ) {
         HorizontalFloatingToolbar(
             expanded = true,
             colors = toolbarColors,
             shape = FloatingToolbarDefaults.ContainerShape,
-            contentPadding = PaddingValues(Spacing.Tight),
+            contentPadding = PaddingValues(
+                horizontal = if (compactCluster) Spacing.Hair else Spacing.Tight,
+                vertical = Spacing.Tight,
+            ),
             expandedShadowElevation = 0.dp,
             collapsedShadowElevation = 0.dp,
             modifier = Modifier.wrapContentWidth(),
         ) {
             ButtonGroup(
                 overflowIndicator = {},
+                expandedRatio = 0f,
                 horizontalArrangement = Arrangement.spacedBy(groupSpacing),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
@@ -1676,11 +1744,10 @@ private fun PlaybackControls(
                                     onCheckedChange = { speedSheetOpen = true },
                                     interactionSource = speedInteraction,
                                     colors = pillToggleColors,
-                                    contentPadding = PaddingValues(horizontal = Spacing.Cozy),
+                                    contentPadding = PaddingValues(horizontal = pillHorizontalPadding),
                                     modifier = Modifier
-                                        .height(ListenControlHeight)
+                                        .height(ListenSidePillHeight)
                                         .widthIn(min = ListenSidePillMinWidth)
-                                        .animateWidth(speedInteraction)
                                         .pointerHoverIcon(PointerIcon.Hand)
                                         .semantics { contentDescription = "$speedLabel $speedText" },
                                 ) {
@@ -1713,7 +1780,7 @@ private fun PlaybackControls(
                                 onNext = onNext,
                                 onSeekBySeconds = onSeekBySeconds,
                                 interactionSource = outerLeftInteraction,
-                                modifier = Modifier.animateWidth(outerLeftInteraction),
+                                minTouchWidth = sideMinTouchWidth,
                             )
                         },
                         menuContent = {},
@@ -1730,7 +1797,7 @@ private fun PlaybackControls(
                                 onNext = onNext,
                                 onSeekBySeconds = onSeekBySeconds,
                                 interactionSource = innerLeftInteraction,
-                                modifier = Modifier.animateWidth(innerLeftInteraction),
+                                minTouchWidth = sideMinTouchWidth,
                             )
                         },
                         menuContent = {},
@@ -1738,8 +1805,14 @@ private fun PlaybackControls(
                 }
                 customItem(
                     buttonGroupContent = {
-                        BilbyTooltip(text = playLabel, shortcut = "Space", anchorAbove = true) {
-                            Box(modifier = Modifier.pointerHoverIcon(PointerIcon.Hand)) {
+                        if (isTouchLike) {
+                            ListenPlayButton(
+                                isPlaying = isPlaying,
+                                loading = loading,
+                                onClick = onPlayPause,
+                            )
+                        } else {
+                            BilbyTooltip(text = playLabel, shortcut = "Space", anchorAbove = true) {
                                 ListenPlayButton(
                                     isPlaying = isPlaying,
                                     loading = loading,
@@ -1761,7 +1834,7 @@ private fun PlaybackControls(
                                 onNext = onNext,
                                 onSeekBySeconds = onSeekBySeconds,
                                 interactionSource = innerRightInteraction,
-                                modifier = Modifier.animateWidth(innerRightInteraction),
+                                minTouchWidth = sideMinTouchWidth,
                             )
                         },
                         menuContent = {},
@@ -1778,7 +1851,7 @@ private fun PlaybackControls(
                                 onNext = onNext,
                                 onSeekBySeconds = onSeekBySeconds,
                                 interactionSource = outerRightInteraction,
-                                modifier = Modifier.animateWidth(outerRightInteraction),
+                                minTouchWidth = sideMinTouchWidth,
                             )
                         },
                         menuContent = {},
@@ -1793,11 +1866,11 @@ private fun PlaybackControls(
                                 speed = speed,
                                 colors = pillToggleColors,
                                 interactionSource = sleepInteraction,
+                                contentPadding = PaddingValues(horizontal = pillHorizontalPadding),
                                 onClick = onOpenSleepTimer,
                                 modifier = Modifier
-                                    .height(ListenControlHeight)
-                                    .widthIn(min = ListenSidePillMinWidth)
-                                    .animateWidth(sleepInteraction),
+                                    .height(ListenSidePillHeight)
+                                    .widthIn(min = ListenSidePillMinWidth),
                             )
                         },
                         menuContent = {},
@@ -1845,16 +1918,17 @@ private fun ListenSideSlotButton(
     onNext: () -> Unit,
     onSeekBySeconds: (Int) -> Unit,
     interactionSource: MutableInteractionSource,
+    minTouchWidth: Dp = 44.dp,
     modifier: Modifier = Modifier,
 ) {
     val action = slot.action
     if (action == CenterSlotAction.None) return
 
-    val buttonSize = when (slot.scale) {
-        CenterSlotScale.Large -> ListenControlHeight
-        CenterSlotScale.Medium -> 44.dp
-        CenterSlotScale.Small -> 38.dp
-        CenterSlotScale.ExtraSmall -> 34.dp
+    val visualSize = when (slot.scale) {
+        CenterSlotScale.Large -> 40.dp
+        CenterSlotScale.Medium -> 36.dp
+        CenterSlotScale.Small -> 32.dp
+        CenterSlotScale.ExtraSmall -> 28.dp
     }
     val enabled = when (action) {
         CenterSlotAction.Previous -> hasPrevious
@@ -1883,65 +1957,100 @@ private fun ListenSideSlotButton(
     }
     val secondsBadge = action.seekSecondsOrNull()
     val iconSize = if (secondsBadge != null) {
-        (buttonSize * 0.42f).coerceIn(14.dp, 22.dp)
+        (visualSize * 0.44f).coerceIn(13.dp, 18.dp)
     } else {
-        (buttonSize * 0.56f).coerceIn(18.dp, SkipIconSize)
+        (visualSize * 0.56f).coerceIn(16.dp, 22.dp)
     }
-    val colors = IconButtonDefaults.filledTonalIconButtonColors(
-        containerColor = if (slot.showBackground) {
-            MaterialTheme.colorScheme.surfaceContainerHighest
-        } else {
-            Color.Transparent
-        },
-        disabledContainerColor = if (slot.showBackground) {
-            MaterialTheme.colorScheme.onSurface.copy(alpha = 0.12f)
-        } else {
-            Color.Transparent
-        },
-        contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+    val pressed by interactionSource.collectIsPressedAsState()
+    val hovered by interactionSource.collectIsHoveredAsState()
+    val corner by animateDpAsState(
+        targetValue = if (pressed && enabled) visualSize * 0.30f else visualSize / 2,
+        animationSpec = MaterialTheme.motionScheme.fastSpatialSpec(),
+        label = "listen-side-corner",
     )
+    val baseContainer = when {
+        !slot.showBackground -> Color.Transparent
+        !enabled -> MaterialTheme.colorScheme.onSurface.copy(alpha = 0.12f)
+        else -> MaterialTheme.colorScheme.surfaceContainerHighest
+    }
+    val targetContainer = if (hovered && enabled) {
+        MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f).compositeOver(baseContainer)
+    } else {
+        baseContainer
+    }
+    val containerColor by animateColorAsState(
+        targetValue = targetContainer,
+        animationSpec = MaterialTheme.motionScheme.fastEffectsSpec(),
+        label = "listen-side-bg",
+    )
+    val contentColor = if (enabled) {
+        MaterialTheme.colorScheme.onSurfaceVariant
+    } else {
+        MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+    }
+    val visualShape = RoundedCornerShape(corner)
+    val touchWidth = maxOf(visualSize, minTouchWidth)
 
     BilbyTooltip(text = label, shortcut = shortcut, anchorAbove = true) {
-        FilledTonalIconButton(
-            onClick = {
-                when (action) {
-                    CenterSlotAction.Previous -> onPrevious()
-                    CenterSlotAction.Next -> onNext()
-                    is CenterSlotAction.SeekBackward -> onSeekBySeconds(-action.seconds)
-                    is CenterSlotAction.SeekForward -> onSeekBySeconds(action.seconds)
-                    CenterSlotAction.None -> Unit
-                }
-            },
-            enabled = enabled,
-            interactionSource = interactionSource,
-            shapes = IconButtonDefaults.shapes(),
-            colors = colors,
+        Box(
+            contentAlignment = Alignment.Center,
             modifier = modifier
-                .size(buttonSize)
-                .then(if (enabled) Modifier.pointerHoverIcon(PointerIcon.Hand) else Modifier),
-        ) {
-            if (secondsBadge != null) {
-                Column(
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.Center,
-                ) {
-                    Icon(
-                        imageVector = icon,
-                        contentDescription = label,
-                        modifier = Modifier.size(iconSize),
-                    )
-                    Text(
-                        text = "${secondsBadge}s",
-                        style = MaterialTheme.typography.labelSmall.tabular.copy(fontSize = 9.sp, lineHeight = 10.sp),
-                        maxLines = 1,
-                    )
-                }
-            } else {
-                Icon(
-                    imageVector = icon,
-                    contentDescription = label,
-                    modifier = Modifier.size(iconSize),
+                .size(width = touchWidth, height = Dimens.MinTouchTarget)
+                .hoverable(interactionSource = interactionSource, enabled = enabled)
+                .clickable(
+                    enabled = enabled,
+                    interactionSource = interactionSource,
+                    indication = null,
+                    role = Role.Button,
+                    onClick = {
+                        when (action) {
+                            CenterSlotAction.Previous -> onPrevious()
+                            CenterSlotAction.Next -> onNext()
+                            is CenterSlotAction.SeekBackward -> onSeekBySeconds(-action.seconds)
+                            is CenterSlotAction.SeekForward -> onSeekBySeconds(action.seconds)
+                            CenterSlotAction.None -> Unit
+                        }
+                    },
                 )
+                .then(if (enabled) Modifier.pointerHoverIcon(PointerIcon.Hand) else Modifier)
+                .semantics { contentDescription = label },
+        ) {
+            CompositionLocalProvider(LocalContentColor provides contentColor) {
+                Box(
+                    contentAlignment = Alignment.Center,
+                    modifier = Modifier
+                        .size(visualSize)
+                        .clip(visualShape)
+                        .background(containerColor)
+                        .indication(interactionSource, ripple()),
+                ) {
+                    if (secondsBadge != null) {
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.Center,
+                        ) {
+                            Icon(
+                                imageVector = icon,
+                                contentDescription = null,
+                                modifier = Modifier.size(iconSize),
+                            )
+                            Text(
+                                text = "${secondsBadge}s",
+                                style = MaterialTheme.typography.labelSmall.tabular.copy(
+                                    fontSize = if (visualSize >= 36.dp) 9.sp else 8.sp,
+                                    lineHeight = if (visualSize >= 36.dp) 10.sp else 9.sp,
+                                ),
+                                maxLines = 1,
+                            )
+                        }
+                    } else {
+                        Icon(
+                            imageVector = icon,
+                            contentDescription = null,
+                            modifier = Modifier.size(iconSize),
+                        )
+                    }
+                }
             }
         }
     }
@@ -1955,6 +2064,7 @@ private fun BoundSleepTimerButton(
     speed: Float,
     colors: androidx.compose.material3.ToggleButtonColors,
     interactionSource: MutableInteractionSource,
+    contentPadding: PaddingValues,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -1971,7 +2081,7 @@ private fun BoundSleepTimerButton(
             onCheckedChange = { onClick() },
             interactionSource = interactionSource,
             colors = colors,
-            contentPadding = PaddingValues(horizontal = Spacing.Cozy),
+            contentPadding = contentPadding,
             modifier = modifier
                 .pointerHoverIcon(PointerIcon.Hand)
                 .semantics { contentDescription = label ?: sleepLabel },
@@ -2000,15 +2110,18 @@ private fun ListenPlayButton(
     isPlaying: Boolean,
     loading: Boolean,
     onClick: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     val activeShape = isPlaying && !loading
+    val playLabel = stringResource(if (isPlaying) Res.string.player_pause else Res.string.player_play)
+    val interactionSource = remember { MutableInteractionSource() }
     val width by animateDpAsState(
         targetValue = if (activeShape) ListenPlayButtonPlayingWidth else ListenPlayButtonIdleWidth,
         animationSpec = MaterialTheme.motionScheme.fastSpatialSpec(),
         label = "listen-play-width",
     )
     val corner by animateDpAsState(
-        targetValue = if (activeShape) ListenPlayButtonPlayingCorner else ListenControlHeight / 2,
+        targetValue = if (activeShape) ListenPlayButtonPlayingCorner else ListenPlayButtonHeight / 2,
         animationSpec = MaterialTheme.motionScheme.fastSpatialSpec(),
         label = "listen-play-corner",
     )
@@ -2023,32 +2136,49 @@ private fun ListenPlayButton(
         animationSpec = MaterialTheme.motionScheme.fastEffectsSpec(),
         label = "listen-play-content",
     )
-    Surface(
-        onClick = onClick,
-        shape = RoundedCornerShape(corner),
-        color = container,
-        contentColor = contentColor,
-        modifier = Modifier.size(width = width, height = ListenControlHeight),
+    val pillShape = RoundedCornerShape(corner)
+    Box(
+        contentAlignment = Alignment.Center,
+        modifier = modifier
+            .size(width = ListenPlayButtonPlayingWidth, height = ListenPlayButtonHeight)
+            .pointerHoverIcon(PointerIcon.Hand)
+            .clickable(
+                interactionSource = interactionSource,
+                indication = null,
+                role = Role.Button,
+                onClick = onClick,
+            )
+            .semantics { contentDescription = playLabel },
     ) {
-        Box(contentAlignment = Alignment.Center) {
-            if (loading) {
-                LoadingIndicator(color = contentColor, modifier = Modifier.size(ListenPlayLoadingSize))
-            } else {
-                Icon(
-                    imageVector = if (isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow,
-                    contentDescription = stringResource(if (isPlaying) Res.string.player_pause else Res.string.player_play),
-                    modifier = Modifier.size(ListenPlayIconSize),
-                )
+        CompositionLocalProvider(LocalContentColor provides contentColor) {
+            Box(
+                contentAlignment = Alignment.Center,
+                modifier = Modifier
+                    .size(width = width, height = ListenPlayButtonHeight)
+                    .clip(pillShape)
+                    .background(container)
+                    .indication(interactionSource, ripple()),
+            ) {
+                if (loading) {
+                    LoadingSpinner(color = contentColor, size = ListenPlayLoadingSize)
+                } else {
+                    Icon(
+                        imageVector = if (isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow,
+                        contentDescription = null,
+                        modifier = Modifier.size(ListenPlayIconSize),
+                    )
+                }
             }
         }
     }
 }
 
-private val ListenControlHeight = 48.dp
-private val ListenSidePillMinWidth = 56.dp
-private val ListenPlayButtonIdleWidth = 56.dp
+private val ListenSidePillHeight = 40.dp
+private val ListenSidePillMinWidth = 48.dp
+private val ListenPlayButtonHeight = 52.dp
+private val ListenPlayButtonIdleWidth = 58.dp
 private val ListenPlayButtonPlayingWidth = 64.dp
-private val ListenPlayButtonPlayingCorner = 14.dp
+private val ListenPlayButtonPlayingCorner = 16.dp
 private val ListenPlayIconSize = 26.dp
 private val ListenPlayLoadingSize = 26.dp
 

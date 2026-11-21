@@ -8,6 +8,7 @@ import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.drag
 import androidx.compose.foundation.hoverable
+import androidx.compose.foundation.indication
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.interaction.collectIsPressedAsState
@@ -39,6 +40,7 @@ import androidx.compose.material3.FilledTonalIconButton
 import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.LoadingIndicator
 import androidx.compose.material3.Surface
+import androidx.compose.material3.ripple
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.PathEffect
@@ -58,6 +60,7 @@ import androidx.compose.foundation.layout.union
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.sizeIn
@@ -69,9 +72,11 @@ import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -95,11 +100,13 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import kotlin.math.roundToInt
 import dev.bilby.resources.*
 import dev.bilby.ui.LocalPlaybackHost
 import dev.bilby.ui.components.BilbyIcons
 import dev.bilby.ui.components.BilbyTooltip
+import dev.bilby.ui.components.LocalPointerSource
 import dev.bilby.ui.barsAndCutout
 import dev.bilby.ui.theme.Dimens
 import dev.bilby.ui.theme.FixedColors
@@ -942,6 +949,8 @@ internal fun ControlBarPlayButton(
     tooltipAnchorAbove: Boolean = true,
 ) {
     val height = ControlBarPlayHeight
+    val slotWidth = maxOf(Dimens.MinTouchTarget, height * ControlBarPlayingWidthRatio)
+    val interactionSource = remember { MutableInteractionSource() }
     val width by animateDpAsState(
         targetValue = if (isPlaying) height * ControlBarPlayingWidthRatio else height,
         animationSpec = MaterialTheme.motionScheme.fastSpatialSpec(),
@@ -964,36 +973,55 @@ internal fun ControlBarPlayButton(
         label = "control-bar-play-content",
     )
     val label = stringResource(if (isPlaying) Res.string.player_pause else Res.string.player_play)
-    PlayerTooltip(label, shortcut = "Space", anchorAbove = tooltipAnchorAbove) {
+    val pillShape = RoundedCornerShape(corner)
+    val buttonContent: @Composable () -> Unit = {
         Box(
             contentAlignment = Alignment.Center,
             modifier = modifier
-                .sizeIn(minWidth = Dimens.MinTouchTarget, minHeight = Dimens.MinTouchTarget)
-                .pointerHoverIcon(PointerIcon.Hand),
+                .size(width = slotWidth, height = Dimens.MinTouchTarget)
+                .pointerHoverIcon(PointerIcon.Hand)
+                .clickable(
+                    interactionSource = interactionSource,
+                    indication = null,
+                    role = Role.Button,
+                    onClick = onClick,
+                )
+                .semantics { contentDescription = label },
         ) {
-            Surface(
-                onClick = onClick,
-                shape = RoundedCornerShape(corner),
-                color = container,
-                contentColor = contentColor,
-                modifier = Modifier.size(width = width, height = height),
-            ) {
-                Box(contentAlignment = Alignment.Center) {
+            CompositionLocalProvider(LocalContentColor provides contentColor) {
+                Box(
+                    contentAlignment = Alignment.Center,
+                    modifier = Modifier
+                        .size(width = width, height = height)
+                        .clip(pillShape)
+                        .background(container)
+                        .indication(interactionSource, ripple()),
+                ) {
                     Icon(
                         imageVector = if (isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow,
-                        contentDescription = label,
+                        contentDescription = null,
                         modifier = Modifier.size(ControlBarPlayIconSize),
                     )
                 }
             }
         }
     }
+    if (LocalPointerSource.current.isTouchLike) {
+        buttonContent()
+    } else {
+        PlayerTooltip(label, shortcut = "Space", anchorAbove = tooltipAnchorAbove) {
+            buttonContent()
+        }
+    }
 }
 
-private val ControlBarPlayHeight = 34.dp
-private val ControlBarPlayIconSize = 20.dp
+private val ControlBarPlayHeight = 36.dp
+private val ControlBarPlayIconSize = 22.dp
 private const val ControlBarPlayingWidthRatio = 1.24f
 private const val ControlBarPlayingCornerRatio = 0.29f
+private val ControlBarSideHitWidth = 40.dp
+private val ControlBarSideVisualSize = 32.dp
+private val ControlBarSideIconSize = 18.dp
 
 /**
  * 控制条中的一体化播放控制簇：当中央簇不激活（键鼠模式、关闭触控中央控件或隐藏中央播放键）时，
@@ -1082,7 +1110,7 @@ private fun ControlBarTransportSideButton(
         CenterSlotAction.Previous -> if (canPrevious || canNext) {
             val prevLabel = stringResource(Res.string.player_previous)
             PlayerTooltip(prevLabel, anchorAbove = tooltipAnchorAbove) {
-                PlayerIconButton(
+                ControlBarSideIconButton(
                     onClick = onPrevious,
                     enabled = canPrevious,
                     icon = Icons.Filled.SkipPrevious,
@@ -1094,7 +1122,7 @@ private fun ControlBarTransportSideButton(
         CenterSlotAction.Next -> if (canPrevious || canNext) {
             val nextLabel = stringResource(Res.string.player_next)
             PlayerTooltip(nextLabel, anchorAbove = tooltipAnchorAbove) {
-                PlayerIconButton(
+                ControlBarSideIconButton(
                     onClick = onNext,
                     enabled = canNext,
                     icon = Icons.Filled.SkipNext,
@@ -1106,7 +1134,7 @@ private fun ControlBarTransportSideButton(
         is CenterSlotAction.SeekBackward -> if (allowSeek) {
             val label = stringResource(Res.string.player_seek_backward_seconds, action.seconds)
             PlayerTooltip(label, anchorAbove = tooltipAnchorAbove) {
-                PlayerIconButton(
+                ControlBarSideIconButton(
                     onClick = { onSeekDeltaMillis(-action.seconds * 1_000L) },
                     icon = Icons.Filled.FastRewind,
                     contentDescription = label,
@@ -1117,11 +1145,84 @@ private fun ControlBarTransportSideButton(
         is CenterSlotAction.SeekForward -> if (allowSeek) {
             val label = stringResource(Res.string.player_seek_forward_seconds, action.seconds)
             PlayerTooltip(label, anchorAbove = tooltipAnchorAbove) {
-                PlayerIconButton(
+                ControlBarSideIconButton(
                     onClick = { onSeekDeltaMillis(action.seconds * 1_000L) },
                     icon = Icons.Filled.FastForward,
                     contentDescription = label,
                     showBackground = slot.showBackground,
+                )
+            }
+        }
+    }
+}
+
+/**
+ * 控制条传输簇的次级侧键：视觉直径收至 32dp（图标 18dp）以衬托 36dp 主播放键，
+ * 外层保留 40dp 宽 × 48dp 高的完整点击热区。
+ */
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
+@Composable
+private fun ControlBarSideIconButton(
+    onClick: () -> Unit,
+    icon: ImageVector,
+    contentDescription: String,
+    enabled: Boolean = true,
+    showBackground: Boolean = true,
+) {
+    val interactionSource = remember { MutableInteractionSource() }
+    val pressed by interactionSource.collectIsPressedAsState()
+    val hovered by interactionSource.collectIsHoveredAsState()
+    val corner by animateDpAsState(
+        targetValue = if (pressed && enabled) 10.dp else ControlBarSideVisualSize / 2,
+        animationSpec = MaterialTheme.motionScheme.fastSpatialSpec(),
+        label = "control-bar-side-corner",
+    )
+    val baseContainer = when {
+        !showBackground -> Color.Transparent
+        !enabled -> MaterialTheme.colorScheme.onSurface.copy(alpha = 0.12f)
+        else -> mediaControlContainer()
+    }
+    val targetContainer = if (hovered && enabled) {
+        MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f).compositeOver(baseContainer)
+    } else {
+        baseContainer
+    }
+    val container by animateColorAsState(
+        targetValue = targetContainer,
+        animationSpec = MaterialTheme.motionScheme.fastEffectsSpec(),
+        label = "control-bar-side-bg",
+    )
+    val contentColor = MaterialTheme.colorScheme.onSurface.copy(alpha = if (enabled) 1f else 0.38f)
+    val shape = RoundedCornerShape(corner)
+    Box(
+        contentAlignment = Alignment.Center,
+        modifier = Modifier
+            .width(ControlBarSideHitWidth)
+            .heightIn(min = Dimens.MinTouchTarget)
+            .hoverable(interactionSource = interactionSource, enabled = enabled)
+            .clickable(
+                enabled = enabled,
+                interactionSource = interactionSource,
+                indication = null,
+                role = Role.Button,
+                onClick = onClick,
+            )
+            .then(if (enabled) Modifier.pointerHoverIcon(PointerIcon.Hand) else Modifier)
+            .semantics { this.contentDescription = contentDescription },
+    ) {
+        CompositionLocalProvider(LocalContentColor provides contentColor) {
+            Box(
+                contentAlignment = Alignment.Center,
+                modifier = Modifier
+                    .size(ControlBarSideVisualSize)
+                    .clip(shape)
+                    .background(container)
+                    .indication(interactionSource, ripple()),
+            ) {
+                Icon(
+                    imageVector = icon,
+                    contentDescription = null,
+                    modifier = Modifier.size(ControlBarSideIconSize),
                 )
             }
         }
@@ -1189,11 +1290,11 @@ internal fun CenterControlCluster(
     val outerVisualSize = maxOf(
         (baseHeight * config.outerLeft.scale.ratio),
         (baseHeight * config.outerRight.scale.ratio),
-    ).coerceAtLeast(28.dp)
+    ).coerceAtLeast(24.dp)
     val innerVisualSize = maxOf(
         (baseHeight * config.innerLeft.scale.ratio),
         (baseHeight * config.innerRight.scale.ratio),
-    ).coerceAtLeast(32.dp)
+    ).coerceAtLeast(28.dp)
     val outerSlotWidth = if (previewMode) outerVisualSize else maxOf(outerVisualSize, Dimens.MinTouchTarget)
     val innerSlotWidth = if (previewMode) innerVisualSize else maxOf(innerVisualSize, Dimens.MinTouchTarget)
     val gap = when {
@@ -1325,6 +1426,7 @@ internal fun CenterControlCluster(
     }
 }
 
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 private fun CenterSideSlotContainer(
     slot: CenterSlotConfig,
@@ -1340,20 +1442,20 @@ private fun CenterSideSlotContainer(
     selected: Boolean,
     onSelect: () -> Unit,
 ) {
-    val visualDiameter = (baseHeight * slot.scale.ratio).coerceAtLeast(28.dp)
+    val visualDiameter = (baseHeight * slot.scale.ratio).coerceAtLeast(24.dp)
     if (!visible) {
         Box(modifier = Modifier.width(slotWidth))
         return
     }
-    Box(
-        contentAlignment = Alignment.Center,
-        modifier = Modifier
-            .width(slotWidth)
-            .then(
-                if (previewMode) Modifier else Modifier.sizeIn(minWidth = Dimens.MinTouchTarget, minHeight = Dimens.MinTouchTarget),
-            ),
-    ) {
-        if (slot.action == CenterSlotAction.None) {
+    if (slot.action == CenterSlotAction.None) {
+        Box(
+            contentAlignment = Alignment.Center,
+            modifier = Modifier
+                .width(slotWidth)
+                .then(
+                    if (previewMode) Modifier else Modifier.sizeIn(minWidth = Dimens.MinTouchTarget, minHeight = Dimens.MinTouchTarget),
+                ),
+        ) {
             if (previewMode) {
                 DashedCenterSlotPlaceholder(
                     diameter = visualDiameter,
@@ -1361,79 +1463,113 @@ private fun CenterSideSlotContainer(
                     onClick = onSelect,
                 )
             }
-            return
         }
+        return
+    }
 
-        val enabled = previewMode || when (slot.action) {
-            CenterSlotAction.Previous -> canPrevious
-            CenterSlotAction.Next -> canNext
-            is CenterSlotAction.SeekBackward, is CenterSlotAction.SeekForward -> true
-            CenterSlotAction.None -> false
+    val enabled = previewMode || when (slot.action) {
+        CenterSlotAction.Previous -> canPrevious
+        CenterSlotAction.Next -> canNext
+        is CenterSlotAction.SeekBackward, is CenterSlotAction.SeekForward -> true
+        CenterSlotAction.None -> false
+    }
+    val contentAlpha = if (enabled) 1f else 0.38f
+    val icon = when (slot.action) {
+        CenterSlotAction.Previous -> Icons.Filled.SkipPrevious
+        CenterSlotAction.Next -> Icons.Filled.SkipNext
+        is CenterSlotAction.SeekBackward -> Icons.Filled.FastRewind
+        is CenterSlotAction.SeekForward -> Icons.Filled.FastForward
+        CenterSlotAction.None -> Icons.Filled.Add
+    }
+    val contentDesc = when (val a = slot.action) {
+        CenterSlotAction.Previous -> stringResource(Res.string.player_previous)
+        CenterSlotAction.Next -> stringResource(Res.string.player_next)
+        is CenterSlotAction.SeekBackward -> stringResource(Res.string.player_seek_backward_seconds, a.seconds)
+        is CenterSlotAction.SeekForward -> stringResource(Res.string.player_seek_forward_seconds, a.seconds)
+        CenterSlotAction.None -> null
+    }
+    val secondsBadge = slot.action.seekSecondsOrNull()
+    val iconSize = (visualDiameter * (if (secondsBadge != null) 0.42f else 0.54f)).coerceIn(12.dp, 26.dp)
+    val interactionSource = remember { MutableInteractionSource() }
+    val hovered by interactionSource.collectIsHoveredAsState()
+    val baseContainer = if (slot.showBackground) mediaControlContainer() else Color.Transparent
+    val containerColor = if (hovered && enabled) {
+        MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f).compositeOver(baseContainer)
+    } else {
+        baseContainer
+    }
+    val onActivate: () -> Unit = {
+        if (previewMode) {
+            onSelect()
+        } else {
+            when (val a = slot.action) {
+                CenterSlotAction.Previous -> onPrevious()
+                CenterSlotAction.Next -> onNext()
+                is CenterSlotAction.SeekBackward -> onSeekDeltaMillis(-a.seconds * 1_000L)
+                is CenterSlotAction.SeekForward -> onSeekDeltaMillis(a.seconds * 1_000L)
+                CenterSlotAction.None -> Unit
+            }
         }
-        val contentAlpha = if (enabled) 1f else 0.38f
-        val icon = when (slot.action) {
-            CenterSlotAction.Previous -> Icons.Filled.SkipPrevious
-            CenterSlotAction.Next -> Icons.Filled.SkipNext
-            is CenterSlotAction.SeekBackward -> Icons.Filled.FastRewind
-            is CenterSlotAction.SeekForward -> Icons.Filled.FastForward
-            CenterSlotAction.None -> Icons.Filled.Add
-        }
-        val contentDesc = when (val a = slot.action) {
-            CenterSlotAction.Previous -> stringResource(Res.string.player_previous)
-            CenterSlotAction.Next -> stringResource(Res.string.player_next)
-            is CenterSlotAction.SeekBackward -> stringResource(Res.string.player_seek_backward_seconds, a.seconds)
-            is CenterSlotAction.SeekForward -> stringResource(Res.string.player_seek_forward_seconds, a.seconds)
-            CenterSlotAction.None -> null
-        }
-        val secondsBadge = slot.action.seekSecondsOrNull()
-        val iconSize = (visualDiameter * (if (secondsBadge != null) 0.42f else 0.52f)).coerceIn(14.dp, 28.dp)
+    }
 
-        Surface(
-            onClick = {
-                if (previewMode) {
-                    onSelect()
-                } else {
-                    when (val a = slot.action) {
-                        CenterSlotAction.Previous -> onPrevious()
-                        CenterSlotAction.Next -> onNext()
-                        is CenterSlotAction.SeekBackward -> onSeekDeltaMillis(-a.seconds * 1_000L)
-                        is CenterSlotAction.SeekForward -> onSeekDeltaMillis(a.seconds * 1_000L)
-                        CenterSlotAction.None -> Unit
-                    }
-                }
-            },
-            enabled = enabled,
-            shape = CircleShape,
-            color = if (slot.showBackground) mediaControlContainer() else Color.Transparent,
-            contentColor = MaterialTheme.colorScheme.onSurface.copy(alpha = contentAlpha),
-            modifier = Modifier
-                .size(visualDiameter)
-                .then(
-                    if (previewMode && selected) {
-                        Modifier.border(2.dp, MaterialTheme.colorScheme.primary, CircleShape)
-                    } else {
-                        Modifier
-                    },
-                )
-                .pointerHoverIcon(PointerIcon.Hand),
-        ) {
-            Box(contentAlignment = Alignment.Center) {
+    // 外层 48dp 触控热区整块接管点击，内层视觉圆保持精致小直径以突出中央播放键。
+    Box(
+        contentAlignment = Alignment.Center,
+        modifier = Modifier
+            .width(slotWidth)
+            .then(
+                if (previewMode) Modifier else Modifier.sizeIn(minWidth = Dimens.MinTouchTarget, minHeight = Dimens.MinTouchTarget),
+            )
+            .hoverable(interactionSource = interactionSource, enabled = enabled)
+            .clickable(
+                enabled = enabled,
+                interactionSource = interactionSource,
+                indication = null,
+                role = Role.Button,
+                onClick = onActivate,
+            )
+            .then(if (enabled) Modifier.pointerHoverIcon(PointerIcon.Hand) else Modifier)
+            .then(
+                if (contentDesc != null) Modifier.semantics { contentDescription = contentDesc } else Modifier,
+            ),
+    ) {
+        CompositionLocalProvider(LocalContentColor provides MaterialTheme.colorScheme.onSurface.copy(alpha = contentAlpha)) {
+            Box(
+                contentAlignment = Alignment.Center,
+                modifier = Modifier
+                    .size(visualDiameter)
+                    .clip(CircleShape)
+                    .background(containerColor)
+                    .indication(interactionSource, ripple())
+                    .then(
+                        if (previewMode && selected) {
+                            Modifier.border(2.dp, MaterialTheme.colorScheme.primary, CircleShape)
+                        } else {
+                            Modifier
+                        },
+                    ),
+            ) {
                 if (secondsBadge != null) {
+                    val baseBadgeStyle = if (visualDiameter < 34.dp) {
+                        MaterialTheme.typography.labelSmall.tabular.copy(fontSize = 8.sp, lineHeight = 9.sp)
+                    } else {
+                        MaterialTheme.typography.labelSmall.tabular.copy(fontSize = 10.sp, lineHeight = 11.sp)
+                    }
                     Column(
                         horizontalAlignment = Alignment.CenterHorizontally,
                         verticalArrangement = Arrangement.Center,
                     ) {
                         Icon(
                             imageVector = icon,
-                            contentDescription = contentDesc,
+                            contentDescription = null,
                             modifier = Modifier.size(iconSize),
                         )
                         Text(
                             text = "${secondsBadge}s",
                             style = if (slot.showBackground) {
-                                MaterialTheme.typography.labelSmall.tabular
+                                baseBadgeStyle
                             } else {
-                                MaterialTheme.typography.labelSmall.tabular.copy(shadow = MediaBorderlessTextShadow)
+                                baseBadgeStyle.copy(shadow = MediaBorderlessTextShadow)
                             },
                             maxLines = 1,
                         )
@@ -1441,7 +1577,7 @@ private fun CenterSideSlotContainer(
                 } else {
                     Icon(
                         imageVector = icon,
-                        contentDescription = contentDesc,
+                        contentDescription = null,
                         modifier = Modifier.size(iconSize),
                     )
                 }

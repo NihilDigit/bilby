@@ -158,10 +158,10 @@ sealed interface CenterSlotAction {
 
 @Serializable
 enum class CenterSlotScale(val ratio: Float) {
-    Large(0.92f),
-    Medium(0.78f),
-    Small(0.62f),
-    ExtraSmall(0.50f),
+    Large(0.78f),
+    Medium(0.64f),
+    Small(0.52f),
+    ExtraSmall(0.42f),
 }
 
 @Immutable
