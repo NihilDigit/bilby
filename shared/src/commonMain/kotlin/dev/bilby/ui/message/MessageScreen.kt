@@ -39,7 +39,7 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.style.TextOverflow
 import dev.bilby.resources.*
 import org.jetbrains.compose.resources.StringResource
-import dev.bilby.ui.LocalWindowCaption
+import dev.bilby.ui.LocalIsDesktopWindow
 import dev.bilby.ui.padScaffoldExceptBottom
 import dev.bilby.ui.readableWidth
 import dev.bilby.data.Notice
@@ -191,7 +191,7 @@ fun MessageScreen(
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 internal fun MessageIslandTopBarTheme(content: @Composable () -> Unit) {
-    if (LocalWindowCaption.current == null) {
+    if (!LocalIsDesktopWindow.current) {
         content()
         return
     }

@@ -100,7 +100,7 @@ import dev.bilby.resources.*
 import dev.bilby.stringResource
 import dev.bilby.ui.BilbyWindowSize
 import dev.bilby.ui.CaptionDragHeight
-import dev.bilby.ui.LocalWindowCaption
+import dev.bilby.ui.LocalIsDesktopWindow
 import dev.bilby.ui.components.Avatar
 import dev.bilby.ui.components.BiliAsyncImage
 import dev.bilby.ui.components.BilbyTooltip
@@ -322,7 +322,7 @@ fun ProfileScreen(
     }
 
     val wide = rememberBilbyWindowSize().isAtLeast(BilbyWindowSize.Expanded)
-    val pinnedHeader = LocalWindowCaption.current != null
+    val pinnedHeader = LocalIsDesktopWindow.current
     val headerTitle = stringResource(if (showAccountHeader) Res.string.tab_profile else Res.string.tab_library)
 
     Column(

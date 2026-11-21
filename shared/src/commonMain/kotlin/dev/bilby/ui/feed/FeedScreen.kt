@@ -15,7 +15,6 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
@@ -43,13 +42,12 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.Article
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.outlined.ContentCopy
-import androidx.compose.material.icons.outlined.Fullscreen
-import androidx.compose.material.icons.outlined.FullscreenExit
 import androidx.compose.material.icons.outlined.KeyboardArrowUp
 import androidx.compose.material.icons.outlined.Mail
 import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material.icons.outlined.PeopleAlt
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.outlined.Schedule
 import androidx.compose.material.icons.outlined.VisibilityOff
 import androidx.compose.material.icons.outlined.WatchLater
 import androidx.compose.material3.ButtonGroup
@@ -111,14 +109,12 @@ import dev.bilby.data.LiveUpBrief
 import dev.bilby.data.UpBrief
 import dev.bilby.data.model.FeedEntry
 import dev.bilby.parseDurationSeconds
-import dev.bilby.ui.LocalAppFullscreen
 import dev.bilby.resources.*
 import dev.bilby.stringResource
 import dev.bilby.ui.BilbyWindowSize
-import dev.bilby.ui.CaptionActionButton
 import dev.bilby.ui.CaptionDragHeight
 import dev.bilby.ui.DesktopIslandSurface
-import dev.bilby.ui.LocalWindowCaption
+import dev.bilby.ui.LocalIsDesktopWindow
 import dev.bilby.ui.components.Avatar
 import dev.bilby.ui.components.BiliAsyncImage
 import dev.bilby.ui.components.BilbyTooltip
@@ -274,8 +270,8 @@ fun FeedScreen(
     onOpenOtherDynamics: () -> Unit = {},
     /** UP 主推送来的私信,见 FeedHeader。 */
     onOpenPushes: () -> Unit = {},
-    /** 手动立即进入夜间静息模式。 */
-    onEnterNightMode: () -> Unit = {},
+    /** 手动立即进入定时白名单。非空时在订阅页顶栏展示入口。 */
+    onEnterNightMode: (() -> Unit)? = null,
     onExcludeUp: (Long, String) -> Unit = { _, _ -> },
     onScrollPositionChanged: (String) -> Unit = {},
     /** 开屏定位已经做过(或确定做不成)。见 [FeedUiState.pendingLocate]。 */
@@ -343,6 +339,7 @@ fun FeedScreen(
                 onOpenFollowings = onOpenFollowings,
                 onOpenOtherDynamics = onOpenOtherDynamics,
                 onOpenPushes = onOpenPushes,
+                onEnterNightMode = onEnterNightMode,
                 onScrollPositionChanged = onScrollPositionChanged,
                 onLocated = onLocated,
                 scrollToTop = scrollToTop,
@@ -373,6 +370,7 @@ private fun FeedList(
     onOpenFollowings: () -> Unit,
     onOpenOtherDynamics: () -> Unit,
     onOpenPushes: () -> Unit,
+    onEnterNightMode: (() -> Unit)?,
     onScrollPositionChanged: (String) -> Unit,
     onLocated: () -> Unit,
     scrollToTop: Int,
@@ -396,7 +394,7 @@ private fun FeedList(
     }
     val windowSize = rememberBilbyWindowSize()
     val wide = windowSize.isAtLeast(BilbyWindowSize.Expanded)
-    val pinnedHeader = LocalWindowCaption.current != null
+    val pinnedHeader = LocalIsDesktopWindow.current
     // 「最常访问」那一格在没人可显示时整格不画,正在直播的那一格自己也可以撑起它 ——
     // 判据必须和下面渲染时用的是同一个,差一格就是开屏定位落错一条。
     val hasUpsData = state.topUps.isNotEmpty() || state.liveUps.isNotEmpty()
@@ -498,55 +496,20 @@ private fun FeedList(
     val density = LocalDensity.current
     var containerWidth by remember { mutableStateOf(0.dp) }
     val isTouch = LocalPointerSource.current.isTouchLike
-    val appFullscreen = LocalAppFullscreen.current
-    val hasDesktopCaption = LocalWindowCaption.current != null
     // 宽屏下「推送」「关注动态」入口固定归入左侧导航轨底栏可定制项,不再占用订阅页顶部空间。
     val showHeaderNavActions = !wide
-    val showCaptionActions = hasDesktopCaption || appFullscreen != null
-    val showTileRefresh = !showCaptionActions && !isTouch
-    val headerActions: (@Composable () -> Unit)? = if (showHeaderNavActions || showTileRefresh) {
+    val showTileRefresh = !LocalIsDesktopWindow.current && !isTouch
+    val headerActions: (@Composable () -> Unit)? = if (showHeaderNavActions || onEnterNightMode != null || showTileRefresh) {
         {
             FeedHeaderActions(
                 onOpenOtherDynamics = onOpenOtherDynamics,
                 onOpenPushes = onOpenPushes,
+                onEnterNightMode = onEnterNightMode,
                 includeNavActions = showHeaderNavActions,
                 includeRefresh = showTileRefresh,
                 refreshing = state.refreshing,
                 onRefresh = onRefresh,
             )
-        }
-    } else {
-        null
-    }
-    val captionActions: (@Composable RowScope.() -> Unit)? = if (showCaptionActions) {
-        {
-            if (appFullscreen != null) {
-                val isWindowFullscreen = appFullscreen.isFullscreen
-                val fullscreenLabel = stringResource(
-                    if (isWindowFullscreen) Res.string.player_exit_fullscreen else Res.string.player_fullscreen,
-                )
-                val fullscreenIcon = if (isWindowFullscreen) {
-                    Icons.Outlined.FullscreenExit
-                } else {
-                    Icons.Outlined.Fullscreen
-                }
-                BilbyTooltip(text = fullscreenLabel, shortcut = "F11") {
-                    CaptionActionButton(
-                        icon = fullscreenIcon,
-                        contentDescription = fullscreenLabel,
-                        onClick = { appFullscreen.toggle() },
-                    )
-                }
-            }
-            val refreshLabel = stringResource(Res.string.action_refresh)
-            BilbyTooltip(text = refreshLabel, shortcut = "F5") {
-                CaptionActionButton(
-                    icon = Icons.Filled.Refresh,
-                    contentDescription = refreshLabel,
-                    loading = state.refreshing,
-                    onClick = onRefresh,
-                )
-            }
         }
     } else {
         null
@@ -587,10 +550,7 @@ private fun FeedList(
                     ) {
                         if (!pinnedHeader) {
                             item(key = "header", span = FullLine, contentType = "header") {
-                                FeedHeader(
-                                    actions = headerActions,
-                                    captionActions = captionActions,
-                                )
+                                FeedHeader(actions = headerActions)
                             }
                         }
                         if (showTopUpsRow) {
@@ -678,7 +638,6 @@ private fun FeedList(
                 if (pinnedHeader) {
                     FeedHeader(
                         actions = headerActions,
-                        captionActions = captionActions,
                         bottomPadding = if (desktopSplitIslands) Spacing.Hair else 0.dp,
                     )
                 }
@@ -747,7 +706,6 @@ private fun FeedList(
 @Composable
 private fun FeedHeader(
     actions: (@Composable () -> Unit)?,
-    captionActions: (@Composable RowScope.() -> Unit)? = null,
     bottomPadding: Dp = 0.dp,
 ) {
     val captionSlot = rememberCaptionSlot()
@@ -777,23 +735,20 @@ private fun FeedHeader(
                 .windowDragArea(captionSlot.atTop),
         )
         actions?.invoke()
-        if (captionActions != null) {
-            captionSlot.ButtonsWithLeading(captionActions)
-        } else {
-            captionSlot.buttons?.invoke()
-        }
+        captionSlot.buttons?.invoke()
     }
 }
 
 /**
- * 推送、关注动态与非桌面端键鼠刷新入口:收口进 M3E [ButtonGroup](`animateWidth` 弹性伸缩 + 窄屏自动折叠溢出菜单),
+ * 推送、关注动态、定时白名单与非桌面端键鼠刷新入口:收口进 M3E [ButtonGroup](`animateWidth` 弹性伸缩 + 窄屏自动折叠溢出菜单),
  * 内层延续 `32.dp` 高、`10.dp` 小圆角的轻量 `surfaceContainerLow` 方案 C 视觉;
- * 桌面端全屏与刷新入口统一并入标题栏按钮组([CaptionActionButton])。
+ * 桌面端全屏与刷新入口统一并入标题栏按钮组。
  */
 @Composable
 private fun FeedHeaderActions(
     onOpenOtherDynamics: () -> Unit,
     onOpenPushes: () -> Unit,
+    onEnterNightMode: (() -> Unit)?,
     includeNavActions: Boolean,
     includeRefresh: Boolean,
     refreshing: Boolean,
@@ -804,6 +759,7 @@ private fun FeedHeaderActions(
     val refreshLabel = stringResource(Res.string.action_refresh)
     val pushesLabel = stringResource(Res.string.feed_up_pushes_entry)
     val dynamicsLabel = stringResource(Res.string.dynamic_other_entry)
+    val nightModeLabel = stringResource(Res.string.settings_section_night_mode)
     ButtonGroup(
         overflowIndicator = { menuState ->
             ButtonGroupDefaults.OverflowIndicator(
@@ -860,6 +816,33 @@ private fun FeedHeaderActions(
                         onClick = {
                             menuState.dismiss()
                             onOpenOtherDynamics()
+                        },
+                    )
+                },
+            )
+        }
+        if (onEnterNightMode != null) {
+            customItem(
+                buttonGroupContent = {
+                    val interactionSource = remember { MutableInteractionSource() }
+                    BilbyTooltip(text = nightModeLabel) {
+                        FeedToolbarTile(
+                            icon = Icons.Outlined.Schedule,
+                            label = null,
+                            contentDescription = nightModeLabel,
+                            interactionSource = interactionSource,
+                            modifier = Modifier.animateWidth(interactionSource),
+                            onClick = onEnterNightMode,
+                        )
+                    }
+                },
+                menuContent = { menuState ->
+                    DropdownMenuItem(
+                        text = { Text(nightModeLabel) },
+                        leadingIcon = { Icon(Icons.Outlined.Schedule, contentDescription = null) },
+                        onClick = {
+                            menuState.dismiss()
+                            onEnterNightMode()
                         },
                     )
                 },
