@@ -376,9 +376,21 @@ class OfflineDownloader(
         scope.launch { controlMutex.withLock { performPauseAll() } }
     }
 
+    /** 批量暂停指定 id 集合中排队或下载中的条目,在单次 [controlMutex] 持锁内完成。 */
+    fun pauseAll(ids: Set<String>) {
+        if (ids.isEmpty()) return
+        scope.launch { controlMutex.withLock { performPauseIds(ids) } }
+    }
+
     /** 可等待版本的 [pauseAll]。 */
     suspend fun pauseAllAndAwait() {
         scope.launch { controlMutex.withLock { performPauseAll() } }.join()
+    }
+
+    /** 可等待版本的按 id 批量暂停。 */
+    suspend fun pauseAllAndAwait(ids: Set<String>) {
+        if (ids.isEmpty()) return
+        scope.launch { controlMutex.withLock { performPauseIds(ids) } }.join()
     }
 
     private suspend fun performPauseAll() {
@@ -392,12 +404,43 @@ class OfflineDownloader(
         }
     }
 
+    private suspend fun performPauseIds(ids: Set<String>) {
+        val jobs = mutableListOf<Job>()
+        val affectedKeys = linkedSetOf<String>()
+        ids.forEach { targetKey ->
+            val detached = detachMatching(targetKey)
+            jobs += detached.jobs
+            affectedKeys += detached.affectedKeys
+        }
+        jobs.forEach { it.cancelAndJoin() }
+        val targets = _items.value.filter {
+            it.id in affectedKeys &&
+                (it.status == OfflineStatus.Queued || it.status == OfflineStatus.Running)
+        }
+        targets.forEach { current ->
+            upsert(current.copy(status = OfflineStatus.Paused, speedBytesPerSecond = 0, error = null))
+        }
+    }
+
     /** 恢复全部已暂停的条目。 */
     fun resumeAll() {
         scope.launch {
             controlMutex.withLock {
                 val paused = _items.value.filter { it.status == OfflineStatus.Paused }
                 if (paused.isNotEmpty()) enqueueInternal(paused.map { it.toRequest() })
+            }
+        }
+    }
+
+    /** 批量恢复指定 id 集合中已暂停或已失败的条目,在单次 [controlMutex] 持锁内重新入队。 */
+    fun resumeAll(ids: Set<String>) {
+        if (ids.isEmpty()) return
+        scope.launch {
+            controlMutex.withLock {
+                val targets = _items.value.filter {
+                    it.id in ids && (it.status == OfflineStatus.Paused || it.status == OfflineStatus.Failed)
+                }
+                if (targets.isNotEmpty()) enqueueInternal(targets.map { it.toRequest() })
             }
         }
     }

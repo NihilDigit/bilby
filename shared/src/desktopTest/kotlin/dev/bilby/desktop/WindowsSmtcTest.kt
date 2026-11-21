@@ -20,6 +20,10 @@ import java.lang.foreign.ValueLayout.JAVA_SHORT_UNALIGNED
 import java.lang.invoke.MethodHandles
 import java.lang.invoke.MethodType
 import java.util.UUID
+import java.util.concurrent.CompletableFuture
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 
 /**
@@ -49,6 +53,10 @@ class WindowsSmtcTest {
         assertTrue(source.contains("CountDownLatch"))
         assertTrue(source.contains("SLOT_UPDATER_CLEAR_ALL"))
         assertTrue(source.contains("private var callback: ButtonPressedComCallback? = null"))
+        assertTrue(source.contains("AtomicBoolean"))
+        assertTrue(source.contains("arenaClosed.compareAndSet(false, true)"))
+        assertTrue(source.contains("cb?.dispose()"))
+        assertTrue(source.contains("if (remaining <= 0 && closed.get())"))
     }
 
     @Test
@@ -133,11 +141,66 @@ class WindowsSmtcTest {
         }
     }
 
+    @Test
+    fun `关闭回调时若 COM refCount 大于 1 则延后到尾随 Release 归零再单次关闭共享 Arena`() {
+        val linker = Linker.nativeLinker()
+
+        // 1. 正常关闭(refCount == 1)：dispose() 同步关闭 Arena，重复调用幂等
+        val immediateCloses = AtomicInteger(0)
+        val arena1 = Arena.ofShared()
+        val cb1 = TestButtonPressedCallback(
+            arena = arena1,
+            onButton = {},
+            onArenaClosed = { immediateCloses.incrementAndGet() },
+        )
+        assertTrue(arena1.scope().isAlive)
+        cb1.dispose()
+        cb1.dispose()
+        assertFalse(arena1.scope().isAlive)
+        assertEquals(1, immediateCloses.get())
+
+        // 2. 竞态关闭(WinRT MTA 正在 InvokeAll 持有额外 AddRef，refCount == 2)：
+        //    dispose() 后 Arena 必须保持存活，直到尾随 Release() 归零后再延后单次关闭。
+        val deferredCloses = AtomicInteger(0)
+        val closedLatch = CountDownLatch(1)
+        val arena2 = Arena.ofShared()
+        val cb2 = TestButtonPressedCallback(
+            arena = arena2,
+            onButton = {},
+            onArenaClosed = {
+                deferredCloses.incrementAndGet()
+                closedLatch.countDown()
+            },
+        )
+        val vtbl = cb2.segment.get(ADDRESS, 0L).reinterpret(ADDRESS.byteSize() * 4L)
+        val addRefDowncall = linker.downcallHandle(
+            vtbl.getAtIndex(ADDRESS, 1L),
+            FunctionDescriptor.of(JAVA_INT, ADDRESS),
+        )
+        val releaseDowncall = linker.downcallHandle(
+            vtbl.getAtIndex(ADDRESS, 2L),
+            FunctionDescriptor.of(JAVA_INT, ADDRESS),
+        )
+
+        assertEquals(2, addRefDowncall.invokeExact(cb2.segment) as Int)
+        cb2.dispose()
+        assertTrue("refCount 尚未归零，Arena 不得提前关闭", arena2.scope().isAlive)
+        assertEquals(0, deferredCloses.get())
+
+        assertEquals(0, releaseDowncall.invokeExact(cb2.segment) as Int)
+        assertTrue("尾随 Release() 归零后应在宽限期后关闭 Arena", closedLatch.await(2, TimeUnit.SECONDS))
+        assertFalse(arena2.scope().isAlive)
+        assertEquals(1, deferredCloses.get())
+    }
+
     private class TestButtonPressedCallback(
-        arena: Arena,
+        private val arena: Arena,
         private val onButton: (Int) -> Unit,
+        private val onArenaClosed: () -> Unit = {},
     ) {
         private val refCount = AtomicInteger(1)
+        private val closed = AtomicBoolean(false)
+        private val arenaClosed = AtomicBoolean(false)
         private val iidUnknown = arena.allocate(16L).also { writeGuid(it, IID_IUNKNOWN) }
         private val iidAgile = arena.allocate(16L).also { writeGuid(it, IID_IAGILE_OBJECT) }
         private val iidHandler = arena.allocate(16L).also { writeGuid(it, IID_BUTTON_PRESSED_HANDLER) }
@@ -218,12 +281,33 @@ class WindowsSmtcTest {
             }
         }
 
+        fun dispose() {
+            if (!closed.compareAndSet(false, true)) return
+            if (refCount.decrementAndGet() <= 0) {
+                closeArenaOnce()
+            }
+        }
+
+        private fun closeArenaOnce() {
+            if (arenaClosed.compareAndSet(false, true)) {
+                arena.close()
+                onArenaClosed()
+            }
+        }
+
         @Suppress("unused")
         fun addRef(@Suppress("UNUSED_PARAMETER") thisPtr: MemorySegment): Int = refCount.incrementAndGet()
 
         @Suppress("unused")
-        fun release(@Suppress("UNUSED_PARAMETER") thisPtr: MemorySegment): Int =
-            refCount.decrementAndGet().coerceAtLeast(0)
+        fun release(@Suppress("UNUSED_PARAMETER") thisPtr: MemorySegment): Int {
+            val remaining = refCount.decrementAndGet()
+            if (remaining <= 0 && closed.get()) {
+                CompletableFuture.delayedExecutor(10L, TimeUnit.MILLISECONDS).execute {
+                    closeArenaOnce()
+                }
+            }
+            return remaining.coerceAtLeast(0)
+        }
 
         @Suppress("unused")
         fun invoke(

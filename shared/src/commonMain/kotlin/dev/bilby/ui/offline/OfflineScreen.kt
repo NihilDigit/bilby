@@ -73,6 +73,7 @@ import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -98,6 +99,7 @@ import androidx.lifecycle.viewModelScope
 import dev.bilby.formatDurationMillis
 import dev.bilby.formatDurationSeconds
 import dev.bilby.offline.OfflineCollectionGroup
+import dev.bilby.offline.OfflineCollectionPartition
 import dev.bilby.offline.OfflineDownloader
 import dev.bilby.offline.OfflineItem
 import dev.bilby.offline.OfflineQueueSummary
@@ -198,20 +200,12 @@ class OfflineViewModel(
 
     fun pauseSelected(ids: Set<String>) {
         if (ids.isEmpty()) return
-        items.value.forEach { item ->
-            if (item.id in ids && (item.status == OfflineStatus.Queued || item.status == OfflineStatus.Running)) {
-                downloader.pause(item.bvid, item.cid)
-            }
-        }
+        downloader.pauseAll(ids)
     }
 
     fun resumeSelected(ids: Set<String>) {
         if (ids.isEmpty()) return
-        items.value.forEach { item ->
-            if (item.id in ids && (item.status == OfflineStatus.Paused || item.status == OfflineStatus.Failed)) {
-                downloader.resume(item.bvid, item.cid)
-            }
-        }
+        downloader.resumeAll(ids)
     }
 
     fun pauseAll() = downloader.pauseAll()
@@ -231,7 +225,70 @@ class OfflineViewModel(
 }
 
 /** 已缓存内容的三种浏览维度。 */
-private enum class OfflineViewTab { All, Collections, Creators }
+internal enum class OfflineViewTab { All, Collections, Creators }
+
+/**
+ * 计算当前视图中实际渲染为可选条目行的 id 集合，供外层多选「全选」、选中集自动裁剪与顶栏入口可见性使用:
+ * - 已打开合集 / UP 主子视图: 仅限当前子视图内（含搜索过滤）的条目；
+ * - 根视图有搜索词: 当前搜索命中的在途 + 已完成平铺条目；
+ * - 「全部」标签: 全部可见条目；
+ * - 「合集」根标签: 仅在途条目与平铺的未归组合集单集（不含折叠合集卡片）；
+ * - 「UP 主」根标签: 仅在途条目（无在途条目时为空集，不在纯 UP 卡片根视图开启多选）。
+ */
+internal fun computeOfflineSelectableIds(
+    items: List<OfflineItem>,
+    visibleItems: List<OfflineItem>,
+    activeTab: OfflineViewTab,
+    activeCollection: OfflineCollectionGroup?,
+    activeUp: OfflineUpGroup?,
+    trimmedQuery: String,
+    collectionPartition: OfflineCollectionPartition,
+): Set<String> {
+    if (items.isEmpty()) return emptySet()
+    val inSubView = activeCollection != null || activeUp != null
+    if (visibleItems.isEmpty() && !inSubView) return emptySet()
+    return when {
+        activeCollection != null -> {
+            val subItems = if (trimmedQuery.isEmpty()) {
+                activeCollection.items
+            } else {
+                activeCollection.items.filter {
+                    matchesLibraryQuery(trimmedQuery, it.title, it.partTitle, it.upName, it.bvid)
+                }
+            }
+            subItems.mapTo(LinkedHashSet()) { it.id }
+        }
+
+        activeUp != null -> {
+            val subItems = if (trimmedQuery.isEmpty()) {
+                activeUp.items
+            } else {
+                activeUp.items.filter {
+                    matchesLibraryQuery(trimmedQuery, it.title, it.partTitle, it.upName, it.bvid)
+                }
+            }
+            subItems.mapTo(LinkedHashSet()) { it.id }
+        }
+
+        trimmedQuery.isNotEmpty() -> visibleItems.mapTo(LinkedHashSet()) { it.id }
+
+        else -> {
+            val inFlightIds = visibleItems
+                .asSequence()
+                .filter { it.status != OfflineStatus.Completed }
+                .map { it.id }
+            when (activeTab) {
+                OfflineViewTab.All -> visibleItems.mapTo(LinkedHashSet()) { it.id }
+                OfflineViewTab.Collections -> buildSet {
+                    inFlightIds.forEach(::add)
+                    collectionPartition.ungrouped.forEach { add(it.id) }
+                }
+
+                OfflineViewTab.Creators -> inFlightIds.toCollection(LinkedHashSet())
+            }
+        }
+    }
+}
 
 /** 待确认整组删除的目标(合集或 UP 主)。 */
 private data class PendingGroupDelete(
@@ -273,6 +330,8 @@ fun OfflineScreen(
      */
     selectedIds: Set<String>? = null,
     onToggleSelection: (OfflineItem) -> Unit = {},
+    /** 汇报当前活动标签或子视图中真正可选的条目 id 集合，约束外层「全选」与多选入口。 */
+    onSelectableIdsChanged: (Set<String>) -> Unit = {},
     searchQuery: String = "",
     modifier: Modifier = Modifier,
     contentPadding: PaddingValues = PaddingValues(),
@@ -315,6 +374,30 @@ fun OfflineScreen(
     }
     LaunchedEffect(openedUpKeyId, activeUp) {
         if (openedUpKeyId != null && activeUp == null) openedUpKeyId = null
+    }
+
+    val selectableIds = remember(
+        items,
+        visibleItems,
+        activeTab,
+        activeCollection,
+        activeUp,
+        trimmedQuery,
+        collectionPartition,
+    ) {
+        computeOfflineSelectableIds(
+            items = items,
+            visibleItems = visibleItems,
+            activeTab = activeTab,
+            activeCollection = activeCollection,
+            activeUp = activeUp,
+            trimmedQuery = trimmedQuery,
+            collectionPartition = collectionPartition,
+        )
+    }
+    val latestOnSelectableIdsChanged by rememberUpdatedState(onSelectableIdsChanged)
+    LaunchedEffect(selectableIds) {
+        latestOnSelectableIdsChanged(selectableIds)
     }
 
     // 多选态由外层 BackHandler 先接管;非多选态下按返回键退出合集/UP 主子视图。

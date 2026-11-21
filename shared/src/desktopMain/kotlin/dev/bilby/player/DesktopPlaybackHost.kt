@@ -24,6 +24,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -96,7 +97,19 @@ class DesktopPlaybackHost(
     private var openGeneration = 0
     private var extendBeforeJob: Job? = null
     private var extendAfterJob: Job? = null
+    private var extendBeforeToken = 0L
+    private var extendAfterToken = 0L
     private var loadAllJob: Job? = null
+    private var loadAllToken = 0L
+
+    private fun cancelQueueJobs() {
+        extendBeforeToken++
+        extendAfterToken++
+        loadAllToken++
+        extendBeforeJob?.cancel()
+        extendAfterJob?.cancel()
+        loadAllJob?.cancel()
+    }
 
     private var loadJob: Job? = null
     private var tickJob: Job? = null
@@ -275,9 +288,7 @@ class DesktopPlaybackHost(
         if (live.id in ids) return
         liveFrame = null
         enrichJob?.cancel()
-        extendBeforeJob?.cancel()
-        extendAfterJob?.cancel()
-        loadAllJob?.cancel()
+        cancelQueueJobs()
         queue.cancelExtend()
         queue.finishLoadAll()
         sleepTimer.cancel()
@@ -299,9 +310,7 @@ class DesktopPlaybackHost(
         loadJob?.cancel()
         tickJob?.cancel()
         enrichJob?.cancel()
-        extendBeforeJob?.cancel()
-        extendAfterJob?.cancel()
-        loadAllJob?.cancel()
+        cancelQueueJobs()
         sleepTimer.cancel()
         player?.mediamp?.stopPlayback()
         frames.clear()
@@ -507,9 +516,7 @@ class DesktopPlaybackHost(
         val frame = liveFrame ?: return
         liveFrame = null
         enrichJob?.cancel()
-        extendBeforeJob?.cancel()
-        extendAfterJob?.cancel()
-        loadAllJob?.cancel()
+        cancelQueueJobs()
         queue.cancelExtend()
         queue.finishLoadAll()
         if (frame.enriching) {
@@ -696,38 +703,47 @@ class DesktopPlaybackHost(
         val feed = frame.feed ?: return
         if (frame.detached) return
         if (!queue.beginExtend(before)) return
+        val token = if (before) ++extendBeforeToken else ++extendAfterToken
+        val prevLoadAll = loadAllJob
+        fun isOwner(): Boolean = liveFrame === frame &&
+            frame.feed === feed &&
+            !frame.detached &&
+            (if (before) extendBeforeToken else extendAfterToken) == token
         publishState()
         val job = scope.launch {
-            val loaded = try {
-                if (before) feed.loadBefore() else feed.loadAfter()
-            } catch (t: Throwable) {
-                if (t is CancellationException) {
-                    queue.cancelExtend(before)
-                    throw t
+            try {
+                prevLoadAll?.cancelAndJoin()
+                if (loadAllJob === prevLoadAll) loadAllJob = null
+                if (!isOwner()) return@launch
+                val loaded = try {
+                    if (before) feed.loadBefore() else feed.loadAfter()
+                } catch (t: Throwable) {
+                    if (t is CancellationException) throw t
+                    BiliLog.w("队列续取异常 before=$before", t)
+                    null
                 }
-                BiliLog.w("队列续取异常 before=$before", t)
-                null
-            }
-            if (liveFrame !== frame || frame.feed !== feed) {
-                queue.cancelExtend(before)
-                return@launch
-            }
-            if (loaded == null) {
-                BiliLog.w("队列续取失败 before=$before,暂停自动续取等待手动重试")
-                queue.failExtend(before)
+                if (!isOwner()) return@launch
+                if (loaded == null) {
+                    BiliLog.w("队列续取失败 before=$before,暂停自动续取等待手动重试")
+                    queue.failExtend(before)
+                    publishState()
+                    return@launch
+                }
+                val added = queue.completeExtend(
+                    before = before,
+                    freshItems = loaded,
+                    feedHasBefore = feed.hasBefore,
+                    feedHasAfter = feed.hasAfter,
+                    feedTotal = feed.total,
+                )
                 publishState()
-                return@launch
+                val moreInDirection = if (before) queue.hasBefore else queue.hasAfter
+                if (added == 0 && loaded.isNotEmpty() && moreInDirection) extendQueue(before)
+            } catch (t: CancellationException) {
+                // Desktop 端所有帧共用一份 queue.pagination，仅在仍是当前帧与当前任务时才清理标志。
+                if (isOwner()) queue.cancelExtend(before)
+                throw t
             }
-            val added = queue.completeExtend(
-                before = before,
-                freshItems = loaded,
-                feedHasBefore = feed.hasBefore,
-                feedHasAfter = feed.hasAfter,
-                feedTotal = feed.total,
-            )
-            publishState()
-            val moreInDirection = if (before) queue.hasBefore else queue.hasAfter
-            if (added == 0 && loaded.isNotEmpty() && moreInDirection) extendQueue(before)
         }
         if (before) extendBeforeJob = job else extendAfterJob = job
     }
@@ -740,33 +756,55 @@ class DesktopPlaybackHost(
         if (!queue.beginLoadAll()) return
         val prevBefore = extendBeforeJob
         val prevAfter = extendAfterJob
+        val prevLoadAll = loadAllJob
+        extendBeforeToken++
+        extendAfterToken++
+        val token = ++loadAllToken
         extendBeforeJob = null
         extendAfterJob = null
         prevBefore?.cancel()
         prevAfter?.cancel()
+        prevLoadAll?.cancel()
+        val isOwner = {
+            liveFrame === frame &&
+                frame.feed === feed &&
+                !frame.detached &&
+                loadAllToken == token
+        }
         publishState()
         loadAllJob = scope.launch {
-            prevBefore?.join()
-            prevAfter?.join()
-            loadAllQueuePages(
-                feed = feed,
-                pagination = queue.pagination,
-                order = queue.order,
-                isStillValid = { liveFrame === frame && frame.feed === feed && !frame.detached },
-                applyItems = { before, loaded ->
-                    queue.insert(if (before) 0 else queue.size, loaded)
-                },
-                playlistSize = { queue.size },
-                onProgress = { publishState() },
-            )
+            try {
+                prevLoadAll?.cancelAndJoin()
+                prevBefore?.cancelAndJoin()
+                prevAfter?.cancelAndJoin()
+                if (!isOwner()) return@launch
+                loadAllQueuePages(
+                    feed = feed,
+                    pagination = queue.pagination,
+                    order = queue.order,
+                    isStillValid = isOwner,
+                    applyItems = { before, loaded ->
+                        queue.insert(if (before) 0 else queue.size, loaded)
+                    },
+                    playlistSize = { queue.size },
+                    onProgress = { publishState() },
+                )
+            } finally {
+                if (loadAllToken == token) loadAllJob = null
+                if (isOwner() && queue.loadingAll) {
+                    queue.finishLoadAll()
+                    publishState()
+                }
+            }
         }
     }
 
     private fun cancelLoadAllQueue() {
         if (liveFrame == null) return
         if (!queue.loadingAll && loadAllJob?.isActive != true) return
+        loadAllToken++
+        // 保留 loadAllJob 引用至其真正退出，确保后续 extendQueue / loadAllQueue 先 cancelAndJoin() 再访问 QueueFeed。
         loadAllJob?.cancel()
-        loadAllJob = null
         queue.finishLoadAll()
         publishState()
     }
@@ -775,9 +813,7 @@ class DesktopPlaybackHost(
     private fun detachToCustomQueue(frame: Frame) {
         if (liveFrame === frame) {
             enrichJob?.cancel()
-            extendBeforeJob?.cancel()
-            extendAfterJob?.cancel()
-            loadAllJob?.cancel()
+            cancelQueueJobs()
             openGeneration++
             queue.detachToCustomQueue()
         }
@@ -866,9 +902,7 @@ class DesktopPlaybackHost(
         if (liveRoom != null) return
         val current = queue.current ?: return
         enrichJob?.cancel()
-        extendBeforeJob?.cancel()
-        extendAfterJob?.cancel()
-        loadAllJob?.cancel()
+        cancelQueueJobs()
         frame.detached = false
         frame.pendingReset = true
         frame.feed = null

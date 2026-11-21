@@ -76,7 +76,9 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.unit.Constraints
 import dev.bilby.ui.AdaptiveContent
+import dev.bilby.ui.rememberBilbyWindowSize
 import dev.bilby.ui.theme.Breakpoints
+import dev.bilby.ui.useTwoPaneMediaLayout
 import dev.bilby.ui.windowDragArea
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
@@ -1317,6 +1319,7 @@ private fun FullQueueSheet(
             }
         },
     ) {
+        val hostedInVerticalSheet = !inPane && !rememberBilbyWindowSize().useTwoPaneMediaLayout
         EpisodeList(
             rows = queue.rows,
             onSelect = onSelectEpisode,
@@ -1328,6 +1331,7 @@ private fun FullQueueSheet(
             errorAfter = queue.edges?.errorAfter == true,
             remainingBefore = queue.edges?.remainingBefore,
             remainingAfter = queue.edges?.remainingAfter,
+            hostedInVerticalSheet = hostedInVerticalSheet,
             // 左右留页边距:分段列表项自己不带外边距,贴着 sheet 边缘时圆角看不出来。
             contentPadding = PaddingValues(
                 start = Spacing.Comfortable,

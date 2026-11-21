@@ -55,6 +55,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -184,9 +185,21 @@ class AudioPlaybackService : MediaSessionService() {
     /** 两头各自的续取,见 [extendQueue]。活帧退到栈里时一并取消。 */
     private var extendBeforeJob: Job? = null
     private var extendAfterJob: Job? = null
+    private var extendBeforeToken = 0L
+    private var extendAfterToken = 0L
 
     /** 顺序加载整份队列全部前后页,见 [loadAllQueue]。 */
     private var loadAllJob: Job? = null
+    private var loadAllToken = 0L
+
+    private fun cancelQueueJobs() {
+        extendBeforeToken++
+        extendAfterToken++
+        loadAllToken++
+        extendBeforeJob?.cancel()
+        extendAfterJob?.cancel()
+        loadAllJob?.cancel()
+    }
 
     /** 起播链路的测量。只在 [openFrame] 起头,只在 [finishOpenChain] 收尾。 */
     private var openChain: PerfTrace.Chain? = null
@@ -424,9 +437,7 @@ class AudioPlaybackService : MediaSessionService() {
         // 下面的 scope.cancel() 本来就会带走它,列在这里是为了和上面两个 Job 一起读:
         // 服务没了之后没有任何一个还在飞的请求值得跑完。
         enrichJob?.cancel()
-        extendBeforeJob?.cancel()
-        extendAfterJob?.cancel()
-        loadAllJob?.cancel()
+        cancelQueueJobs()
         scope.cancel()
         // 先放播放器,再放 session:指南示例给的就是这个顺序(background-playback
         // 「实现服务生命周期」),而 session 手上握着的正是这个播放器。
@@ -612,9 +623,7 @@ class AudioPlaybackService : MediaSessionService() {
         val frame = liveFrame ?: return
         liveFrame = null
         enrichJob?.cancel()
-        extendBeforeJob?.cancel()
-        extendAfterJob?.cancel()
-        loadAllJob?.cancel()
+        cancelQueueJobs()
         frame.pagination.cancelExtend()
         frame.pagination.finishLoadAll()
         // 补全被打断时快照里是临时队列,换回来时再补一次。
@@ -866,42 +875,50 @@ class AudioPlaybackService : MediaSessionService() {
         val feed = frame.feed ?: return
         if (frame.detached) return
         if (!frame.pagination.beginExtend(before)) return
+        val token = if (before) ++extendBeforeToken else ++extendAfterToken
+        val prevLoadAll = loadAllJob
+        fun isOwner(): Boolean = liveFrame === frame &&
+            frame.feed === feed &&
+            !frame.detached &&
+            (if (before) extendBeforeToken else extendAfterToken) == token
         publishQueueChange()
         val job = scope.launch {
-            val loaded = try {
-                if (before) feed.loadBefore() else feed.loadAfter()
-            } catch (t: Throwable) {
-                if (t is CancellationException) {
-                    frame.pagination.cancelExtend(before)
-                    throw t
+            try {
+                prevLoadAll?.cancelAndJoin()
+                if (loadAllJob === prevLoadAll) loadAllJob = null
+                if (!isOwner()) return@launch
+                val loaded = try {
+                    if (before) feed.loadBefore() else feed.loadAfter()
+                } catch (t: Throwable) {
+                    if (t is CancellationException) throw t
+                    BiliLog.w("队列续取异常 before=$before", t)
+                    null
                 }
-                BiliLog.w("队列续取异常 before=$before", t)
-                null
-            }
-            if (liveFrame !== frame || frame.feed !== feed) {
-                frame.pagination.cancelExtend(before)
-                return@launch
-            }
-            if (loaded == null) {
-                BiliLog.w("队列续取失败 before=$before,暂停自动续取等待手动重试")
-                frame.pagination.failExtend(before)
+                if (!isOwner()) return@launch
+                if (loaded == null) {
+                    BiliLog.w("队列续取失败 before=$before,暂停自动续取等待手动重试")
+                    frame.pagination.failExtend(before)
+                    publishQueueChange()
+                    return@launch
+                }
+                val present = (0 until player.mediaItemCount).mapTo(HashSet()) { player.getMediaItemAt(it).mediaId }
+                val fresh = loaded.distinctBy { it.bvid }.filter { it.bvid !in present }.map { it.toMediaItem() }
+                if (before) player.addMediaItems(0, fresh) else player.addMediaItems(player.mediaItemCount, fresh)
+                frame.pagination.completeExtend(
+                    before = before,
+                    addedCount = fresh.size,
+                    feedHasBefore = feed.hasBefore,
+                    feedHasAfter = feed.hasAfter,
+                    feedTotal = feed.total,
+                    newPlaylistSize = player.mediaItemCount,
+                )
                 publishQueueChange()
-                return@launch
+                val moreInDirection = if (before) frame.pagination.hasBefore else frame.pagination.hasAfter
+                if (fresh.isEmpty() && loaded.isNotEmpty() && moreInDirection) extendQueue(before)
+            } catch (t: CancellationException) {
+                if (isOwner()) frame.pagination.cancelExtend(before)
+                throw t
             }
-            val present = (0 until player.mediaItemCount).mapTo(HashSet()) { player.getMediaItemAt(it).mediaId }
-            val fresh = loaded.distinctBy { it.bvid }.filter { it.bvid !in present }.map { it.toMediaItem() }
-            if (before) player.addMediaItems(0, fresh) else player.addMediaItems(player.mediaItemCount, fresh)
-            frame.pagination.completeExtend(
-                before = before,
-                addedCount = fresh.size,
-                feedHasBefore = feed.hasBefore,
-                feedHasAfter = feed.hasAfter,
-                feedTotal = feed.total,
-                newPlaylistSize = player.mediaItemCount,
-            )
-            publishQueueChange()
-            val moreInDirection = if (before) frame.pagination.hasBefore else frame.pagination.hasAfter
-            if (fresh.isEmpty() && loaded.isNotEmpty() && moreInDirection) extendQueue(before)
         }
         if (before) extendBeforeJob = job else extendAfterJob = job
     }
@@ -914,36 +931,58 @@ class AudioPlaybackService : MediaSessionService() {
         if (!frame.pagination.beginLoadAll()) return
         val prevBefore = extendBeforeJob
         val prevAfter = extendAfterJob
+        val prevLoadAll = loadAllJob
+        extendBeforeToken++
+        extendAfterToken++
+        val token = ++loadAllToken
         extendBeforeJob = null
         extendAfterJob = null
         prevBefore?.cancel()
         prevAfter?.cancel()
+        prevLoadAll?.cancel()
+        val isOwner = {
+            liveFrame === frame &&
+                frame.feed === feed &&
+                !frame.detached &&
+                loadAllToken == token
+        }
         publishQueueChange()
         loadAllJob = scope.launch {
-            prevBefore?.join()
-            prevAfter?.join()
-            loadAllQueuePages(
-                feed = feed,
-                pagination = frame.pagination,
-                order = queueOrder,
-                isStillValid = { liveFrame === frame && frame.feed === feed && !frame.detached },
-                applyItems = { before, loaded ->
-                    val present = (0 until player.mediaItemCount).mapTo(HashSet()) { player.getMediaItemAt(it).mediaId }
-                    val fresh = loaded.distinctBy { it.bvid }.filter { it.bvid !in present }.map { it.toMediaItem() }
-                    if (before) player.addMediaItems(0, fresh) else player.addMediaItems(player.mediaItemCount, fresh)
-                    fresh.size
-                },
-                playlistSize = { player.mediaItemCount },
-                onProgress = { publishQueueChange() },
-            )
+            try {
+                prevLoadAll?.cancelAndJoin()
+                prevBefore?.cancelAndJoin()
+                prevAfter?.cancelAndJoin()
+                if (!isOwner()) return@launch
+                loadAllQueuePages(
+                    feed = feed,
+                    pagination = frame.pagination,
+                    order = queueOrder,
+                    isStillValid = isOwner,
+                    applyItems = { before, loaded ->
+                        val present = (0 until player.mediaItemCount).mapTo(HashSet()) { player.getMediaItemAt(it).mediaId }
+                        val fresh = loaded.distinctBy { it.bvid }.filter { it.bvid !in present }.map { it.toMediaItem() }
+                        if (before) player.addMediaItems(0, fresh) else player.addMediaItems(player.mediaItemCount, fresh)
+                        fresh.size
+                    },
+                    playlistSize = { player.mediaItemCount },
+                    onProgress = { publishQueueChange() },
+                )
+            } finally {
+                if (loadAllToken == token) loadAllJob = null
+                if (isOwner() && frame.pagination.loadingAll) {
+                    frame.pagination.finishLoadAll()
+                    publishQueueChange()
+                }
+            }
         }
     }
 
     private fun cancelLoadAllQueue() {
         val frame = liveFrame ?: return
         if (!frame.pagination.loadingAll && loadAllJob?.isActive != true) return
+        loadAllToken++
+        // 保留 loadAllJob 引用至其真正退出，确保后续 extendQueue / loadAllQueue 先 cancelAndJoin() 再访问 QueueFeed。
         loadAllJob?.cancel()
-        loadAllJob = null
         frame.pagination.finishLoadAll()
         publishQueueChange()
     }
@@ -952,9 +991,7 @@ class AudioPlaybackService : MediaSessionService() {
     private fun detachToCustomQueue(frame: Frame) {
         if (liveFrame === frame) {
             enrichJob?.cancel()
-            extendBeforeJob?.cancel()
-            extendAfterJob?.cancel()
-            loadAllJob?.cancel()
+            cancelQueueJobs()
             openGeneration++
         }
         frame.enriching = false
@@ -1129,9 +1166,7 @@ class AudioPlaybackService : MediaSessionService() {
         if (count == 0 || curIdx !in 0 until count) return
 
         enrichJob?.cancel()
-        extendBeforeJob?.cancel()
-        extendAfterJob?.cancel()
-        loadAllJob?.cancel()
+        cancelQueueJobs()
         live.pagination.reset()
         live.detached = false
         live.pendingReset = true
@@ -1160,9 +1195,7 @@ class AudioPlaybackService : MediaSessionService() {
         if (live.id in ids) return
         liveFrame = null
         enrichJob?.cancel()
-        extendBeforeJob?.cancel()
-        extendAfterJob?.cancel()
-        loadAllJob?.cancel()
+        cancelQueueJobs()
         live.pagination.cancelExtend()
         live.pagination.finishLoadAll()
         sleepTimer.cancel()

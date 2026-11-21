@@ -326,4 +326,66 @@ class OfflineDownloaderTest {
             scope.cancel()
         }
     }
+
+    @Test
+    fun `pauseAll(ids) 与 resumeAll(ids) 仅操作选中条目且在单次持锁内批量完成`() = runBlocking {
+        val store = newStore()
+        val done = OfflineItem(
+            bvid = "BV1done", cid = 1L, title = "已完成", status = OfflineStatus.Completed, createdAtMillis = 1L,
+        )
+        val fail1 = OfflineItem(
+            bvid = "BV1f1", cid = 2L, title = "失败1", status = OfflineStatus.Failed, error = "err", createdAtMillis = 2L,
+        )
+        val fail2 = OfflineItem(
+            bvid = "BV1f2", cid = 3L, title = "失败2", status = OfflineStatus.Failed, error = "err", createdAtMillis = 3L,
+        )
+        store.write(done)
+        store.write(fail1)
+        store.write(fail2)
+
+        val started = CompletableDeferred<Unit>()
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        try {
+            val downloader = newDownloader(
+                scope = scope,
+                store = store,
+                hasNetwork = { false },
+                awaitNetwork = {
+                    started.complete(Unit)
+                    CompletableDeferred<Unit>().await()
+                },
+            )
+            withTimeout(5_000) { downloader.items.first { it.size == 3 } }
+            downloader.enqueue(listOf(request("BV1q1", 11L), request("BV1q2", 12L), request("BV1q3", 13L)))
+            withTimeout(5_000) { started.await() }
+            withTimeout(5_000) {
+                downloader.items.first { list -> list.count { it.status == OfflineStatus.Queued } == 3 }
+            }
+
+            // 仅暂停 q1 与 q2，q3 应保持 Queued，已完成与失败条目不变
+            val selectedPauseIds = setOf(offlineId("BV1q1", 11L), offlineId("BV1q2", 12L))
+            downloader.pauseAllAndAwait(selectedPauseIds)
+            val afterPause = downloader.items.value.associateBy { it.bvid }
+            assertEquals(OfflineStatus.Paused, afterPause["BV1q1"]?.status)
+            assertEquals(OfflineStatus.Paused, afterPause["BV1q2"]?.status)
+            assertEquals(OfflineStatus.Queued, afterPause["BV1q3"]?.status)
+            assertEquals(OfflineStatus.Completed, afterPause["BV1done"]?.status)
+            assertEquals(OfflineStatus.Failed, afterPause["BV1f1"]?.status)
+
+            // 仅恢复 q1 与 fail1，q2 与 fail2 应保持原状态
+            val selectedResumeIds = setOf(offlineId("BV1q1", 11L), offlineId("BV1f1", 2L))
+            downloader.resumeAll(selectedResumeIds)
+            withTimeout(5_000) {
+                downloader.items.first { list ->
+                    val map = list.associateBy { it.bvid }
+                    map["BV1q1"]?.status == OfflineStatus.Queued && map["BV1f1"]?.status == OfflineStatus.Queued
+                }
+            }
+            val afterResume = downloader.items.value.associateBy { it.bvid }
+            assertEquals(OfflineStatus.Paused, afterResume["BV1q2"]?.status)
+            assertEquals(OfflineStatus.Failed, afterResume["BV1f2"]?.status)
+        } finally {
+            scope.cancel()
+        }
+    }
 }

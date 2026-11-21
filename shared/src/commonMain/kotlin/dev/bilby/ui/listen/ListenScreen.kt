@@ -1702,7 +1702,7 @@ private fun PlaybackControls(
     ).count { it.action != CenterSlotAction.None }
     val compactCluster = activeSideCount >= 3
     val groupSpacing = if (compactCluster) 2.dp else Spacing.Hair
-    val sideMinTouchWidth = if (compactCluster) 36.dp else 44.dp
+    val sideMinTouchWidth = if (compactCluster) 36.dp else Dimens.MinTouchTarget
     val pillHorizontalPadding = if (compactCluster) Spacing.Tight else Spacing.Cozy
 
     Box(
@@ -1918,7 +1918,7 @@ private fun ListenSideSlotButton(
     onNext: () -> Unit,
     onSeekBySeconds: (Int) -> Unit,
     interactionSource: MutableInteractionSource,
-    minTouchWidth: Dp = 44.dp,
+    minTouchWidth: Dp = Dimens.MinTouchTarget,
     modifier: Modifier = Modifier,
 ) {
     val action = slot.action
@@ -2381,6 +2381,7 @@ private fun QueueSheetContent(
                 errorAfter = queueState?.errorAfter == true || queue.edges?.errorAfter == true,
                 remainingBefore = queueState?.remainingBefore ?: queue.edges?.remainingBefore,
                 remainingAfter = queueState?.remainingAfter ?: queue.edges?.remainingAfter,
+                hostedInVerticalSheet = !fillHeight,
                 contentPadding = PaddingValues(
                     start = Spacing.Comfortable,
                     end = Spacing.Comfortable,
