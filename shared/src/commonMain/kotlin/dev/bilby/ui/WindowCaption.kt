@@ -16,16 +16,19 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Fullscreen
+import androidx.compose.material.icons.filled.FullscreenExit
 import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material.icons.outlined.Fullscreen
-import androidx.compose.material.icons.outlined.FullscreenExit
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.Stable
 import androidx.compose.runtime.compositionLocalOf
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -52,6 +55,7 @@ import dev.bilby.stringResource
 import dev.bilby.ui.components.BilbyTooltip
 import dev.bilby.ui.components.LoadingSpinner
 import dev.bilby.ui.components.LocalPageRefreshRegistry
+import dev.bilby.ui.components.LocalPointerSource
 
 /**
  * 桌面端紧凑标题栏融合契约(照 Chrome / Piko):界面声明自己能容纳窗口按钮与拖动区后,窗口不再画单独一条
@@ -84,6 +88,29 @@ interface WindowCaption {
 val LocalWindowCaption = compositionLocalOf<WindowCaption?> { null }
 
 /**
+ * 桌面端应用级全屏期间的右上角槽位跟踪器：供顶栏 [rememberCaptionSlot] 在实际渲染
+ * `[刷新] [退出全屏]` 时登记自身，使宿主窗口在无顶栏槽位的界面（如登录页、单栏窄播放页）
+ * 能可靠展示兜底退出全屏按钮，避免用户被困在全屏中。
+ */
+@Stable
+class FullscreenCaptionSlotTracker {
+    private val activeSlots = mutableStateListOf<Any>()
+
+    val hasActiveSlot: Boolean by derivedStateOf { activeSlots.isNotEmpty() }
+
+    @Composable
+    fun Track() {
+        val key = remember { Any() }
+        DisposableEffect(this, key) {
+            activeSlots.add(key)
+            onDispose { activeSlots.remove(key) }
+        }
+    }
+}
+
+val LocalFullscreenCaptionSlotTracker = compositionLocalOf<FullscreenCaptionSlotTracker?> { null }
+
+/**
  * 把一块空白或纯展示区域登记为窗口拖动区(`WM_NCHITTEST` -> `HTCAPTION`)。
  *
  * **切勿挂在包含按钮或输入框的父容器上**:非客户区命中测试发生在系统消息层,早于 Compose 指针分发,
@@ -114,13 +141,15 @@ class CaptionSlot(
     val buttons: (@Composable () -> Unit)?,
     /** 该行位于窗口顶部,行内空白应登记为 [windowDragArea]。 */
     val atTop: Boolean = false,
+    /** 当前上下文处于桌面窗口(含应用全屏)且该槽位参与右上角几何检测。 */
+    val active: Boolean = false,
     private val dragGap: (@Composable () -> Unit)? = null,
     private val rawButtons: (@Composable () -> Unit)? = null,
 ) {
     /**
      * 将与标题栏同视觉体系的动作按钮(如全屏、刷新)紧贴窗口控制按钮(`— ❐ ×`)左侧排布:
      * 拖动留白落在整组按钮之前,动作按钮与系统三键共用 [CaptionButtonSpacing],中间无额外断层。
-     * 处于无标题栏全屏态时([rawButtons] 为空),仍原样渲染 [leading]。
+     * 处于无标题栏全屏态时([rawButtons] 为空或仅含退出全屏),仍原样渲染 [leading]。
      */
     @Composable
     fun ButtonsWithLeading(leading: @Composable RowScope.() -> Unit) {
@@ -145,7 +174,13 @@ fun rememberCaptionSlot(
     topInset: Dp = 28.dp,
     dragGap: Dp? = null,
 ): CaptionSlot {
-    val caption = LocalWindowCaption.current ?: return NoCaptionSlot
+    val caption = LocalWindowCaption.current
+    val appFullscreen = LocalAppFullscreen.current
+    val desktopAppFullscreen = caption == null &&
+        LocalIsDesktopWindow.current &&
+        appFullscreen?.isFullscreen == true &&
+        !appFullscreen.isPlayerFullscreen
+    if (caption == null && !desktopAppFullscreen) return NoCaptionSlot
     val liveWindow = LocalLiveWindowInfo.current ?: LocalWindowInfo.current
     val density = LocalDensity.current
     val insetPx = with(density) { topInset.toPx() }
@@ -160,7 +195,7 @@ fun rememberCaptionSlot(
         atTop = nearTop
         touches = nearTop && bounds.right >= liveWindow.containerSize.width - edgeTolerancePx
     }
-    val dragGapContent: (@Composable () -> Unit)? = if (touches) {
+    val dragGapContent: (@Composable () -> Unit)? = if (touches && caption != null) {
         {
             // 按钮前固定留出一段可拖动空白:操作区按钮紧凑时无需去别处找缝隙拖窗口。
             // 窄窗口收紧间距,为顶栏标题与返回/操作按钮让出空间。
@@ -172,12 +207,15 @@ fun rememberCaptionSlot(
     }
     val rawButtons: (@Composable () -> Unit)? = if (touches) {
         {
+            if (desktopAppFullscreen) {
+                LocalFullscreenCaptionSlotTracker.current?.Track()
+            }
             Row(
                 horizontalArrangement = Arrangement.spacedBy(CaptionButtonSpacing),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 CaptionUtilityButtons()
-                caption.Buttons()
+                caption?.Buttons()
             }
         }
     } else {
@@ -193,7 +231,8 @@ fun rememberCaptionSlot(
         } else {
             null
         },
-        atTop = atTop,
+        atTop = caption != null && atTop,
+        active = true,
         dragGap = dragGapContent,
         rawButtons = rawButtons,
     )
@@ -201,7 +240,7 @@ fun rememberCaptionSlot(
 
 /**
  * 桌面窗口右上角与系统三键(`— ❐ ×`)平级的通用窗口动作组:
- * `[刷新(仅当前最上层页面注册了刷新能力时显示)] [全屏(仅桌面窗口支持时显示)]`。
+ * `[刷新(仅非触控模式且当前最上层页面注册了刷新能力时显示)] [全屏/退出全屏(仅桌面窗口支持时显示)]`。
  */
 @Composable
 fun CaptionUtilityButtons(
@@ -211,9 +250,10 @@ fun CaptionUtilityButtons(
     buttonHeight: Dp = CaptionButtonSize,
     buttonShape: Shape = CircleShape,
 ) {
+    val isTouch = LocalPointerSource.current.isTouchLike
     val pageRefresh = LocalPageRefreshRegistry.current
     val appFullscreen = LocalAppFullscreen.current
-    if (pageRefresh.canRefresh) {
+    if (!isTouch && pageRefresh.canRefresh) {
         val refreshLabel = stringResource(Res.string.action_refresh)
         BilbyTooltip(text = refreshLabel, shortcut = "F5") {
             CaptionActionButton(
@@ -233,9 +273,9 @@ fun CaptionUtilityButtons(
             if (isWindowFullscreen) Res.string.player_exit_fullscreen else Res.string.player_fullscreen,
         )
         val fullscreenIcon = if (isWindowFullscreen) {
-            Icons.Outlined.FullscreenExit
+            Icons.Filled.FullscreenExit
         } else {
-            Icons.Outlined.Fullscreen
+            Icons.Filled.Fullscreen
         }
         BilbyTooltip(text = fullscreenLabel, shortcut = "F11") {
             CaptionActionButton(
@@ -249,10 +289,6 @@ fun CaptionUtilityButtons(
         }
     }
 }
-
-/** 供桌面宿主窗口壳(`:desktop`)读取本地化关闭按钮文案，避免跨模块直接引用 `Res`。 */
-@Composable
-fun captionCloseLabel(): String = stringResource(Res.string.action_close)
 
 /**
  * 紧邻桌面窗口控制按钮(`— ❐ ×`)排布的无边框标题栏动作按钮(如应用全屏、刷新)。
