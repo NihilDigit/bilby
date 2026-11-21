@@ -15,6 +15,7 @@ import io.ktor.client.statement.HttpResponse
 import io.ktor.http.ContentType
 import io.ktor.http.HttpHeaders
 import io.ktor.http.Parameters
+import io.ktor.http.content.ByteArrayContent
 import io.ktor.http.contentType
 import io.ktor.http.setCookie
 import kotlinx.serialization.json.JsonObject
@@ -170,6 +171,32 @@ class BiliClient(
             // (account_mgr.dart:66-68),app 分支只是在这之后跳过 cookie。
             applyIdentityHeaders(credentials)
             header(HttpHeaders.Referrer, BiliConstants.REFERER)
+        }
+    }
+
+    /**
+     * app 端 gRPC-over-HTTP 路线(`app.bilibili.com`,见 `notes/subtitle-api.md` §2,
+     * 对照 PiliPlus `lib/grpc/grpc_req.dart` 与 `lib/utils/accounts/grpc_headers.dart`)。
+     *
+     * 不带 Cookie;带 5 字节 gRPC 帧头、`application/grpc`、`APP_USER_AGENT`、`buvid`
+     * 及已登录时的 `Authorization: identify_v1 <access_key>`。
+     */
+    suspend fun appGrpcPost(path: String, protoBody: ByteArray): HttpResponse {
+        val credentials = settings.credentials.first()
+        val buvid = fingerprint.cookieEntries()["buvid3"].orEmpty()
+        val framed = frameGrpcMessage(protoBody)
+        return http.post("${BiliConstants.APP_HOST}$path") {
+            header(HttpHeaders.UserAgent, BiliConstants.APP_USER_AGENT)
+            header("grpc-encoding", "gzip")
+            header("gzip-accept-encoding", "gzip,identity")
+            header("bili-http-engine", "cronet")
+            header("x-bili-gaia-vtoken", "")
+            header("x-bili-aurora-zone", "")
+            if (buvid.isNotEmpty()) header("buvid", buvid)
+            if (credentials.accessKey.isNotEmpty()) {
+                header(HttpHeaders.Authorization, "identify_v1 ${credentials.accessKey}")
+            }
+            setBody(ByteArrayContent(framed, GRPC_CONTENT_TYPE))
         }
     }
 
@@ -344,6 +371,8 @@ class BiliClient(
         @SerialName("sub_url") val subUrl: String = "",
     )
 }
+
+private val GRPC_CONTENT_TYPE = ContentType("application", "grpc")
 
 /** img_url 形如 .../wbi/<key>.png,key 就是去掉路径与扩展名的文件名。 */
 private fun String.keyFromUrl(): String = substringAfterLast('/').substringBefore('.')
