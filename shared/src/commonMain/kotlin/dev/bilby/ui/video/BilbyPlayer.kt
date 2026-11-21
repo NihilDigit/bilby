@@ -84,6 +84,7 @@ import dev.bilby.player.cueAt
 import dev.bilby.ui.player.DanmakuFeed
 import dev.bilby.ui.player.DanmakuFontSizeSp
 import dev.bilby.ui.player.DanmakuVoteOverlay
+import dev.bilby.ui.player.isCompactVoteContainer
 import dev.bilby.ui.player.rememberDanmakuVoteUiState
 import dev.bilby.ui.player.rememberLargePlayer
 import dev.bilby.ui.rememberBilbyWindowSize
@@ -131,6 +132,9 @@ private val SubtitleControlsGap = Spacing.Tight
 private val SubtitleBottomBare = 24.dp
 /** 字幕轨启用时,右下角投票面板抬升让开一行字幕槽的高度,避免窄宽度下与居中字幕横向重叠。 */
 private val SubtitleBandClearance = 48.dp
+/** 紧凑内嵌画幅下,投票卡片紧贴单行控制条或单行字幕上方,不浪费稀缺的垂直画幅。 */
+private val CompactVoteBottomWithControls = 64.dp
+private val CompactVoteSubtitleClearance = 32.dp
 
 /**
  * 播放器画面 + 控件。非全屏时被塞进 16:9 容器,全屏时铺满整屏,两种形态共用这一个 composable,
@@ -421,19 +425,42 @@ fun BilbyPlayer(
                 modifier = Modifier.align(Alignment.BottomCenter),
             )
             if (matchesCurrentPage && danmakuPrefs.enabled && !pip && !locked && danmakuVotes.isNotEmpty()) {
+                val compactVote = isCompactVoteContainer(
+                    containerWidth = containerWidth,
+                    containerHeight = containerHeight,
+                    fallbackCompact = !largePlayer,
+                )
                 val hasSubtitles = subtitleCues.isNotEmpty()
+                val voteBottomTarget = if (compactVote) {
+                    when {
+                        controlsVisible -> if (controlBarHeight > 0.dp) {
+                            controlBarHeight + Spacing.Hair
+                        } else {
+                            CompactVoteBottomWithControls
+                        }
+                        hasSubtitles -> SubtitleBottomBare + CompactVoteSubtitleClearance
+                        else -> Spacing.Tight
+                    }
+                } else {
+                    subtitleBottomTarget +
+                        if (hasSubtitles && (largePlayer || !controlsVisible)) SubtitleBandClearance else 0.dp
+                }
                 val voteBottom by animateDpAsState(
-                    targetValue = subtitleBottomTarget +
-                        if (hasSubtitles && (largePlayer || !controlsVisible)) SubtitleBandClearance else 0.dp,
+                    targetValue = voteBottomTarget,
                     animationSpec = MaterialTheme.motionScheme.fastSpatialSpec(),
                     label = "vote-bottom",
                 )
+                val voteHorizontalMargin = if (compactVote) Spacing.Tight else Spacing.Comfortable
+                val voteTopMargin = if (compactVote) Spacing.Hair else Spacing.Tight
                 DanmakuVoteOverlay(
                     votes = danmakuVotes,
                     positionMillis = { progressState.displayPositionMillis },
                     cid = danmakuCid,
                     onVote = onVoteDanmaku,
                     uiState = voteUiState,
+                    containerWidth = containerWidth,
+                    containerHeight = containerHeight,
+                    compactFallback = !largePlayer,
                     modifier = Modifier
                         .align(Alignment.BottomEnd)
                         .then(
@@ -446,10 +473,10 @@ fun BilbyPlayer(
                             },
                         )
                         .padding(
-                            top = Spacing.Tight,
+                            top = voteTopMargin,
                             bottom = voteBottom,
-                            start = Spacing.Comfortable,
-                            end = Spacing.Comfortable,
+                            start = voteHorizontalMargin,
+                            end = voteHorizontalMargin,
                         ),
                 )
             }

@@ -274,6 +274,9 @@ class PlayerShellScope internal constructor(
      * 一行与两行排法差着五十来 dp,常量只按得了一种。收起着时保留上一次的高度。
      */
     val controlBarHeight: Dp,
+    /** 播放器外层容器实测宽高，供浮层（如互动投票）按真实画幅尺寸自适配；未量到前为 [Dp.Unspecified]。 */
+    val containerWidth: Dp,
+    val containerHeight: Dp,
     val speed: Float,
     internal val actions: PlayerShellActions,
 ) : BoxScope by box {
@@ -518,6 +521,8 @@ fun PlayerShell(
     val isSeeking by remember { derivedStateOf { progress.dragPositionMillis != null } }
     var resumeAfterDrag by remember { mutableStateOf(false) }
     var controlBarHeight by remember(isFullscreen, pip) { mutableStateOf(0.dp) }
+    var containerWidth by remember { mutableStateOf(Dp.Unspecified) }
+    var containerHeight by remember { mutableStateOf(Dp.Unspecified) }
     val density = LocalDensity.current
 
     val userSpeed = speedController?.speed ?: player.playbackSpeed
@@ -805,6 +810,10 @@ fun PlayerShell(
     Box(
         modifier = modifier
             .background(Color.Black)
+            .onSizeChanged { size ->
+                containerWidth = with(density) { size.width.toDp() }
+                containerHeight = with(density) { size.height.toDp() }
+            }
             // 鼠标:在播放器范围内移动就唤出控件并重新计时,按下时把键盘焦点拿到播放器上(快捷键
             // 要它)。挂在最外层、在 Initial 阶段只看不吃:挂在画面那一层的话,光标停在控制条上
             // 时移动事件被控制条接走,控件会在光标底下收起。焦点只在按下时拿,不在移动时拿:
@@ -853,6 +862,8 @@ fun PlayerShell(
             canNext = playbackState.queue?.canNext == true,
             progressState = progress,
             controlBarHeight = controlBarHeight,
+            containerWidth = containerWidth,
+            containerHeight = containerHeight,
             speed = userSpeed,
             actions = actions,
         )
