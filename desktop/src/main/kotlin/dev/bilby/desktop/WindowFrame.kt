@@ -1,13 +1,25 @@
 package dev.bilby.desktop
 
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsHoveredAsState
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -23,6 +35,7 @@ import androidx.compose.material.icons.filled.Remove
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
@@ -37,15 +50,27 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.awt.ComposeWindow
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.painter.Painter
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.PointerEventType
+import androidx.compose.ui.input.pointer.PointerType
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInWindow
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.platform.WindowInfo
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.platform.Typeface
 import androidx.compose.ui.text.style.TextOverflow
@@ -53,16 +78,30 @@ import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.FrameWindowScope
+import com.sun.jna.Pointer
+import com.sun.jna.platform.win32.User32
+import com.sun.jna.platform.win32.WinDef.HWND
+import com.sun.jna.platform.win32.WinUser
 import dev.bilby.BiliLog
 import dev.bilby.ui.CaptionButtonSize
 import dev.bilby.ui.CaptionButtonSpacing
+import dev.bilby.ui.CaptionUtilityButtons
+import dev.bilby.ui.LocalAppFullscreen
+import dev.bilby.ui.LocalIsDesktopWindow
 import dev.bilby.ui.LocalLiveWindowInfo
 import dev.bilby.ui.LocalWindowCaption
 import dev.bilby.ui.LocalWindowResizing
 import dev.bilby.ui.WindowCaption
+import dev.bilby.ui.captionCloseLabel
+import dev.bilby.ui.components.LocalPointerSource
+import dev.bilby.ui.components.PointerSource
+import dev.bilby.ui.components.trackPointerSource
 import dev.bilby.ui.theme.LocalIsDarkTheme
 import dev.bilby.ui.theme.Spacing
 import dev.nihildigit.windowstouch.ProvideTouchViewConfiguration
+import java.awt.Frame
+import java.awt.event.WindowEvent
+import kotlinx.coroutines.delay
 import org.jetbrains.skia.FontMgr
 import org.jetbrains.skia.FontStyle
 
@@ -76,12 +115,17 @@ import org.jetbrains.skia.FontStyle
  * [showTitleBar] 为 false 时(无边框全屏、小窗)不画标题栏,整个窗口交给内容。标题栏放在
  * [content] 之前的条件分支里,出入时 [content] 在组合里的位置不变,播放页不会因此重建。
  */
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 internal fun FrameWindowScope.WindowFrame(
     title: String,
     icon: Painter?,
     showTitleBar: Boolean,
     forceActiveCaption: Boolean = false,
+    fullscreenRevealBar: Boolean = false,
+    onRequestClose: () -> Unit = {
+        window.dispatchEvent(WindowEvent(window, WindowEvent.WINDOW_CLOSING))
+    },
     content: @Composable () -> Unit,
 ) {
     // 在组合时就接管:此时窗口已有 HWND 而尚未显示,首帧就是去掉系统标题栏后的布局。
@@ -108,13 +152,66 @@ internal fun FrameWindowScope.WindowFrame(
         if (!showTitleBar) caption?.clearLayout()
         onDispose {}
     }
-    Column(Modifier.fillMaxSize()) {
+
+    // 应用级全屏顶部 UWP 风格唤出控制栏状态（鼠标移至顶边或触控/手写笔自顶边下拉呼出）。
+    var revealOpen by remember { mutableStateOf(false) }
+    var pointerOverSensor by remember { mutableStateOf(false) }
+    var pointerOverBar by remember { mutableStateOf(false) }
+    var touchPinned by remember { mutableStateOf(false) }
+    var hostOrigin by remember { mutableStateOf(Offset.Zero) }
+    var revealBarBounds by remember { mutableStateOf(Rect.Zero) }
+    LaunchedEffect(fullscreenRevealBar) {
+        if (!fullscreenRevealBar) {
+            revealOpen = false
+            pointerOverSensor = false
+            pointerOverBar = false
+            touchPinned = false
+            revealBarBounds = Rect.Zero
+        }
+    }
+    LaunchedEffect(fullscreenRevealBar, revealOpen, pointerOverSensor, pointerOverBar, touchPinned) {
+        if (fullscreenRevealBar && revealOpen && !pointerOverSensor && !pointerOverBar && !touchPinned) {
+            delay(FullscreenRevealHideDelayMillis)
+            revealOpen = false
+        }
+    }
+
+    val windowPointerSource = remember { PointerSource() }
+    CompositionLocalProvider(LocalPointerSource provides windowPointerSource) {
+    Column(Modifier.fillMaxSize().trackPointerSource(windowPointerSource)) {
         if (showTitleBar && caption != null && !hosted) {
-            WindowsTitleBar(caption, title, icon, suppressed = compact?.suppressed == true)
+            CompositionLocalProvider(LocalWindowCaption provides compact) {
+                WindowsTitleBar(caption, title, icon, suppressed = compact?.suppressed == true)
+            }
         }
         // Compose Desktop 的触摸拖动阈值写死 18dp,手指要划出一大截才开始滚动;换成 Android 的 8dp。
-        Box(Modifier.fillMaxWidth().weight(1f)) {
-            CompositionLocalProvider(LocalWindowCaption provides compact) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .weight(1f)
+                .onGloballyPositioned { coordinates ->
+                    if (coordinates.isAttached) hostOrigin = coordinates.positionInWindow()
+                }
+                .pointerInput(fullscreenRevealBar) {
+                    if (!fullscreenRevealBar) return@pointerInput
+                    awaitPointerEventScope {
+                        while (true) {
+                            val event = awaitPointerEvent(PointerEventPass.Initial)
+                            if (event.type == PointerEventType.Press && revealOpen) {
+                                val pressPos = event.changes.firstOrNull()?.position
+                                if (pressPos != null && !revealBarBounds.contains(pressPos + hostOrigin)) {
+                                    revealOpen = false
+                                    touchPinned = false
+                                }
+                            }
+                        }
+                    }
+                },
+        ) {
+            CompositionLocalProvider(
+                LocalIsDesktopWindow provides true,
+                LocalWindowCaption provides compact,
+            ) {
                 SettledWindowInfo(caption) {
                     ProvideTouchViewConfiguration(content)
                 }
@@ -134,7 +231,15 @@ internal fun FrameWindowScope.WindowFrame(
                             .height(40.dp)
                             .onGloballyPositioned { compact.setFallbackDrag(it.boundsInWindow()) },
                     )
-                    compact.ButtonRow(countAsRow = false)
+                    CompositionLocalProvider(LocalWindowCaption provides compact) {
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(CaptionButtonSpacing),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            CaptionUtilityButtons()
+                            compact.ButtonRow(countAsRow = false)
+                        }
+                    }
                 }
             } else {
                 DisposableEffect(compact) {
@@ -142,7 +247,148 @@ internal fun FrameWindowScope.WindowFrame(
                     onDispose {}
                 }
             }
+
+            if (fullscreenRevealBar) {
+                val density = LocalDensity.current
+                val revealDragThresholdPx = with(density) { FullscreenRevealSwipeThreshold.toPx() }
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.TopCenter)
+                        .fillMaxWidth()
+                        .height(FullscreenRevealSensorHeight)
+                        .pointerInput(Unit) {
+                            awaitPointerEventScope {
+                                while (true) {
+                                    val event = awaitPointerEvent(PointerEventPass.Main)
+                                    val change = event.changes.firstOrNull()
+                                    val isHoverPointer = change == null ||
+                                        change.type == PointerType.Mouse ||
+                                        !change.pressed
+                                    when (event.type) {
+                                        PointerEventType.Enter,
+                                        PointerEventType.Move,
+                                        -> if (isHoverPointer) {
+                                            pointerOverSensor = true
+                                            touchPinned = false
+                                            revealOpen = true
+                                        }
+                                        PointerEventType.Exit -> {
+                                            pointerOverSensor = false
+                                        }
+                                        else -> Unit
+                                    }
+                                }
+                            }
+                        }
+                        .pointerInput(revealDragThresholdPx) {
+                            var dragDown = 0f
+                            detectVerticalDragGestures(
+                                onDragStart = { dragDown = 0f },
+                                onDragEnd = { dragDown = 0f },
+                                onDragCancel = { dragDown = 0f },
+                            ) { _, dragAmount ->
+                                dragDown = (dragDown + dragAmount).coerceAtLeast(0f)
+                                if (dragDown >= revealDragThresholdPx) {
+                                    dragDown = 0f
+                                    touchPinned = true
+                                    revealOpen = true
+                                }
+                            }
+                        },
+                )
+            }
+
+            val appFullscreen = LocalAppFullscreen.current
+            AnimatedVisibility(
+                visible = fullscreenRevealBar && revealOpen,
+                enter = slideInVertically(
+                    animationSpec = MaterialTheme.motionScheme.fastSpatialSpec(),
+                    initialOffsetY = { -it },
+                ) + fadeIn(MaterialTheme.motionScheme.fastEffectsSpec()),
+                exit = slideOutVertically(
+                    animationSpec = MaterialTheme.motionScheme.fastSpatialSpec(),
+                    targetOffsetY = { -it },
+                ) + fadeOut(MaterialTheme.motionScheme.fastEffectsSpec()),
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(top = Spacing.Tight, end = Spacing.Cozy),
+            ) {
+                Surface(
+                    color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                    shape = CircleShape,
+                    border = BorderStroke(
+                        width = 1.dp,
+                        color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
+                    ),
+                    shadowElevation = FullscreenRevealShadowElevation,
+                    modifier = Modifier
+                        .onGloballyPositioned { coordinates ->
+                            if (coordinates.isAttached) revealBarBounds = coordinates.boundsInWindow()
+                        }
+                        .pointerInput(Unit) {
+                            awaitPointerEventScope {
+                                while (true) {
+                                    val event = awaitPointerEvent(PointerEventPass.Main)
+                                    when (event.type) {
+                                        PointerEventType.Enter,
+                                        PointerEventType.Move,
+                                        -> pointerOverBar = true
+                                        PointerEventType.Exit -> pointerOverBar = false
+                                        else -> Unit
+                                    }
+                                }
+                            }
+                        },
+                ) {
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(CaptionButtonSpacing),
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.padding(Spacing.Hair),
+                    ) {
+                        CaptionUtilityButtons(
+                            onFullscreenClick = {
+                                revealOpen = false
+                                touchPinned = false
+                                appFullscreen?.setFullscreen(false)
+                            },
+                        )
+                        RevealWindowButton(
+                            button = WindowsCaption.Button.MINIMIZE,
+                            isMaximized = false,
+                            onClick = {
+                                revealOpen = false
+                                touchPinned = false
+                                minimizeWindow(window)
+                            },
+                        )
+                        RevealWindowButton(
+                            button = WindowsCaption.Button.MAXIMIZE,
+                            isMaximized = true,
+                            onClick = {
+                                revealOpen = false
+                                touchPinned = false
+                                if (appFullscreen != null) {
+                                    appFullscreen.setFullscreen(false)
+                                } else {
+                                    toggleMaximizeWindow(window)
+                                }
+                            },
+                        )
+                        RevealWindowButton(
+                            button = WindowsCaption.Button.CLOSE,
+                            isMaximized = false,
+                            contentDescription = captionCloseLabel(),
+                            onClick = {
+                                revealOpen = false
+                                touchPinned = false
+                                onRequestClose()
+                            },
+                        )
+                    }
+                }
+            }
         }
+    }
     }
 }
 
@@ -341,9 +587,71 @@ private fun RoundCaptionButton(
 }
 
 private val FallbackCaptionTopPadding = 20.dp
+private val FullscreenRevealSensorHeight = 4.dp
+private val FullscreenRevealSwipeThreshold = 12.dp
+private val FullscreenRevealShadowElevation = 6.dp
+private const val FullscreenRevealHideDelayMillis = 350L
+
+@Composable
+private fun RevealWindowButton(
+    button: WindowsCaption.Button,
+    isMaximized: Boolean,
+    onClick: () -> Unit,
+    contentDescription: String? = null,
+) {
+    val interactionSource = remember { MutableInteractionSource() }
+    val hovered by interactionSource.collectIsHoveredAsState()
+    val pressed by interactionSource.collectIsPressedAsState()
+    RoundCaptionButton(
+        button = button,
+        isMaximized = isMaximized,
+        hovered = hovered,
+        pressed = pressed,
+        contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier
+            .then(
+                if (contentDescription != null) {
+                    Modifier.semantics { this.contentDescription = contentDescription }
+                } else {
+                    Modifier
+                },
+            )
+            .clickable(
+                interactionSource = interactionSource,
+                indication = null,
+                role = Role.Button,
+                onClick = onClick,
+            ),
+    )
+}
+
+private fun minimizeWindow(window: java.awt.Window) {
+    val handle = (window as? ComposeWindow)?.windowHandle ?: 0L
+    if (handle != 0L && System.getProperty("os.name").orEmpty().startsWith("Windows")) {
+        runCatching {
+            User32.INSTANCE.ShowWindow(HWND(Pointer(handle)), WinUser.SW_MINIMIZE)
+            return
+        }.onFailure { BiliLog.w("全屏栏最小化窗口失败，回退 AWT", it) }
+    }
+    if (window is Frame) {
+        window.extendedState = window.extendedState or Frame.ICONIFIED
+    }
+}
+
+private fun toggleMaximizeWindow(window: java.awt.Window) {
+    if (window is Frame) {
+        val maximized = (window.extendedState and Frame.MAXIMIZED_BOTH) == Frame.MAXIMIZED_BOTH
+        window.extendedState = if (maximized) {
+            window.extendedState and Frame.MAXIMIZED_BOTH.inv()
+        } else {
+            window.extendedState or Frame.MAXIMIZED_BOTH
+        }
+    }
+}
 
 /** 与 Windows 11 标题栏按钮(46×32 epx)同高。 */
 private val TitleBarHeight = 32.dp
+private val TitleBarUtilityButtonWidth = 40.dp
 
 @Composable
 private fun WindowsTitleBar(
@@ -372,24 +680,36 @@ private fun WindowsTitleBar(
         modifier = Modifier
             .fillMaxWidth()
             .height(TitleBarHeight)
-            .background(colors.surface)
-            .onGloballyPositioned {
-                bounds.bar = it.boundsInWindow()
-                publish()
-            },
+            .background(colors.surface),
     ) {
-        Spacer(Modifier.width(16.dp))
-        if (icon != null) {
-            Image(icon, contentDescription = null, modifier = Modifier.size(16.dp))
-            Spacer(Modifier.width(12.dp))
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier
+                .weight(1f)
+                .fillMaxHeight()
+                .onGloballyPositioned {
+                    bounds.bar = it.boundsInWindow()
+                    publish()
+                },
+        ) {
+            Spacer(Modifier.width(16.dp))
+            if (icon != null) {
+                Image(icon, contentDescription = null, modifier = Modifier.size(16.dp))
+                Spacer(Modifier.width(12.dp))
+            }
+            Text(
+                text = title,
+                color = contentColor,
+                style = MaterialTheme.typography.bodySmall,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f),
+            )
         }
-        Text(
-            text = title,
-            color = contentColor,
-            style = MaterialTheme.typography.bodySmall,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.weight(1f),
+        CaptionUtilityButtons(
+            buttonWidth = TitleBarUtilityButtonWidth,
+            buttonHeight = TitleBarHeight,
+            buttonShape = RectangleShape,
         )
         for (button in WindowsCaption.Button.entries) {
             CaptionButton(

@@ -83,6 +83,7 @@ import dev.bilby.ui.components.LocalCopyNotice
 import dev.bilby.ui.components.NeedsCopyNotice
 import dev.bilby.ui.components.PrefetchNearEnd
 import dev.bilby.ui.components.RefreshAction
+import dev.bilby.ui.components.RegisterPageRefresh
 import dev.bilby.ui.components.SortMenu
 import dev.bilby.ui.components.menuItemShape
 import dev.bilby.ui.components.plainTextClip
@@ -171,6 +172,16 @@ fun CommentSection(
      */
     refreshEnabled: Boolean = true,
     /**
+     * 是否在列表顶部绘制独立的排序栏([SortBar])。桌面/宽屏双栏播放页已将排序按钮并入顶部标签行、
+     * 刷新按钮并入窗口标题栏时传 `false`，消除几乎空白的第二行。
+     */
+    showInlineSortBar: Boolean = true,
+    /**
+     * 是否向 [dev.bilby.ui.components.PageRefreshRegistry] 登记评论区刷新。
+     * 在分页容器(`HorizontalPager`)里传当前是否处于激活页，避免停留在简介页时标题栏仍显示评论刷新按钮。
+     */
+    registerPageRefresh: Boolean = true,
+    /**
      * 排在排序栏之前、跟着一起滚的一块内容。**动态详情页把那条动态本身放在这里。**
      *
      * 钉在顶上不行:一条九宫格图文能占掉大半屏,把评论区压成一条缝,而那一页存在的理由
@@ -180,6 +191,9 @@ fun CommentSection(
     scrollToCommentsTick: Int = 0,
     modifier: Modifier = Modifier,
 ) {
+    if (registerPageRefresh && refreshEnabled) {
+        RegisterPageRefresh(refreshing = state.refreshing, onRefresh = onRefresh)
+    }
     val listState = rememberLazyListState()
     LaunchedEffect(scrollToCommentsTick) {
         if (scrollToCommentsTick > 0) {
@@ -342,14 +356,16 @@ fun CommentSection(
                 contentPadding = PaddingValues(bottom = Spacing.Tight),
             ) {
                 header?.let { item(key = "header", contentType = "header") { it() } }
-                item(key = "sort-bar", contentType = "sort-bar") {
-                    SortBar(
-                        sort = state.sort,
-                        onSort = onSort,
-                        refreshEnabled = refreshEnabled,
-                        refreshing = state.refreshing,
-                        onRefresh = onRefresh,
-                    )
+                if (showInlineSortBar) {
+                    item(key = "sort-bar", contentType = "sort-bar") {
+                        SortBar(
+                            sort = state.sort,
+                            onSort = onSort,
+                            refreshEnabled = refreshEnabled && registerPageRefresh,
+                            refreshing = state.refreshing,
+                            onRefresh = onRefresh,
+                        )
+                    }
                 }
 
                 // **条与条之间只留白,不画线。** 上一版画的是 inset 分割线,真机上一屏七八根细线
@@ -622,6 +638,28 @@ private fun findUname(state: CommentUiState, rpid: Long): String? {
     return null
 }
 
+/** 评论区「最热 / 最新」轻量化文字下拉排序菜单，供行内 [SortBar] 与双栏视频页顶栏复用。 */
+@Composable
+fun CommentSortMenu(
+    sort: CommentSort,
+    onSort: (CommentSort) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val options = remember {
+        listOf(
+            CommentSort.HOT to Res.string.comment_sort_hot,
+            CommentSort.TIME to Res.string.comment_sort_time,
+        )
+    }
+    SortMenu(
+        options = options,
+        selected = sort,
+        onSelect = onSort,
+        modifier = modifier,
+        preferButtonGroup = false,
+    )
+}
+
 /** 最热 / 最新轻量文字下拉排序，刷新按钮固定在最右侧。 */
 @Composable
 private fun SortBar(
@@ -631,12 +669,6 @@ private fun SortBar(
     refreshing: Boolean = false,
     onRefresh: () -> Unit = {},
 ) {
-    val options = remember {
-        listOf(
-            CommentSort.HOT to Res.string.comment_sort_hot,
-            CommentSort.TIME to Res.string.comment_sort_time,
-        )
-    }
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -644,11 +676,9 @@ private fun SortBar(
         horizontalArrangement = Arrangement.spacedBy(Spacing.Tight, Alignment.End),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        SortMenu(
-            options = options,
-            selected = sort,
-            onSelect = onSort,
-            preferButtonGroup = false,
+        CommentSortMenu(
+            sort = sort,
+            onSort = onSort,
         )
         if (refreshEnabled) {
             RefreshAction(refreshing = refreshing, onRefresh = onRefresh)

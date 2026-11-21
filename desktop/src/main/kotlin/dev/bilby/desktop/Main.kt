@@ -29,9 +29,12 @@ import dev.bilby.ui.AppFullscreenController
 import dev.bilby.ui.BilbyRoot
 import dev.bilby.ui.DesktopSystemActions
 import dev.bilby.ui.LocalAppFullscreen
+import dev.bilby.ui.LocalIsDesktopWindow
 import dev.bilby.ui.LocalPlaybackHost
 import dev.bilby.ui.LocalSystemActions
 import dev.bilby.ui.LocalWindowVisible
+import dev.bilby.ui.components.LocalPageRefreshRegistry
+import dev.bilby.ui.components.PageRefreshRegistry
 import dev.bilby.ui.components.SkiaAnimatedImageDecoder
 import dev.bilby.ui.player.LocalWindowFullscreen
 import dev.bilby.ui.player.LocalDesktopPip
@@ -229,15 +232,20 @@ fun main(args: Array<String>) {
             val appFullscreenController = remember {
                 object : AppFullscreenController {
                     override val isFullscreen: Boolean get() = appFullscreen
+                    override val isPlayerFullscreen: Boolean
+                        get() = playerFullscreen || playerExitCallbacks.isNotEmpty()
                     override val isAnyFullscreen: Boolean
-                        get() = appFullscreen || playerFullscreen || playerExitCallbacks.isNotEmpty()
+                        get() = appFullscreen || isPlayerFullscreen
                     override fun setFullscreen(fullscreen: Boolean) {
                         appFullscreen = fullscreen
                     }
-                    override fun exitAll() {
-                        appFullscreen = false
+                    override fun exitPlayerFullscreen() {
                         playerFullscreen = false
                         playerExitCallbacks.toList().forEach { it() }
+                    }
+                    override fun exitAll() {
+                        exitPlayerFullscreen()
+                        appFullscreen = false
                     }
                     override fun registerPlayerFullscreenExit(onExit: () -> Unit): () -> Unit {
                         playerExitCallbacks.add(onExit)
@@ -245,6 +253,7 @@ fun main(args: Array<String>) {
                     }
                 }
             }
+            val pageRefreshRegistry = remember { PageRefreshRegistry() }
             PixelAlignedContentEffect(window)
             WindowsSmtcEffect(window, platform.playback)
             val systemActions = remember { DesktopSystemActions(languageStore, container.biliClient) }
@@ -266,12 +275,14 @@ fun main(args: Array<String>) {
             // 标题栏在 BilbyRoot 之外,主题要在这里再套一层。初值同 BilbyRoot 里那一层,两层读同一份设置。
             val appearance by container.settings.appearancePrefs.collectAsState(initial = AppearancePrefs())
             CompositionLocalProvider(
+                LocalIsDesktopWindow provides true,
                 LocalSystemActions provides systemActions,
                 LocalPlaybackHost provides platform.playback,
                 LocalDesktopPip provides windowsPip,
                 LocalAppFullscreen provides appFullscreenController,
                 LocalWindowFullscreen provides { on -> playerFullscreen = on },
                 LocalWindowVisible provides effectiveWindowVisible,
+                LocalPageRefreshRegistry provides pageRefreshRegistry,
             ) {
                 BilbyTheme(appearance) {
                     Box(modifier = Modifier.fillMaxSize()) {
@@ -280,6 +291,11 @@ fun main(args: Array<String>) {
                             icon = appIcon,
                             // 全屏与小窗里整个窗口都是画面。
                             showTitleBar = !windowsFullscreen.isFullscreen && !windowsPip.active,
+                            fullscreenRevealBar = windowsFullscreen.isFullscreen &&
+                                appFullscreen &&
+                                !playerFullscreen &&
+                                !windowsPip.active,
+                            onRequestClose = quit,
                         ) {
                             // 换语言:整棵界面拆掉一帧再建回来,等价于 Android 上换语言时 Activity 重建。
                             // 已经组合出来的文案不会因为默认 Locale 变了而自己重取,只有重新组合才会。

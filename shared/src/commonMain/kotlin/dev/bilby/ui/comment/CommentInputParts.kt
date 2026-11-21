@@ -90,7 +90,7 @@ import dev.bilby.data.LocalEmoteRepository
 import dev.bilby.resources.*
 import dev.bilby.stringResource
 import dev.bilby.ui.BackHandler
-import dev.bilby.ui.LocalWindowCaption
+import dev.bilby.ui.LocalIsDesktopWindow
 import dev.bilby.ui.barsAndCutout
 import dev.bilby.ui.components.BilbyTooltip
 import dev.bilby.ui.components.ConfigureInputDialogWindow
@@ -464,9 +464,7 @@ internal fun CommentComposerDialog(
  */
 @Composable
 internal fun rememberUseInlineCommentComposer(composerOpen: Boolean): Boolean {
-    var hadWindowCaption by remember { mutableStateOf(false) }
-    if (LocalWindowCaption.current != null) hadWindowCaption = true
-    val useInline = LocalWindowCaption.current != null || hadWindowCaption || !LocalPointerSource.current.isTouchLike
+    val useInline = LocalIsDesktopWindow.current || !LocalPointerSource.current.isTouchLike
     var latched by remember { mutableStateOf(useInline) }
     if (!composerOpen) {
         latched = useInline

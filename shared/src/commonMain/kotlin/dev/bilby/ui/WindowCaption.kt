@@ -15,6 +15,10 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.outlined.Fullscreen
+import androidx.compose.material.icons.outlined.FullscreenExit
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -30,6 +34,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.composed
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.layout.boundsInWindow
@@ -42,7 +47,11 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import dev.bilby.resources.*
+import dev.bilby.stringResource
+import dev.bilby.ui.components.BilbyTooltip
 import dev.bilby.ui.components.LoadingSpinner
+import dev.bilby.ui.components.LocalPageRefreshRegistry
 
 /**
  * 桌面端紧凑标题栏融合契约(照 Chrome / Piko):界面声明自己能容纳窗口按钮与拖动区后,窗口不再画单独一条
@@ -129,9 +138,13 @@ class CaptionSlot(
 /**
  * @param topInset 允许该行上沿离窗口顶边的最大间距:宽屏圆角内容岛上沿留有 8dp 外框边,岛内页眉再留 8dp 内边距,
  *   24dp 足以把岛内首行认作窗口顶行,同时排除下方的正文或二级栏。
+ * @param dragGap 覆盖按钮组前方的拖动留白宽度;传 null 时按窗口宽窄自动取默认值。
  */
 @Composable
-fun rememberCaptionSlot(topInset: Dp = 28.dp): CaptionSlot {
+fun rememberCaptionSlot(
+    topInset: Dp = 28.dp,
+    dragGap: Dp? = null,
+): CaptionSlot {
     val caption = LocalWindowCaption.current ?: return NoCaptionSlot
     val liveWindow = LocalLiveWindowInfo.current ?: LocalWindowInfo.current
     val density = LocalDensity.current
@@ -147,18 +160,26 @@ fun rememberCaptionSlot(topInset: Dp = 28.dp): CaptionSlot {
         atTop = nearTop
         touches = nearTop && bounds.right >= liveWindow.containerSize.width - edgeTolerancePx
     }
-    val dragGap: (@Composable () -> Unit)? = if (touches) {
+    val dragGapContent: (@Composable () -> Unit)? = if (touches) {
         {
             // 按钮前固定留出一段可拖动空白:操作区按钮紧凑时无需去别处找缝隙拖窗口。
             // 窄窗口收紧间距,为顶栏标题与返回/操作按钮让出空间。
-            val gapWidth = if (narrowWindow) CaptionDragGapNarrow else CaptionDragGap
+            val gapWidth = dragGap ?: if (narrowWindow) CaptionDragGapNarrow else CaptionDragGap
             Spacer(Modifier.width(gapWidth).height(CaptionDragHeight).windowDragArea())
         }
     } else {
         null
     }
     val rawButtons: (@Composable () -> Unit)? = if (touches) {
-        { caption.Buttons() }
+        {
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(CaptionButtonSpacing),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                CaptionUtilityButtons()
+                caption.Buttons()
+            }
+        }
     } else {
         null
     }
@@ -166,17 +187,72 @@ fun rememberCaptionSlot(topInset: Dp = 28.dp): CaptionSlot {
         modifier = modifier,
         buttons = if (touches) {
             {
-                dragGap?.invoke()
+                dragGapContent?.invoke()
                 rawButtons?.invoke()
             }
         } else {
             null
         },
         atTop = atTop,
-        dragGap = dragGap,
+        dragGap = dragGapContent,
         rawButtons = rawButtons,
     )
 }
+
+/**
+ * 桌面窗口右上角与系统三键(`— ❐ ×`)平级的通用窗口动作组:
+ * `[刷新(仅当前最上层页面注册了刷新能力时显示)] [全屏(仅桌面窗口支持时显示)]`。
+ */
+@Composable
+fun CaptionUtilityButtons(
+    showFullscreen: Boolean = true,
+    onFullscreenClick: (() -> Unit)? = null,
+    buttonWidth: Dp = CaptionButtonSize,
+    buttonHeight: Dp = CaptionButtonSize,
+    buttonShape: Shape = CircleShape,
+) {
+    val pageRefresh = LocalPageRefreshRegistry.current
+    val appFullscreen = LocalAppFullscreen.current
+    if (pageRefresh.canRefresh) {
+        val refreshLabel = stringResource(Res.string.action_refresh)
+        BilbyTooltip(text = refreshLabel, shortcut = "F5") {
+            CaptionActionButton(
+                icon = Icons.Filled.Refresh,
+                contentDescription = refreshLabel,
+                loading = pageRefresh.refreshing,
+                width = buttonWidth,
+                height = buttonHeight,
+                shape = buttonShape,
+                onClick = { pageRefresh.trigger() },
+            )
+        }
+    }
+    if (showFullscreen && appFullscreen != null) {
+        val isWindowFullscreen = appFullscreen.isFullscreen
+        val fullscreenLabel = stringResource(
+            if (isWindowFullscreen) Res.string.player_exit_fullscreen else Res.string.player_fullscreen,
+        )
+        val fullscreenIcon = if (isWindowFullscreen) {
+            Icons.Outlined.FullscreenExit
+        } else {
+            Icons.Outlined.Fullscreen
+        }
+        BilbyTooltip(text = fullscreenLabel, shortcut = "F11") {
+            CaptionActionButton(
+                icon = fullscreenIcon,
+                contentDescription = fullscreenLabel,
+                width = buttonWidth,
+                height = buttonHeight,
+                shape = buttonShape,
+                onClick = { onFullscreenClick?.invoke() ?: appFullscreen.toggle() },
+            )
+        }
+    }
+}
+
+/** 供桌面宿主窗口壳(`:desktop`)读取本地化关闭按钮文案，避免跨模块直接引用 `Res`。 */
+@Composable
+fun captionCloseLabel(): String = stringResource(Res.string.action_close)
 
 /**
  * 紧邻桌面窗口控制按钮(`— ❐ ×`)排布的无边框标题栏动作按钮(如应用全屏、刷新)。
@@ -191,6 +267,9 @@ fun CaptionActionButton(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
     loading: Boolean = false,
+    width: Dp = CaptionButtonSize,
+    height: Dp = CaptionButtonSize,
+    shape: Shape = CircleShape,
 ) {
     val interactionSource = remember { MutableInteractionSource() }
     val hovered by interactionSource.collectIsHoveredAsState()
@@ -217,8 +296,8 @@ fun CaptionActionButton(
     Box(
         contentAlignment = Alignment.Center,
         modifier = modifier
-            .size(CaptionButtonSize)
-            .clip(CircleShape)
+            .size(width, height)
+            .clip(shape)
             .background(background)
             .semantics { this.contentDescription = contentDescription }
             .clickable(
@@ -265,7 +344,7 @@ fun CaptionLeadWithDrag(
     dragHeight: Dp = CaptionDragHeight,
     content: @Composable () -> Unit,
 ) {
-    if (LocalWindowCaption.current == null) {
+    if (!LocalIsDesktopWindow.current) {
         Box(modifier = modifier) { content() }
         return
     }
