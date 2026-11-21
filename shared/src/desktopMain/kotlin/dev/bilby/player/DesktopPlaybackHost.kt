@@ -96,6 +96,7 @@ class DesktopPlaybackHost(
     private var openGeneration = 0
     private var extendBeforeJob: Job? = null
     private var extendAfterJob: Job? = null
+    private var loadAllJob: Job? = null
 
     private var loadJob: Job? = null
     private var tickJob: Job? = null
@@ -276,7 +277,9 @@ class DesktopPlaybackHost(
         enrichJob?.cancel()
         extendBeforeJob?.cancel()
         extendAfterJob?.cancel()
+        loadAllJob?.cancel()
         queue.cancelExtend()
+        queue.finishLoadAll()
         sleepTimer.cancel()
         progressSession?.flush()
         pause()
@@ -298,6 +301,7 @@ class DesktopPlaybackHost(
         enrichJob?.cancel()
         extendBeforeJob?.cancel()
         extendAfterJob?.cancel()
+        loadAllJob?.cancel()
         sleepTimer.cancel()
         player?.mediamp?.stopPlayback()
         frames.clear()
@@ -345,6 +349,8 @@ class DesktopPlaybackHost(
             is PlaybackCommand.AdjustSleepTimer -> sleepTimer.extend(command.deltaMinutes * 60_000L)
             PlaybackCommand.RetryQueue -> liveFrame?.let { frame -> queue.current?.let { enrichFrame(frame, it.bvid) } }
             is PlaybackCommand.ExtendQueue -> extendQueue(command.before)
+            PlaybackCommand.LoadAllQueue -> loadAllQueue()
+            PlaybackCommand.CancelLoadAllQueue -> cancelLoadAllQueue()
             PlaybackCommand.CycleQueueOrder -> setQueueOrder(queue.order.next())
             is PlaybackCommand.SetQueueOrder -> setQueueOrder(command.order)
             PlaybackCommand.CycleEndMode -> setEndMode(endMode.next())
@@ -497,7 +503,9 @@ class DesktopPlaybackHost(
         enrichJob?.cancel()
         extendBeforeJob?.cancel()
         extendAfterJob?.cancel()
+        loadAllJob?.cancel()
         queue.cancelExtend()
+        queue.finishLoadAll()
         if (frame.enriching) {
             frame.enriching = false
             frame.incomplete = true
@@ -718,12 +726,52 @@ class DesktopPlaybackHost(
         if (before) extendBeforeJob = job else extendAfterJob = job
     }
 
+    /** 顺序加载当前队列来源尚未读取的全部前后页；先取消单头续取避免并发访问非线程安全的 QueueFeed。 */
+    private fun loadAllQueue() {
+        val frame = liveFrame ?: return
+        val feed = frame.feed ?: return
+        if (frame.detached) return
+        if (!queue.beginLoadAll()) return
+        val prevBefore = extendBeforeJob
+        val prevAfter = extendAfterJob
+        extendBeforeJob = null
+        extendAfterJob = null
+        prevBefore?.cancel()
+        prevAfter?.cancel()
+        publishState()
+        loadAllJob = scope.launch {
+            prevBefore?.join()
+            prevAfter?.join()
+            loadAllQueuePages(
+                feed = feed,
+                pagination = queue.pagination,
+                order = queue.order,
+                isStillValid = { liveFrame === frame && frame.feed === feed && !frame.detached },
+                applyItems = { before, loaded ->
+                    queue.insert(if (before) 0 else queue.size, loaded)
+                },
+                playlistSize = { queue.size },
+                onProgress = { publishState() },
+            )
+        }
+    }
+
+    private fun cancelLoadAllQueue() {
+        if (liveFrame == null) return
+        if (!queue.loadingAll && loadAllJob?.isActive != true) return
+        loadAllJob?.cancel()
+        loadAllJob = null
+        queue.finishLoadAll()
+        publishState()
+    }
+
     /** 队列经用户手工编辑后与原分页/合集来源脱钩，不再续取、不再由补全覆盖。 */
     private fun detachToCustomQueue(frame: Frame) {
         if (liveFrame === frame) {
             enrichJob?.cancel()
             extendBeforeJob?.cancel()
             extendAfterJob?.cancel()
+            loadAllJob?.cancel()
             openGeneration++
             queue.detachToCustomQueue()
         }
@@ -814,6 +862,7 @@ class DesktopPlaybackHost(
         enrichJob?.cancel()
         extendBeforeJob?.cancel()
         extendAfterJob?.cancel()
+        loadAllJob?.cancel()
         frame.detached = false
         frame.pendingReset = true
         frame.feed = null

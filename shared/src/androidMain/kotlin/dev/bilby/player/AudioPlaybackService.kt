@@ -185,6 +185,9 @@ class AudioPlaybackService : MediaSessionService() {
     private var extendBeforeJob: Job? = null
     private var extendAfterJob: Job? = null
 
+    /** 顺序加载整份队列全部前后页,见 [loadAllQueue]。 */
+    private var loadAllJob: Job? = null
+
     /** 起播链路的测量。只在 [openFrame] 起头,只在 [finishOpenChain] 收尾。 */
     private var openChain: PerfTrace.Chain? = null
 
@@ -421,6 +424,9 @@ class AudioPlaybackService : MediaSessionService() {
         // 下面的 scope.cancel() 本来就会带走它,列在这里是为了和上面两个 Job 一起读:
         // 服务没了之后没有任何一个还在飞的请求值得跑完。
         enrichJob?.cancel()
+        extendBeforeJob?.cancel()
+        extendAfterJob?.cancel()
+        loadAllJob?.cancel()
         scope.cancel()
         // 先放播放器,再放 session:指南示例给的就是这个顺序(background-playback
         // 「实现服务生命周期」),而 session 手上握着的正是这个播放器。
@@ -608,7 +614,9 @@ class AudioPlaybackService : MediaSessionService() {
         enrichJob?.cancel()
         extendBeforeJob?.cancel()
         extendAfterJob?.cancel()
+        loadAllJob?.cancel()
         frame.pagination.cancelExtend()
+        frame.pagination.finishLoadAll()
         // 补全被打断时快照里是临时队列,换回来时再补一次。
         if (frame.enriching) {
             frame.enriching = false
@@ -820,7 +828,7 @@ class AudioPlaybackService : MediaSessionService() {
         return true
     }
 
-    /** 仅在正序/倒序真正逼近当前播放方向的边界(距离 <= 1)且上次续取未失败时自动续取。 */
+    /** 仅在正序播到当前已加载队列最后一条或倒序播到第一条、且上次续取未失败时按需续取下一页。 */
     private fun extendNearEdges() {
         val frame = liveFrame ?: return
         if (frame.feed == null || frame.detached || frame.context is QueueContext.Custom) return
@@ -829,14 +837,15 @@ class AudioPlaybackService : MediaSessionService() {
         val index = player.currentMediaItemIndex
         if (index !in 0 until count) return
         val p = frame.pagination
+        if (p.loadingAll) return
         when (queueOrder) {
             QueueOrder.Forward -> {
-                if (index >= count - 2 && p.hasAfter && !p.errorAfter && !p.loadingAfter) {
+                if (index >= count - 1 && p.hasAfter && !p.errorAfter && !p.loadingAfter) {
                     extendQueue(before = false)
                 }
             }
             QueueOrder.Reverse -> {
-                if (index <= 1 && p.hasBefore && !p.errorBefore && !p.loadingBefore) {
+                if (index <= 0 && p.hasBefore && !p.errorBefore && !p.loadingBefore) {
                     extendQueue(before = true)
                 }
             }
@@ -897,12 +906,55 @@ class AudioPlaybackService : MediaSessionService() {
         if (before) extendBeforeJob = job else extendAfterJob = job
     }
 
+    /** 顺序加载当前队列来源尚未读取的全部前后页；先取消单头续取避免并发访问非线程安全的 QueueFeed。 */
+    private fun loadAllQueue() {
+        val frame = liveFrame ?: return
+        val feed = frame.feed ?: return
+        if (frame.detached) return
+        if (!frame.pagination.beginLoadAll()) return
+        val prevBefore = extendBeforeJob
+        val prevAfter = extendAfterJob
+        extendBeforeJob = null
+        extendAfterJob = null
+        prevBefore?.cancel()
+        prevAfter?.cancel()
+        publishQueueChange()
+        loadAllJob = scope.launch {
+            prevBefore?.join()
+            prevAfter?.join()
+            loadAllQueuePages(
+                feed = feed,
+                pagination = frame.pagination,
+                order = queueOrder,
+                isStillValid = { liveFrame === frame && frame.feed === feed && !frame.detached },
+                applyItems = { before, loaded ->
+                    val present = (0 until player.mediaItemCount).mapTo(HashSet()) { player.getMediaItemAt(it).mediaId }
+                    val fresh = loaded.distinctBy { it.bvid }.filter { it.bvid !in present }.map { it.toMediaItem() }
+                    if (before) player.addMediaItems(0, fresh) else player.addMediaItems(player.mediaItemCount, fresh)
+                    fresh.size
+                },
+                playlistSize = { player.mediaItemCount },
+                onProgress = { publishQueueChange() },
+            )
+        }
+    }
+
+    private fun cancelLoadAllQueue() {
+        val frame = liveFrame ?: return
+        if (!frame.pagination.loadingAll && loadAllJob?.isActive != true) return
+        loadAllJob?.cancel()
+        loadAllJob = null
+        frame.pagination.finishLoadAll()
+        publishQueueChange()
+    }
+
     /** 队列经用户手工编辑后与原分页/合集来源脱钩，不再续取、不再由补全覆盖。 */
     private fun detachToCustomQueue(frame: Frame) {
         if (liveFrame === frame) {
             enrichJob?.cancel()
             extendBeforeJob?.cancel()
             extendAfterJob?.cancel()
+            loadAllJob?.cancel()
             openGeneration++
         }
         frame.enriching = false
@@ -1079,6 +1131,7 @@ class AudioPlaybackService : MediaSessionService() {
         enrichJob?.cancel()
         extendBeforeJob?.cancel()
         extendAfterJob?.cancel()
+        loadAllJob?.cancel()
         live.pagination.reset()
         live.detached = false
         live.pendingReset = true
@@ -1109,7 +1162,9 @@ class AudioPlaybackService : MediaSessionService() {
         enrichJob?.cancel()
         extendBeforeJob?.cancel()
         extendAfterJob?.cancel()
+        loadAllJob?.cancel()
         live.pagination.cancelExtend()
+        live.pagination.finishLoadAll()
         sleepTimer.cancel()
         persistCachedProgress()
         progressSession?.flush()
@@ -2185,6 +2240,7 @@ class AudioPlaybackService : MediaSessionService() {
                 extendingAfter = !detached && pagination?.loadingAfter == true,
                 errorBefore = !detached && pagination?.errorBefore == true,
                 errorAfter = !detached && pagination?.errorAfter == true,
+                loadingAll = !detached && pagination?.loadingAll == true,
             ),
         )
     }
@@ -2477,6 +2533,8 @@ class AudioPlaybackService : MediaSessionService() {
                         .add(SessionCommand(ACTION_ACTIVATE_FRAME, Bundle.EMPTY))
                         .add(SessionCommand(ACTION_RETRY_QUEUE, Bundle.EMPTY))
                         .add(SessionCommand(ACTION_EXTEND_QUEUE, Bundle.EMPTY))
+                        .add(SessionCommand(ACTION_LOAD_ALL_QUEUE, Bundle.EMPTY))
+                        .add(SessionCommand(ACTION_CANCEL_LOAD_ALL_QUEUE, Bundle.EMPTY))
                         .add(SessionCommand(ACTION_OPEN_LIVE, Bundle.EMPTY))
                         .add(SessionCommand(ACTION_PLAY_PART, Bundle.EMPTY))
                         .add(SessionCommand(ACTION_SET_QUALITY, Bundle.EMPTY))
@@ -2509,6 +2567,8 @@ class AudioPlaybackService : MediaSessionService() {
                 ACTION_ACTIVATE_FRAME -> activateFrame(args)
                 ACTION_RETRY_QUEUE -> liveFrame?.let { frame -> currentItem()?.let { enrichFrame(frame, it.bvid) } }
                 ACTION_EXTEND_QUEUE -> extendQueue(before = args.getBoolean(EXTRA_BEFORE))
+                ACTION_LOAD_ALL_QUEUE -> loadAllQueue()
+                ACTION_CANCEL_LOAD_ALL_QUEUE -> cancelLoadAllQueue()
                 ACTION_OPEN_LIVE -> playLive(args)
                 ACTION_PLAY_PART -> playPart(
                     args.getLong(EXTRA_CID),
@@ -2566,6 +2626,12 @@ class AudioPlaybackService : MediaSessionService() {
 
         /** 往队列的一头续取,[EXTRA_BEFORE] 指明哪头。见 [extendQueue]。 */
         const val ACTION_EXTEND_QUEUE = "dev.bilby.EXTEND_QUEUE"
+
+        /** 顺序加载当前队列来源的全部前后页。见 [loadAllQueue]。 */
+        const val ACTION_LOAD_ALL_QUEUE = "dev.bilby.LOAD_ALL_QUEUE"
+
+        /** 取消正在进行的整队列加载。见 [cancelLoadAllQueue]。 */
+        const val ACTION_CANCEL_LOAD_ALL_QUEUE = "dev.bilby.CANCEL_LOAD_ALL_QUEUE"
 
         const val EXTRA_FRAME_ID = "frameId"
 

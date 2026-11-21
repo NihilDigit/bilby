@@ -79,7 +79,10 @@ fun BoxScope.EpisodePanel(
     } else {
         positionText ?: multiPartBadge
     }
-    val headerLoading = loading || edges?.loadingBefore == true || edges?.loadingAfter == true
+    val headerLoading = loading ||
+        edges?.loadingBefore == true ||
+        edges?.loadingAfter == true ||
+        edges?.loadingAll == true
 
     PlayerSidePanel(visible = visible, onDismiss = onDismiss) {
         // 队列来源与「X / N」位置读数统一走 PlayerSidePanelHeader(带 48dp 关闭按钮)。

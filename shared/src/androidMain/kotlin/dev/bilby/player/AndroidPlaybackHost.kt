@@ -134,6 +134,8 @@ private fun PlaybackCommand.toSessionCommand(): Pair<String, Bundle> = when (thi
     is PlaybackCommand.ExtendQueue -> AudioPlaybackService.ACTION_EXTEND_QUEUE to Bundle().apply {
         putBoolean(AudioPlaybackService.EXTRA_BEFORE, before)
     }
+    PlaybackCommand.LoadAllQueue -> AudioPlaybackService.ACTION_LOAD_ALL_QUEUE to Bundle.EMPTY
+    PlaybackCommand.CancelLoadAllQueue -> AudioPlaybackService.ACTION_CANCEL_LOAD_ALL_QUEUE to Bundle.EMPTY
     is PlaybackCommand.OpenLive -> AudioPlaybackService.ACTION_OPEN_LIVE to Bundle().apply {
         putLong(AudioPlaybackService.EXTRA_ROOM_ID, roomId)
         putInt(AudioPlaybackService.EXTRA_LIVE_QN, qn)

@@ -23,7 +23,7 @@ internal class DesktopQueue(private val random: Random = Random.Default) {
 
     private val entries = mutableListOf<QueueItem>()
     private var shuffleOrder = ShuffleOrder.create(0, random)
-    private val pagination = QueuePagination()
+    internal val pagination = QueuePagination()
 
     /** 当前这一条的列表下标,队列空时为 -1。 */
     var index: Int = -1
@@ -43,6 +43,7 @@ internal class DesktopQueue(private val random: Random = Random.Default) {
     val loadingAfter: Boolean get() = pagination.loadingAfter
     val errorBefore: Boolean get() = pagination.errorBefore
     val errorAfter: Boolean get() = pagination.errorAfter
+    val loadingAll: Boolean get() = pagination.loadingAll
     val sourcePosition: Int? get() = pagination.sourcePositionFor(index, entries.size)
 
     operator fun get(at: Int): QueueItem = entries[at]
@@ -213,6 +214,10 @@ internal class DesktopQueue(private val random: Random = Random.Default) {
 
     fun beginExtend(before: Boolean): Boolean = pagination.beginExtend(before)
 
+    fun beginLoadAll(): Boolean = pagination.beginLoadAll()
+
+    fun finishLoadAll() = pagination.finishLoadAll()
+
     fun cancelExtend(before: Boolean? = null) = pagination.cancelExtend(before)
 
     fun failExtend(before: Boolean) = pagination.failExtend(before)
@@ -272,9 +277,10 @@ internal class DesktopQueue(private val random: Random = Random.Default) {
     fun shouldAutoExtendBefore(detached: Boolean = false, isCustomContext: Boolean = false): Boolean =
         !detached &&
             !isCustomContext &&
+            !loadingAll &&
             order == QueueOrder.Reverse &&
             entries.isNotEmpty() &&
-            index in 0..1 &&
+            index == 0 &&
             hasBefore &&
             !errorBefore &&
             !loadingBefore
@@ -282,9 +288,10 @@ internal class DesktopQueue(private val random: Random = Random.Default) {
     fun shouldAutoExtendAfter(detached: Boolean = false, isCustomContext: Boolean = false): Boolean =
         !detached &&
             !isCustomContext &&
+            !loadingAll &&
             order == QueueOrder.Forward &&
             entries.isNotEmpty() &&
-            index >= entries.size - 2 &&
+            index == entries.lastIndex &&
             hasAfter &&
             !errorAfter &&
             !loadingAfter
@@ -330,6 +337,7 @@ internal class DesktopQueue(private val random: Random = Random.Default) {
             extendingAfter = !detached && loadingAfter,
             errorBefore = !detached && errorBefore,
             errorAfter = !detached && errorAfter,
+            loadingAll = !detached && loadingAll,
             sourcePosition = effectivePos,
             sourceTotal = effectiveTotal,
         )

@@ -245,8 +245,21 @@ class DesktopQueueTest {
         queue.set(items("A", "B", "C", "D"), 2) // index = 2 (size - 2 in Forward)
         queue.bindFeedMeta(offsetOfFirst = 0, total = 20, hasBefore = true, hasAfter = true)
 
+        // 距离末尾还差 1 条时不提前自动续取，真正播到最后一条才续取
+        assertFalse(queue.shouldAutoExtendAfter())
+        assertFalse(queue.shouldAutoExtendBefore())
+
+        queue.moveTo(3) // index = 3 (last item in Forward)
         assertTrue(queue.shouldAutoExtendAfter())
         assertFalse(queue.shouldAutoExtendBefore())
+
+        // 正在全部加载期间不重复触发单头自动续取
+        assertTrue(queue.beginLoadAll())
+        assertTrue(queue.toQueueState().loadingAll)
+        assertFalse(queue.shouldAutoExtendAfter())
+        queue.finishLoadAll()
+        assertFalse(queue.toQueueState().loadingAll)
+        assertTrue(queue.shouldAutoExtendAfter())
 
         // Simulate failed loadAfter
         assertTrue(queue.beginExtend(before = false))
@@ -265,10 +278,11 @@ class DesktopQueueTest {
         queue.append(items("E", "F"), feedHasBefore = true, feedHasAfter = true, feedTotal = 20)
         assertFalse(queue.errorAfter)
 
-        // Reverse boundary check (only index <= 1)
+        // Reverse boundary check (only index == 0, the very first item)
         queue.order = QueueOrder.Reverse
-        assertFalse(queue.shouldAutoExtendBefore()) // index = 2 > 1
         queue.moveTo(1)
+        assertFalse(queue.shouldAutoExtendBefore()) // index = 1 > 0
+        queue.moveTo(0)
         assertTrue(queue.shouldAutoExtendBefore())
         queue.beginExtend(before = true)
         queue.failExtend(before = true)
@@ -288,6 +302,7 @@ class DesktopQueueTest {
         assertFalse(detachedState.canExtendAfter)
         assertFalse(detachedState.errorBefore)
         assertFalse(detachedState.errorAfter)
+        assertFalse(detachedState.loadingAll)
         assertEquals(1, detachedState.sourcePosition)
         assertEquals(6, detachedState.sourceTotal)
     }
