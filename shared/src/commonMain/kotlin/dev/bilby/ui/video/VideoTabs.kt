@@ -3287,5 +3287,5 @@ private fun horizontalSegmentShape(index: Int, count: Int): Shape {
 private val ActionOuterCorner = 16.dp
 private val ActionInnerCorner = 4.dp
 
-/** 页内队列在当前项前后各摊几条。其余在完整队列里,由段尾的「查看全部」打开。 */
+/** 页内队列在当前项前后各摊几条。其余在完整队列里,由段尾的「查看更多」打开。 */
 private const val InlineQueueRadius = 2

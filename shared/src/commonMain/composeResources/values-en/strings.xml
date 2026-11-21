@@ -269,6 +269,7 @@
     <string name="video_find_related">Find related</string>
     <string name="video_queue_loading">Loading queue…</string>
     <string name="video_queue_incomplete">Queue is incomplete — only this video</string>
+    <string name="video_queue_show_all">View more</string>
 
     <string name="offline_title">Downloads</string>
     <string name="offline_cache_action">Download</string>
@@ -944,8 +945,8 @@
     <string name="queue_source_up_dynamics">%1$s posts</string>
     <string name="queue_source_up_dynamics_generic">Creator posts</string>
     <string name="queue_position_windowed">%1$d/%2$d of %3$d</string>
-    <string name="video_queue_show_all_count">Show all (%1$d)</string>
-    <string name="video_queue_show_all_windowed">Show all (%1$d loaded of %2$d)</string>
+    <string name="video_queue_show_all_count">View more (%1$d)</string>
+    <string name="video_queue_show_all_windowed">View more (%1$d loaded of %2$d)</string>
     <string name="queue_edge_loading_before">Loading earlier items…</string>
     <string name="queue_edge_loading_after">Loading more items…</string>
     <string name="queue_edge_has_before">Load earlier items</string>

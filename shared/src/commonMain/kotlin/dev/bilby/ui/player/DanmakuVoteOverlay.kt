@@ -50,7 +50,9 @@ import androidx.compose.ui.input.pointer.PointerIcon
 import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.isSpecified
 import dev.bilby.danmaku.DanmakuVote
 import dev.bilby.danmaku.DanmakuVoteOption
 import dev.bilby.resources.Res
@@ -62,6 +64,7 @@ import dev.bilby.ui.components.formatCount
 import dev.bilby.ui.theme.Dimens
 import dev.bilby.ui.theme.FixedColors
 import dev.bilby.ui.theme.Spacing
+import dev.bilby.ui.theme.tabular
 import kotlin.math.roundToInt
 
 /**
@@ -81,10 +84,28 @@ fun rememberDanmakuVoteUiState(cid: Long): DanmakuVoteUiState =
     remember(cid) { DanmakuVoteUiState() }
 
 /**
+ * 判断当前播放器容器是否属于紧凑内嵌画幅（如竖屏手机 16:9 内嵌约 360–412dp × 202–232dp，
+ * 或窄双栏左栏）：高 `< 300dp` 或宽 `< 480dp` 时切入紧凑卡片形态，避免盖住大半个画面。
+ * 首帧尚未量出实测尺寸时回退到 [fallbackCompact]。
+ */
+internal fun isCompactVoteContainer(
+    containerWidth: Dp,
+    containerHeight: Dp,
+    fallbackCompact: Boolean = false,
+): Boolean {
+    val hasWidth = containerWidth.isSpecified && containerWidth > 0.dp
+    val hasHeight = containerHeight.isSpecified && containerHeight > 0.dp
+    if (!hasWidth && !hasHeight) return fallbackCompact
+    return (hasHeight && containerHeight < CompactVoteHeightThreshold) ||
+        (hasWidth && containerWidth < CompactVoteWidthThreshold)
+}
+
+/**
  * 视频内互动投票面板(`#VOTE#`,见 notes/danmaku.md §11)。
  *
  * 锚在画面右下角([Alignment.BottomEnd]),随控制条与字幕轨平滑抬升让位,不遮挡画面中央与字幕。
- * 未投票时展示紧凑可点选项;投票后(或打开视频时已投过)原地展开各项占比条与人数。
+ * 依据播放器容器实测尺寸([containerWidth] / [containerHeight])在紧凑内嵌卡片与全屏/桌面标准卡片间自适配;
+ * 未投票时展示紧凑可点选项,投票后(或打开视频时已投过)原地展开各项占比条与人数。
  */
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
@@ -94,6 +115,9 @@ fun DanmakuVoteOverlay(
     cid: Long,
     onVote: (voteId: Long, optionIdx: Int, positionMillis: Long) -> Unit,
     uiState: DanmakuVoteUiState = rememberDanmakuVoteUiState(cid),
+    containerWidth: Dp = Dp.Unspecified,
+    containerHeight: Dp = Dp.Unspecified,
+    compactFallback: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
     val activeVote by remember(votes, uiState) {
@@ -115,6 +139,11 @@ fun DanmakuVoteOverlay(
 
     val spatialSpec = MaterialTheme.motionScheme.fastSpatialSpec<androidx.compose.ui.unit.IntSize>()
     val effectsSpec = MaterialTheme.motionScheme.fastEffectsSpec<Float>()
+    val compact = isCompactVoteContainer(
+        containerWidth = containerWidth,
+        containerHeight = containerHeight,
+        fallbackCompact = compactFallback,
+    )
 
     AnimatedVisibility(
         visible = activeVote != null,
@@ -125,6 +154,9 @@ fun DanmakuVoteOverlay(
         val vote = cachedVote ?: return@AnimatedVisibility
         DanmakuVoteCard(
             vote = vote,
+            compact = compact,
+            containerWidth = containerWidth,
+            containerHeight = containerHeight,
             onSelectOption = { optionIdx ->
                 // 临近窗口末尾点下投票时,再留一段结果展示时间,不让比例条刚画出来就立刻退场。
                 val currentPos = positionMillis()
@@ -140,14 +172,51 @@ fun DanmakuVoteOverlay(
 @Composable
 private fun DanmakuVoteCard(
     vote: DanmakuVote,
+    compact: Boolean,
+    containerWidth: Dp,
+    containerHeight: Dp,
     onSelectOption: (Int) -> Unit,
     onDismiss: () -> Unit,
 ) {
-    val cardShape = MaterialTheme.shapes.medium
+    val cardShape = if (compact) MaterialTheme.shapes.small else MaterialTheme.shapes.medium
+    val maxCardWidth = if (compact) {
+        if (containerWidth.isSpecified && containerWidth > 0.dp) {
+            minOf(containerWidth * CompactVoteMaxWidthFraction, CompactVoteCardMaxWidth)
+                .coerceAtLeast(CompactVoteCardHardMinWidth)
+        } else {
+            CompactVoteCardMaxWidth
+        }
+    } else {
+        VoteCardMaxWidth
+    }
+    val minCardWidth = if (compact) {
+        CompactVoteCardMinWidth.coerceAtMost(maxCardWidth)
+    } else {
+        VoteCardMinWidth.coerceAtMost(maxCardWidth)
+    }
+    val maxCardHeight = if (compact) {
+        if (containerHeight.isSpecified && containerHeight > 0.dp) {
+            (containerHeight * CompactVoteMaxHeightFraction).coerceAtLeast(CompactVoteMinHeightCap)
+        } else {
+            CompactVoteFallbackMaxHeight
+        }
+    } else {
+        if (containerHeight.isSpecified && containerHeight > 0.dp) {
+            (containerHeight * RegularVoteMaxHeightFraction).coerceAtLeast(RegularVoteMinHeightCap)
+        } else {
+            Dp.Unspecified
+        }
+    }
+    val horizontalPad = if (compact) Spacing.Tight else Spacing.Cozy
+    val bottomPad = if (compact) CompactCardBottomPad else Spacing.Tight
+    val closeTargetSize = if (compact) CompactCloseTargetSize else Dimens.MinTouchTarget
+    val closeIconSize = if (compact) CompactCloseIconSize else VoteCloseIconSize
+
     Column(
         verticalArrangement = Arrangement.spacedBy(Spacing.Hair),
         modifier = Modifier
-            .widthIn(min = VoteCardMinWidth, max = VoteCardMaxWidth)
+            .widthIn(min = minCardWidth, max = maxCardWidth)
+            .then(if (maxCardHeight.isSpecified) Modifier.heightIn(max = maxCardHeight) else Modifier)
             .clip(cardShape)
             // 吞掉落在卡片空白处、标题栏或已投选项上的点按,防止穿透到底下 PlayerShell 触发暂停/显隐控件。
             .clickable(
@@ -156,14 +225,14 @@ private fun DanmakuVoteCard(
                 onClick = {},
             )
             .background(FixedColors.ScrimOnMedia)
-            .border(width = CardBorderWidth, color = CardBorderColor, shape = cardShape)
-            .padding(top = Spacing.Hair, bottom = Spacing.Tight),
+            .border(width = HudSpecularBorderWidth, color = HudSpecularBorderColor, shape = cardShape)
+            .padding(top = Spacing.Hair, bottom = bottomPad),
     ) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(start = Spacing.Cozy, end = Spacing.Hair),
+                .padding(start = horizontalPad, end = Spacing.Hair),
         ) {
             Text(
                 text = stringResource(Res.string.player_vote_tag),
@@ -175,10 +244,10 @@ private fun DanmakuVoteCard(
                     .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.88f))
                     .padding(horizontal = Spacing.Hair, vertical = VoteTagVerticalPad),
             )
-            Spacer(Modifier.width(Spacing.Tight))
+            Spacer(Modifier.width(if (compact) Spacing.Hair else Spacing.Tight))
             Text(
                 text = vote.question,
-                style = MaterialTheme.typography.labelMedium,
+                style = if (compact) MaterialTheme.typography.bodySmall else MaterialTheme.typography.labelMedium,
                 color = FixedColors.OnMedia,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
@@ -188,15 +257,15 @@ private fun DanmakuVoteCard(
                 Spacer(Modifier.width(Spacing.Hair))
                 Text(
                     text = stringResource(Res.string.player_vote_count, formatCount(vote.totalCount.toLong())),
-                    style = MaterialTheme.typography.labelSmall.copy(fontFeatureSettings = "tnum"),
-                    color = FixedColors.OnMedia.copy(alpha = 0.62f),
+                    style = MaterialTheme.typography.labelSmall.tabular,
+                    color = FixedColors.OnMedia.copy(alpha = 0.68f),
                     maxLines = 1,
                 )
             }
             Box(
                 contentAlignment = Alignment.Center,
                 modifier = Modifier
-                    .sizeIn(minWidth = Dimens.MinTouchTarget, minHeight = Dimens.MinTouchTarget)
+                    .sizeIn(minWidth = closeTargetSize, minHeight = closeTargetSize)
                     .clip(CircleShape)
                     .clickable(onClick = onDismiss)
                     .pointerHoverIcon(PointerIcon.Hand),
@@ -204,8 +273,8 @@ private fun DanmakuVoteCard(
                 Icon(
                     imageVector = Icons.Filled.Close,
                     contentDescription = stringResource(Res.string.player_vote_close),
-                    tint = FixedColors.OnMedia.copy(alpha = 0.68f),
-                    modifier = Modifier.size(VoteCloseIconSize),
+                    tint = FixedColors.OnMedia.copy(alpha = 0.72f),
+                    modifier = Modifier.size(closeIconSize),
                 )
             }
         }
@@ -214,17 +283,40 @@ private fun DanmakuVoteCard(
             verticalArrangement = Arrangement.spacedBy(Spacing.Hair),
             modifier = Modifier
                 .verticalScroll(rememberScrollState())
-                .padding(horizontal = Spacing.Cozy),
+                .padding(horizontal = horizontalPad),
         ) {
             val total = vote.totalCount.coerceAtLeast(vote.options.sumOf { it.count }).coerceAtLeast(1)
-            vote.options.forEach { option ->
-                DanmakuVoteOptionRow(
-                    option = option,
-                    hasVoted = vote.hasVoted,
-                    selected = vote.myVote == option.idx,
-                    fraction = if (vote.hasVoted) (option.count.toFloat() / total).coerceIn(0f, 1f) else 0f,
-                    onClick = { if (!vote.hasVoted) onSelectOption(option.idx) },
-                )
+            if (compact) {
+                vote.options.chunked(2).forEach { rowOptions ->
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(Spacing.Hair),
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        rowOptions.forEach { option ->
+                            DanmakuVoteOptionRow(
+                                option = option,
+                                hasVoted = vote.hasVoted,
+                                selected = vote.myVote == option.idx,
+                                fraction = if (vote.hasVoted) (option.count.toFloat() / total).coerceIn(0f, 1f) else 0f,
+                                compact = true,
+                                onClick = { if (!vote.hasVoted) onSelectOption(option.idx) },
+                                modifier = Modifier.weight(1f),
+                            )
+                        }
+                    }
+                }
+            } else {
+                vote.options.forEach { option ->
+                    DanmakuVoteOptionRow(
+                        option = option,
+                        hasVoted = vote.hasVoted,
+                        selected = vote.myVote == option.idx,
+                        fraction = if (vote.hasVoted) (option.count.toFloat() / total).coerceIn(0f, 1f) else 0f,
+                        compact = false,
+                        onClick = { if (!vote.hasVoted) onSelectOption(option.idx) },
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
             }
         }
     }
@@ -237,7 +329,9 @@ private fun DanmakuVoteOptionRow(
     hasVoted: Boolean,
     selected: Boolean,
     fraction: Float,
+    compact: Boolean,
     onClick: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     val animatedFractionState = animateFloatAsState(
         targetValue = if (hasVoted) fraction.coerceIn(0f, 1f) else 0f,
@@ -250,13 +344,18 @@ private fun DanmakuVoteOptionRow(
         Color.White.copy(alpha = 0.18f)
     }
     val trackColor = if (hasVoted) Color.White.copy(alpha = 0.08f) else Color.White.copy(alpha = 0.13f)
+    val optionShape = if (compact) MaterialTheme.shapes.extraSmall else MaterialTheme.shapes.small
+    val minHeight = if (compact) CompactVoteOptionMinHeight else VoteOptionMinHeight
+    val horizontalPad = if (compact) CompactOptionHorizontalPad else Spacing.Tight
+    val checkIconSize = if (compact) CompactCheckIconSize else VoteCheckIconSize
+    val checkGap = if (compact) CompactCheckGap else Spacing.Hair
+    val percentGap = if (compact) Spacing.Hair else Spacing.Tight
 
     Box(
         contentAlignment = Alignment.CenterStart,
-        modifier = Modifier
-            .fillMaxWidth()
-            .heightIn(min = VoteOptionMinHeight)
-            .clip(MaterialTheme.shapes.small)
+        modifier = modifier
+            .heightIn(min = minHeight)
+            .clip(optionShape)
             .background(trackColor)
             .drawBehind {
                 val frac = animatedFractionState.value.coerceIn(0f, 1f)
@@ -279,20 +378,20 @@ private fun DanmakuVoteOptionRow(
             verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = Spacing.Tight, vertical = Spacing.Hair),
+                .padding(horizontal = horizontalPad, vertical = Spacing.Hair),
         ) {
             if (selected) {
                 Icon(
                     imageVector = Icons.Filled.Check,
                     contentDescription = null,
                     tint = FixedColors.OnMedia,
-                    modifier = Modifier.size(VoteCheckIconSize),
+                    modifier = Modifier.size(checkIconSize),
                 )
-                Spacer(Modifier.width(Spacing.Hair))
+                Spacer(Modifier.width(checkGap))
             }
             Text(
                 text = option.desc,
-                style = MaterialTheme.typography.labelMedium,
+                style = if (compact) MaterialTheme.typography.labelSmall else MaterialTheme.typography.labelMedium,
                 fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
                 color = FixedColors.OnMedia.copy(alpha = if (!hasVoted || selected) 0.96f else 0.82f),
                 maxLines = 1,
@@ -300,11 +399,11 @@ private fun DanmakuVoteOptionRow(
                 modifier = Modifier.weight(1f),
             )
             if (hasVoted) {
-                Spacer(Modifier.width(Spacing.Tight))
+                Spacer(Modifier.width(percentGap))
                 val percent = (fraction * 100).roundToInt()
                 Text(
                     text = "$percent%",
-                    style = MaterialTheme.typography.labelSmall.copy(fontFeatureSettings = "tnum"),
+                    style = MaterialTheme.typography.labelSmall.tabular,
                     fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
                     color = FixedColors.OnMedia.copy(alpha = if (selected) 0.96f else 0.72f),
                     maxLines = 1,
@@ -314,12 +413,30 @@ private fun DanmakuVoteOptionRow(
     }
 }
 
+private val CompactVoteHeightThreshold = 300.dp
+private val CompactVoteWidthThreshold = 480.dp
+private const val CompactVoteMaxWidthFraction = 0.55f
+private const val CompactVoteMaxHeightFraction = 0.42f
+private const val RegularVoteMaxHeightFraction = 0.55f
+
+private val CompactVoteCardHardMinWidth = 120.dp
+private val CompactVoteCardMinWidth = 148.dp
+private val CompactVoteCardMaxWidth = 210.dp
+private val CompactVoteMinHeightCap = 68.dp
+private val CompactVoteFallbackMaxHeight = 96.dp
+private val CompactCardBottomPad = 6.dp
+private val CompactOptionHorizontalPad = 6.dp
+private val CompactVoteOptionMinHeight = 32.dp
+private val CompactCloseTargetSize = 28.dp
+private val CompactCloseIconSize = 14.dp
+private val CompactCheckIconSize = 12.dp
+private val CompactCheckGap = 2.dp
+
 private val VoteCardMinWidth = 192.dp
 private val VoteCardMaxWidth = 240.dp
+private val RegularVoteMinHeightCap = 160.dp
 private val VoteOptionMinHeight = Dimens.MinTouchTarget
 private val VoteCloseIconSize = 16.dp
 private val VoteCheckIconSize = 14.dp
 private val VoteTagVerticalPad = 1.dp
-private val CardBorderWidth = 0.5.dp
-private val CardBorderColor = Color.White.copy(alpha = 0.10f)
 private const val VOTE_RESULT_LINGER_MILLIS = 3_500L

@@ -322,7 +322,7 @@
     <string name="video_find_related">找相关</string>
     <string name="video_queue_loading">加载队列…</string>
     <string name="video_queue_incomplete">队列没建全，只有当前这条</string>
-    <string name="video_queue_show_all">查看全部</string>
+    <string name="video_queue_show_all">查看更多</string>
     <string name="video_queue_now_playing">正在播放</string>
     <string name="video_queue_paused">已暂停</string>
 
@@ -1007,8 +1007,8 @@
     <string name="queue_source_up_dynamics">%1$s 的动态</string>
     <string name="queue_source_up_dynamics_generic">UP 主动态</string>
     <string name="queue_position_windowed">%1$d/%2$d  共 %3$d</string>
-    <string name="video_queue_show_all_count">查看全部（共 %1$d 条）</string>
-    <string name="video_queue_show_all_windowed">查看全部（已加载 %1$d / 共 %2$d 条）</string>
+    <string name="video_queue_show_all_count">查看更多（共 %1$d 条）</string>
+    <string name="video_queue_show_all_windowed">查看更多（已加载 %1$d / 共 %2$d 条）</string>
     <string name="queue_edge_loading_before">正在加载前面条目…</string>
     <string name="queue_edge_loading_after">正在加载后续条目…</string>
     <string name="queue_edge_has_before">前面还有更多，点击加载</string>
