@@ -469,6 +469,10 @@ fun VideoScreen(
             errorAfter = queue.errorAfter,
             remainingBefore = queue.remainingBefore,
             remainingAfter = queue.remainingAfter,
+            loadingAll = queue.loadingAll,
+            onLoadAll = { send(PlaybackCommand.LoadAllQueue) },
+            onCancelLoadAll = { send(PlaybackCommand.CancelLoadAllQueue) },
+            totalCount = queue.sourceTotal,
         )
     }
 
