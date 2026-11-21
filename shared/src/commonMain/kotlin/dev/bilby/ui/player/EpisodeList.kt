@@ -385,6 +385,12 @@ fun EpisodeList(
     errorAfter: Boolean = false,
     remainingBefore: Int? = null,
     remainingAfter: Int? = null,
+    /**
+     * 宿主在纵向底部面板(`ModalBottomSheet` / `BottomSheetScaffold`)内时置 true:
+     * 停用触屏顶部下拉续取，使向下滑/甩动不消费事件，让父面板平滑跟手收起或关闭；
+     * 顶边改以点击行触发 `onLoad(true)`，底边上拉续取与桌面滚轮越界阻力照常生效。
+     */
+    hostedInVerticalSheet: Boolean = false,
 ) {
     val currentIndex = remember(rows) { rows.currentIndex() }
     val currentBvid = rows.getOrNull(currentIndex)?.bvid
@@ -418,6 +424,7 @@ fun EpisodeList(
     val latestEdges by rememberUpdatedState(edges)
     val latestErrBefore by rememberUpdatedState(hasErrorBefore)
     val latestErrAfter by rememberUpdatedState(hasErrorAfter)
+    val latestHostedInVerticalSheet by rememberUpdatedState(hostedInVerticalSheet)
 
     val pointerSource = LocalPointerSource.current
     val isTouchLike = pointerSource.isTouchLike
@@ -491,8 +498,21 @@ fun EpisodeList(
         state.scrollToItem(target, -(info.viewportSize.height - row.size) / 2)
     }
 
-    LaunchedEffect(edges?.loadingBefore, edges?.loadingAll, showBeforeEdge, hasErrorBefore) {
-        if (!showBeforeEdge || edges?.loadingBefore == true || edges?.loadingAll == true || hasErrorBefore) {
+    LaunchedEffect(
+        edges?.loadingBefore,
+        edges?.loadingAll,
+        showBeforeEdge,
+        hasErrorBefore,
+        hostedInVerticalSheet,
+        isTouchLike,
+    ) {
+        if (
+            !showBeforeEdge ||
+            edges?.loadingBefore == true ||
+            edges?.loadingAll == true ||
+            hasErrorBefore ||
+            (hostedInVerticalSheet && isTouchLike)
+        ) {
             resistance.reset(before = true)
             topProgressAnim.snapTo(0f)
         }
@@ -532,15 +552,16 @@ fun EpisodeList(
                 // 惯性甩动(SideEffect)绝不触发越界续取，保证快速滑到边界自然停住。
                 if (source != NestedScrollSource.UserInput) return Offset.Zero
                 val currentEdges = latestEdges ?: return Offset.Zero
+                val touch = pointerSource.isTouchLike
                 val canBefore = currentEdges.canLoadBefore &&
                     !currentEdges.loadingBefore &&
                     !currentEdges.loadingAll &&
-                    !latestErrBefore
+                    !latestErrBefore &&
+                    !(touch && latestHostedInVerticalSheet)
                 val canAfter = currentEdges.canLoadAfter &&
                     !currentEdges.loadingAfter &&
                     !currentEdges.loadingAll &&
                     !latestErrAfter
-                val touch = pointerSource.isTouchLike
                 val outcome = resistance.onPostScroll(
                     consumedY = consumed.y,
                     availableY = available.y,
@@ -578,7 +599,8 @@ fun EpisodeList(
                 val canBefore = currentEdges.canLoadBefore &&
                     !currentEdges.loadingBefore &&
                     !currentEdges.loadingAll &&
-                    !latestErrBefore
+                    !latestErrBefore &&
+                    !latestHostedInVerticalSheet
                 val canAfter = currentEdges.canLoadAfter &&
                     !currentEdges.loadingAfter &&
                     !currentEdges.loadingAll &&
@@ -690,7 +712,9 @@ fun EpisodeList(
                             remainingCount = resolvedRemainingBefore,
                             overscrollProgress = topProgressAnim.value,
                             isTouchLike = isTouchLike,
-                            onRetry = { edges.onLoad(true) },
+                            tapToLoad = hostedInVerticalSheet && isTouchLike,
+                            loadingAll = edges.loadingAll,
+                            onLoad = { edges.onLoad(true) },
                         )
                     }
                 }
@@ -736,7 +760,9 @@ fun EpisodeList(
                             remainingCount = resolvedRemainingAfter,
                             overscrollProgress = bottomProgressAnim.value,
                             isTouchLike = isTouchLike,
-                            onRetry = { edges.onLoad(false) },
+                            tapToLoad = false,
+                            loadingAll = edges.loadingAll,
+                            onLoad = { edges.onLoad(false) },
                         )
                     }
                 }
@@ -1066,7 +1092,9 @@ private fun QueueEdgeRow(
     remainingCount: Int?,
     overscrollProgress: Float,
     isTouchLike: Boolean,
-    onRetry: () -> Unit,
+    tapToLoad: Boolean,
+    loadingAll: Boolean,
+    onLoad: () -> Unit,
 ) {
     when {
         loading -> {
@@ -1091,7 +1119,7 @@ private fun QueueEdgeRow(
                     .fillMaxWidth()
                     .clip(MaterialTheme.shapes.medium)
                     .pointerHoverIcon(PointerIcon.Hand)
-                    .clickable(role = Role.Button, onClick = onRetry)
+                    .clickable(role = Role.Button, onClick = onLoad)
                     .heightIn(min = Dimens.MinTouchTarget)
                     .padding(horizontal = Spacing.Comfortable, vertical = Spacing.Tight),
                 verticalAlignment = Alignment.CenterVertically,
@@ -1106,6 +1134,51 @@ private fun QueueEdgeRow(
                     text = stringResource(Res.string.action_retry),
                     style = MaterialTheme.typography.labelLargeEmphasized,
                     color = MaterialTheme.colorScheme.primary,
+                )
+            }
+        }
+
+        tapToLoad -> {
+            val label = if (remainingCount != null && remainingCount > 0) {
+                stringResource(
+                    if (before) Res.string.queue_edge_has_before_count else Res.string.queue_edge_has_after_count,
+                    remainingCount,
+                )
+            } else {
+                stringResource(
+                    if (before) Res.string.queue_edge_has_before else Res.string.queue_edge_has_after,
+                )
+            }
+            val tint = if (loadingAll) {
+                MaterialTheme.colorScheme.onSurfaceVariant
+            } else {
+                MaterialTheme.colorScheme.primary
+            }
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = Spacing.Hair)
+                    .clip(MaterialTheme.shapes.medium)
+                    .background(MaterialTheme.colorScheme.surfaceContainerLow)
+                    .pointerHoverIcon(PointerIcon.Hand)
+                    .clickable(enabled = !loadingAll, role = Role.Button, onClick = onLoad)
+                    .heightIn(min = Dimens.MinTouchTarget)
+                    .padding(horizontal = Spacing.Comfortable, vertical = Spacing.Tight),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(Spacing.Hair, Alignment.CenterHorizontally),
+            ) {
+                Icon(
+                    imageVector = if (before) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
+                    contentDescription = null,
+                    tint = tint,
+                    modifier = Modifier.size(Dimens.IconInline),
+                )
+                Text(
+                    text = label,
+                    style = MaterialTheme.typography.labelMediumEmphasized.tabular,
+                    color = tint,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                 )
             }
         }

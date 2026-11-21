@@ -47,7 +47,9 @@ import dev.bilby.data.TvLoginRepository
 import dev.bilby.data.TvPollStatus
 import dev.bilby.resources.*
 import dev.bilby.stringResource
+import dev.bilby.ui.CaptionButtonSpacing
 import dev.bilby.ui.CaptionDragHeight
+import dev.bilby.ui.CaptionUtilityButtons
 import dev.bilby.ui.LocalWindowCaption
 import dev.bilby.ui.theme.BilbyTheme
 import dev.bilby.ui.theme.Dimens
@@ -239,7 +241,13 @@ fun TvLoginScreen(
                             .height(CaptionDragHeight)
                             .windowDragArea(),
                     )
-                    caption.Buttons()
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(CaptionButtonSpacing),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        CaptionUtilityButtons()
+                        caption.Buttons()
+                    }
                 }
             }
         }

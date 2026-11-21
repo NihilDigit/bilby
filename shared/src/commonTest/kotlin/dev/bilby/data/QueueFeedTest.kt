@@ -242,6 +242,118 @@ class QueueFeedTest {
     }
 
     @Test
+    fun `ArchiveCursorFeed loadBefore 与 loadAfter 跳过整页过滤或重复的空页并在上限处收住`() = runTest {
+        val targetBvid = BvidCodec.fromAid(100)
+        val newerBvid = BvidCodec.fromAid(103)
+        val olderBvid = BvidCodec.fromAid(97)
+        val requested = mutableListOf<Pair<Long, Boolean>>()
+        val feed = ArchiveCursorFeed { aid, newer, includeCursor ->
+            requested += aid to newer
+            when {
+                aid == 100L && !newer && includeCursor -> CursorArchivePage(
+                    items = listOf(CursorArchiveItem(100L, targetBvid, "t100", "", 60, "UP")),
+                    hasNewer = true,
+                    hasOlder = true,
+                    total = 3,
+                    firstRawAid = 100L,
+                    lastRawAid = 100L,
+                )
+                aid == 100L && newer -> CursorArchivePage(
+                    items = emptyList(), // open 阶段取 newer 命中全过滤页，推进游标至 101
+                    hasNewer = true,
+                    hasOlder = true,
+                    total = 3,
+                    firstRawAid = 101L,
+                    lastRawAid = 101L,
+                )
+                // loadBefore: 第 1 页全重复/全过滤(102)，第 2 页返回真实 UGC(103)
+                aid == 101L && newer -> CursorArchivePage(
+                    items = listOf(CursorArchiveItem(100L, targetBvid, "dup", "", 60, "UP")),
+                    hasNewer = true,
+                    hasOlder = true,
+                    total = 3,
+                    firstRawAid = 102L,
+                    lastRawAid = 102L,
+                )
+                aid == 102L && newer -> CursorArchivePage(
+                    items = listOf(CursorArchiveItem(103L, newerBvid, "t103", "", 60, "UP")),
+                    hasNewer = false,
+                    hasOlder = true,
+                    total = 3,
+                    firstRawAid = 103L,
+                    lastRawAid = 103L,
+                )
+                // loadAfter: 第 1 页整页非 UGC 空页(99)，第 2 页整页非 UGC 空页(98)，第 3 页返回真实 UGC(97)
+                aid == 100L && !newer && !includeCursor -> CursorArchivePage(
+                    items = emptyList(),
+                    hasNewer = true,
+                    hasOlder = true,
+                    total = 3,
+                    firstRawAid = 99L,
+                    lastRawAid = 99L,
+                )
+                aid == 99L && !newer -> CursorArchivePage(
+                    items = emptyList(),
+                    hasNewer = true,
+                    hasOlder = true,
+                    total = 3,
+                    firstRawAid = 98L,
+                    lastRawAid = 98L,
+                )
+                aid == 98L && !newer -> CursorArchivePage(
+                    items = listOf(CursorArchiveItem(97L, olderBvid, "t97", "", 60, "UP")),
+                    hasNewer = true,
+                    hasOlder = false,
+                    total = 3,
+                    firstRawAid = 97L,
+                    lastRawAid = 97L,
+                )
+                else -> null
+            }
+        }
+
+        assertEquals(listOf(targetBvid), feed.open(targetBvid)!!.map { it.bvid })
+        assertTrue(feed.hasBefore)
+        assertTrue(feed.hasAfter)
+
+        val before = feed.loadBefore()!!
+        assertEquals(listOf(newerBvid), before.map { it.bvid })
+        assertFalse(feed.hasBefore)
+
+        val after = feed.loadAfter()!!
+        assertEquals(listOf(olderBvid), after.map { it.bvid })
+        assertFalse(feed.hasAfter)
+
+        // 连续空页超过上限时有界停止，不陷入无限请求
+        var emptyCalls = 0
+        val boundedFeed = ArchiveCursorFeed { aid, newer, includeCursor ->
+            if (!newer && includeCursor) {
+                CursorArchivePage(
+                    items = listOf(CursorArchiveItem(100L, targetBvid, "t100", "", 60, "UP")),
+                    hasNewer = false,
+                    hasOlder = true,
+                    firstRawAid = 100L,
+                    lastRawAid = 100L,
+                )
+            } else if (newer) {
+                CursorArchivePage(emptyList(), hasNewer = false, hasOlder = true)
+            } else {
+                emptyCalls++
+                CursorArchivePage(
+                    items = emptyList(),
+                    hasNewer = true,
+                    hasOlder = true,
+                    firstRawAid = aid - 1,
+                    lastRawAid = aid - 1,
+                )
+            }
+        }
+        boundedFeed.open(targetBvid)!!
+        assertEquals(emptyList<QueueItem>(), boundedFeed.loadAfter())
+        assertEquals(4, emptyCalls)
+    }
+
+    @Test
     fun `ArchiveForwardCursorFeed 支持深页最多播放游标定位与失败重试`() = runTest {
         val pages = listOf(
             SpaceArchiveCursorPage(

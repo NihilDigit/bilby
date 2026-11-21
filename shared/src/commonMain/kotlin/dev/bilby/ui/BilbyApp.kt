@@ -13,7 +13,6 @@ import dev.bilby.ui.components.PointerSource
 import dev.bilby.ui.components.RegisterPageRefresh
 import dev.bilby.ui.components.RegisterPageSearch
 import dev.bilby.ui.components.ShortcutsSheet
-import dev.bilby.ui.components.matchesLibraryQuery
 import dev.bilby.ui.components.readClipboardText
 import dev.bilby.ui.components.rememberPageRefreshRegistry
 import dev.bilby.ui.components.trackPointerSource
@@ -445,8 +444,44 @@ private fun BilbyApp(
             factory = viewModelFactory { initializer { TvLoginViewModel(container.tvLoginRepository) } },
         )
         val state by vm.state.collectAsStateWithLifecycle()
-        // 登录成功后 credentials 会自己更新,这里不需要额外导航
-        TvLoginScreen(state = state, onRefresh = vm::restart, onDone = {})
+        val appFullscreen = LocalAppFullscreen.current
+        val loginFocusRequester = remember { FocusRequester() }
+        BackHandler(enabled = appFullscreen?.isFullscreen == true) {
+            appFullscreen?.setFullscreen(false)
+        }
+        LaunchedEffect(Unit) {
+            runCatching { loginFocusRequester.requestFocus() }
+        }
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .onPreviewKeyEvent { event ->
+                    if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
+                    val controller = appFullscreen ?: return@onPreviewKeyEvent false
+                    val bare = !event.isCtrlPressed && !event.isAltPressed && !event.isShiftPressed && !event.isMetaPressed
+                    val alt = event.isAltPressed && !event.isCtrlPressed && !event.isMetaPressed
+                    when {
+                        bare && event.key == Key.F11 -> {
+                            controller.toggleWindowFullscreen()
+                            true
+                        }
+                        alt && !event.isShiftPressed && (event.key == Key.Enter || event.key == Key.NumPadEnter) -> {
+                            controller.toggleWindowFullscreen()
+                            true
+                        }
+                        bare && event.key == Key.Escape && controller.isFullscreen -> {
+                            controller.setFullscreen(false)
+                            true
+                        }
+                        else -> false
+                    }
+                }
+                .focusRequester(loginFocusRequester)
+                .focusable(),
+        ) {
+            // 登录成功后 credentials 会自己更新,这里不需要额外导航
+            TvLoginScreen(state = state, onRefresh = vm::restart, onDone = {})
+        }
         return
     }
 
@@ -3159,7 +3194,11 @@ private fun ProfilePane(
     // 首次进入时 ViewModel 的 init 已经拉过一次,这里会再来一次 —— 认了。少这一次的写法
     // (去抖 + 版本号)试过,漏的比省的多,见 [ProfileViewModel.refresh]。
     LaunchedEffect(Unit) { vm.refresh() }
-    RegisterPageRefresh(onRefresh = vm::refresh)
+    val refreshing = state.accountLoading ||
+        state.history.loading ||
+        state.toView.loading ||
+        state.favFolders.loading
+    RegisterPageRefresh(refreshing = refreshing, onRefresh = vm::refresh)
 
     ProfileScreen(
         state = state,
@@ -3798,17 +3837,20 @@ private fun OfflineRoute(
         },
     )
     var confirmingBatchDelete by remember { mutableStateOf(false) }
-    val trimmedQuery = searchQuery.trim()
-    val visibleItems = remember(items, trimmedQuery) {
-        if (trimmedQuery.isEmpty()) {
-            items
+    var selectableIds by remember { mutableStateOf<Set<String>>(items.mapTo(LinkedHashSet()) { it.id }) }
+    val selected = remember(items, selectedIds, selectableIds) {
+        val activeIds = selectedIds?.intersect(selectableIds).orEmpty()
+        items.filter { it.id in activeIds }
+    }
+    // 切换标签/子视图或删除条目后，自动裁掉当前视图不再可选的 id；纯分组卡片无可选行时自动退出多选。
+    LaunchedEffect(selectableIds) {
+        val current = selectedIds ?: return@LaunchedEffect
+        selectedIds = if (selectableIds.isEmpty()) {
+            null
         } else {
-            items.filter { matchesLibraryQuery(trimmedQuery, it.title, it.partTitle, it.upName, it.bvid, it.seasonTitle) }
+            current.intersect(selectableIds)
         }
     }
-    val selected = items.filter { it.id in selectedIds.orEmpty() }
-    // 列表里已经没有的 id 要跟着掉:删完之后集合里留着几个死 id,顶栏就一直显示"已选 3 项"。
-    LaunchedEffect(items) { selectedIds = selectedIds?.intersect(items.map { it.id }.toSet()) }
     BackHandler(enabled = selectedIds != null) { selectedIds = null }
 
     // 见 [SearchResultRoute];两条顶栏同接一个 behavior,同历史记录页。
@@ -3848,26 +3890,27 @@ private fun OfflineRoute(
                         focusRequestNonce = searchFocusNonce,
                         actions = {
                             // 多选此前只能长按进入,而长按没有任何视觉提示。照历史记录页的做法
-                            // 在顶栏放一个入口,长按保留。
-                            IconButton(
-                                onClick = {
-                                    searchOpen = false
-                                    searchQuery = ""
-                                    selectedIds = emptySet()
-                                },
-                                enabled = items.isNotEmpty(),
-                            ) {
-                                Icon(
-                                    Icons.Outlined.Checklist,
-                                    contentDescription = stringResource(Res.string.action_select),
-                                )
+                            // 在顶栏放一个入口,长按保留；仅当前视图存在可选行时显示。
+                            if (selectableIds.isNotEmpty()) {
+                                IconButton(
+                                    onClick = {
+                                        searchOpen = false
+                                        searchQuery = ""
+                                        selectedIds = emptySet()
+                                    },
+                                ) {
+                                    Icon(
+                                        Icons.Outlined.Checklist,
+                                        contentDescription = stringResource(Res.string.action_select),
+                                    )
+                                }
                             }
                         },
                     )
                 } else {
                     // 多选时顶栏只留退出按钮与选中计数，批量操作移至底部拇指区浮动工具条。
                     BilbyTopBar(
-                        title = stringResource(Res.string.offline_selected_count, ids.size),
+                        title = stringResource(Res.string.offline_selected_count, ids.intersect(selectableIds).size),
                         onBack = { selectedIds = null },
                         scrollBehavior = scrollBehavior,
                     )
@@ -3881,8 +3924,8 @@ private fun OfflineRoute(
                 enter = slideInVertically { it } + fadeIn(fadeSpec),
                 exit = slideOutVertically { it } + fadeOut(fadeSpec),
             ) {
-                val ids = selectedIds ?: emptySet()
-                val all = remember(visibleItems) { visibleItems.map { it.id }.toSet() }
+                val all = selectableIds
+                val ids = selectedIds?.intersect(all) ?: emptySet()
                 val allSelected = all.isNotEmpty() && ids == all
                 val hasPausable = selected.any {
                     it.status == OfflineStatus.Queued || it.status == OfflineStatus.Running
@@ -3898,6 +3941,7 @@ private fun OfflineRoute(
                     ToggleButton(
                         checked = allSelected,
                         onCheckedChange = { selectedIds = if (allSelected) emptySet() else all },
+                        enabled = all.isNotEmpty(),
                         contentPadding = toolbarActionPadding,
                     ) {
                         Icon(
@@ -4003,6 +4047,7 @@ private fun OfflineRoute(
                 val current = selectedIds.orEmpty()
                 selectedIds = if (item.id in current) current - item.id else current + item.id
             },
+            onSelectableIdsChanged = { selectableIds = it },
             searchQuery = searchQuery,
             contentPadding = effectivePadding,
         )

@@ -174,27 +174,37 @@ class ArchiveCursorFeed(
     }
 
     override suspend fun loadBefore(): List<QueueItem>? {
-        if (!newerLeft) return emptyList()
-        val page = load(newestAid, true, false) ?: return null
-        page.total?.let { upstreamTotal = it }
-        val nextNewest = page.firstRawAid ?: page.items.firstOrNull()?.aid
-        newerLeft = page.hasNewer && nextNewest != null && nextNewest != newestAid
-        if (nextNewest != null) newestAid = nextNewest
-        val fresh = page.items.filter { seenAids.add(it.aid) }
-        loadedSize += fresh.size
-        return fresh.map { it.toQueueItem() }
+        repeat(MAX_EMPTY_ROUNDS) {
+            if (!newerLeft) return emptyList()
+            val page = load(newestAid, true, false) ?: return null
+            page.total?.let { upstreamTotal = it }
+            val nextNewest = page.firstRawAid ?: page.items.firstOrNull()?.aid
+            newerLeft = page.hasNewer && nextNewest != null && nextNewest != newestAid
+            if (nextNewest != null) newestAid = nextNewest
+            val fresh = page.items.filter { seenAids.add(it.aid) }
+            if (fresh.isNotEmpty()) {
+                loadedSize += fresh.size
+                return fresh.map { it.toQueueItem() }
+            }
+        }
+        return emptyList()
     }
 
     override suspend fun loadAfter(): List<QueueItem>? {
-        if (!olderLeft) return emptyList()
-        val page = load(oldestAid, false, false) ?: return null
-        page.total?.let { upstreamTotal = it }
-        val nextOldest = page.lastRawAid ?: page.items.lastOrNull()?.aid
-        olderLeft = page.hasOlder && nextOldest != null && nextOldest != oldestAid
-        if (nextOldest != null) oldestAid = nextOldest
-        val fresh = page.items.filter { seenAids.add(it.aid) }
-        loadedSize += fresh.size
-        return fresh.map { it.toQueueItem() }
+        repeat(MAX_EMPTY_ROUNDS) {
+            if (!olderLeft) return emptyList()
+            val page = load(oldestAid, false, false) ?: return null
+            page.total?.let { upstreamTotal = it }
+            val nextOldest = page.lastRawAid ?: page.items.lastOrNull()?.aid
+            olderLeft = page.hasOlder && nextOldest != null && nextOldest != oldestAid
+            if (nextOldest != null) oldestAid = nextOldest
+            val fresh = page.items.filter { seenAids.add(it.aid) }
+            if (fresh.isNotEmpty()) {
+                loadedSize += fresh.size
+                return fresh.map { it.toQueueItem() }
+            }
+        }
+        return emptyList()
     }
 
     private fun CursorArchiveItem.toQueueItem() = QueueItem(
@@ -204,6 +214,10 @@ class ArchiveCursorFeed(
         coverUrl = coverUrl,
         durationSeconds = durationSeconds,
     )
+
+    private companion object {
+        const val MAX_EMPTY_ROUNDS = 4
+    }
 }
 
 /**

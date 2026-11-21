@@ -41,17 +41,14 @@ internal suspend fun loadAllQueuePages(
 
                 if (fetchedAnyPage && interPageDelayMs > 0L) {
                     delay(interPageDelayMs)
-                    if (!isStillValid()) {
-                        pagination.cancelExtend(before)
-                        return
-                    }
+                    if (!isStillValid()) return
                 }
 
                 val loaded = try {
                     if (before) feed.loadBefore() else feed.loadAfter()
                 } catch (t: Throwable) {
                     if (t is CancellationException) {
-                        pagination.cancelExtend(before)
+                        if (isStillValid()) pagination.cancelExtend(before)
                         throw t
                     }
                     BiliLog.w("队列全部加载异常 before=$before", t)
@@ -59,10 +56,7 @@ internal suspend fun loadAllQueuePages(
                 }
                 fetchedAnyPage = true
 
-                if (!isStillValid()) {
-                    pagination.cancelExtend(before)
-                    return
-                }
+                if (!isStillValid()) return
                 if (loaded == null) {
                     BiliLog.w("队列全部加载失败 before=$before,停止继续拉取并锁存错误态")
                     pagination.failExtend(before)
@@ -84,8 +78,8 @@ internal suspend fun loadAllQueuePages(
             }
         }
     } finally {
-        pagination.finishLoadAll()
         if (isStillValid()) {
+            pagination.finishLoadAll()
             onProgress()
         }
     }

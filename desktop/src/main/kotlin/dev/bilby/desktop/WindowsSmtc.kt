@@ -25,9 +25,11 @@ import java.lang.invoke.MethodHandle
 import java.lang.invoke.MethodHandles
 import java.lang.invoke.MethodType
 import java.util.UUID
+import java.util.concurrent.CompletableFuture
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import javax.swing.SwingUtilities
 
@@ -71,7 +73,6 @@ private class WindowsSmtcBridge(private val playback: DesktopPlaybackHost) {
     private var updater: MemorySegment = MemorySegment.NULL
     private var eventToken: Long = 0L
     private var hasEventToken = false
-    private var callbackArena: Arena? = null
     private var callback: ButtonPressedComCallback? = null
     private var initialized = false
     private var closed = false
@@ -185,13 +186,12 @@ private class WindowsSmtcBridge(private val playback: DesktopPlaybackHost) {
             )
             val hrAdd = addPressed.invokeExact(smtc, cb.segment, outToken) as Int
             if (hrAdd >= 0) {
-                callbackArena = cbArena
                 callback = cb
                 eventToken = outToken.get(JAVA_LONG, 0L)
                 hasEventToken = true
             } else {
                 BiliLog.w("SMTC add_ButtonPressed 失败: HRESULT=0x%08X".format(hrAdd))
-                cbArena.close()
+                cb.dispose()
             }
             initialized = true
         }
@@ -298,10 +298,11 @@ private class WindowsSmtcBridge(private val playback: DesktopPlaybackHost) {
             releaseCom(smtc)
             smtc = MemorySegment.NULL
         }
-        // 在 remove_ButtonPressed 返回后再释放回调强引用与 Arena,避免 WinRT 仍在持有函数指针时释放内存
+        // 在 remove_ButtonPressed 返回后释放桥接侧 COM 引用：若 WinRT MTA 线程此刻仍在 InvokeAll 中
+        // 持有额外 AddRef（refCount > 1），Arena 关闭将延后到其尾随 Release() 归零时再执行，避免提前释放 upcall stub。
+        val cb = callback
         callback = null
-        callbackArena?.close()
-        callbackArena = null
+        cb?.dispose()
     }
 }
 
@@ -311,9 +312,11 @@ private class WindowsSmtcBridge(private val playback: DesktopPlaybackHost) {
  */
 private class ButtonPressedComCallback(
     private val playback: DesktopPlaybackHost,
-    arena: Arena,
+    private val arena: Arena,
 ) {
     private val refCount = AtomicInteger(1)
+    private val closed = AtomicBoolean(false)
+    private val arenaClosed = AtomicBoolean(false)
     private val iidUnknown = arena.guid(IID_IUNKNOWN)
     private val iidAgile = arena.guid(IID_IAGILE_OBJECT)
     private val iidHandler = arena.guid(IID_BUTTON_PRESSED_HANDLER)
@@ -371,11 +374,25 @@ private class ButtonPressedComCallback(
         segment = obj
     }
 
+    fun dispose() {
+        if (!closed.compareAndSet(false, true)) return
+        if (refCount.decrementAndGet() <= 0) {
+            closeArenaOnce()
+        }
+    }
+
+    private fun closeArenaOnce() {
+        if (arenaClosed.compareAndSet(false, true)) {
+            runCatching { arena.close() }
+                .onFailure { BiliLog.w("关闭 SMTC 回调 Arena 失败", it) }
+        }
+    }
+
     @Suppress("unused")
     fun queryInterface(thisPtr: MemorySegment, riidPtr: MemorySegment, ppvObject: MemorySegment): Int {
         if (ppvObject == MemorySegment.NULL) return E_POINTER
         val out = ppvObject.reinterpret(ADDRESS.byteSize())
-        if (riidPtr == MemorySegment.NULL) {
+        if (closed.get() || riidPtr == MemorySegment.NULL) {
             out.set(ADDRESS, 0L, MemorySegment.NULL)
             return E_NOINTERFACE
         }
@@ -396,8 +413,17 @@ private class ButtonPressedComCallback(
         refCount.incrementAndGet()
 
     @Suppress("unused")
-    fun release(@Suppress("UNUSED_PARAMETER") thisPtr: MemorySegment): Int =
-        refCount.decrementAndGet().coerceAtLeast(0)
+    fun release(@Suppress("UNUSED_PARAMETER") thisPtr: MemorySegment): Int {
+        val remaining = refCount.decrementAndGet()
+        if (remaining <= 0 && closed.get()) {
+            // 绝不在 upcall 栈帧内同步 close(arena) 以免释放正在返回的 releaseStub 代码块；
+            // 延后到独立后台线程在当前 Release() 返回后再关闭共享 Arena。
+            CompletableFuture.delayedExecutor(DEFERRED_ARENA_CLOSE_MS, TimeUnit.MILLISECONDS).execute {
+                closeArenaOnce()
+            }
+        }
+        return remaining.coerceAtLeast(0)
+    }
 
     @Suppress("unused")
     fun invoke(
@@ -405,7 +431,7 @@ private class ButtonPressedComCallback(
         @Suppress("UNUSED_PARAMETER") senderPtr: MemorySegment,
         argsPtr: MemorySegment,
     ): Int {
-        if (argsPtr == MemorySegment.NULL) return S_OK
+        if (closed.get() || argsPtr == MemorySegment.NULL) return S_OK
         runCatching {
             Arena.ofConfined().use { local ->
                 val outButton = local.allocate(JAVA_INT)
@@ -582,3 +608,4 @@ private const val BUTTON_PAUSE = 1
 private const val BUTTON_STOP = 2
 private const val BUTTON_NEXT = 6
 private const val BUTTON_PREVIOUS = 7
+private const val DEFERRED_ARENA_CLOSE_MS = 50L

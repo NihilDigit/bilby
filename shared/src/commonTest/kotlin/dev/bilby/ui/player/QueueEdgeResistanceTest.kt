@@ -130,4 +130,40 @@ class QueueEdgeResistanceTest {
         val tick2 = logic.onWheelBoundaryScroll(-1f, 64f, atTop = true, atBottom = false, canLoadBefore = true, canLoadAfter = false)
         assertEquals(true, tick2.triggeredBefore)
     }
+
+    @Test
+    fun `vertical sheet disables touch top-edge overscroll while preserving bottom touch and desktop wheel`() {
+        val logic = QueueEdgeResistanceLogic(touchThresholdPx = 120f, pointerThresholdPx = 128f)
+
+        // When hosted in a vertical sheet on touch, caller passes canLoadBefore = false on touch:
+        // downward drag at top must leave available.y unconsumed so ModalBottomSheet/BottomSheetScaffold can drag/collapse.
+        val downwardDrag = logic.onPostScroll(
+            consumedY = 0f,
+            availableY = 180f,
+            isTouchLike = true,
+            canLoadBefore = false,
+            canLoadAfter = true,
+        )
+        assertFalse(downwardDrag.consumed)
+        assertEquals(0f, downwardDrag.consumedY, 0.001f)
+        assertEquals(0f, logic.topRawPx, 0.001f)
+        assertNull(logic.onTouchRelease(canLoadBefore = false, canLoadAfter = true))
+
+        // Bottom-edge touch pull-up still works as normal.
+        val upwardPull = logic.onPostScroll(
+            consumedY = 0f,
+            availableY = -140f,
+            isTouchLike = true,
+            canLoadBefore = false,
+            canLoadAfter = true,
+        )
+        assertTrue(upwardPull.consumed)
+        assertTrue(upwardPull.crossedTouchThreshold)
+        assertEquals(false, logic.onTouchRelease(canLoadBefore = false, canLoadAfter = true))
+
+        // Desktop mouse-wheel top-edge resistance continues working.
+        assertNull(logic.onWheelBoundaryScroll(-1f, 64f, atTop = true, atBottom = false, canLoadBefore = true, canLoadAfter = true).triggeredBefore)
+        val wheelTrigger = logic.onWheelBoundaryScroll(-1f, 64f, atTop = true, atBottom = false, canLoadBefore = true, canLoadAfter = true)
+        assertEquals(true, wheelTrigger.triggeredBefore)
+    }
 }
