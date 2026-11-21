@@ -28,3 +28,7 @@ DESIGN.md
 
 # 接口调研笔记,本地保留
 notes/
+
+# JVM 原生崩溃与编译重放日志
+hs_err_pid*.log
+replay_pid*.log

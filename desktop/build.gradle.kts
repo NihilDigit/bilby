@@ -5,7 +5,9 @@ import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
 import javax.inject.Inject
 import org.apache.tools.ant.types.Commandline
+import org.gradle.api.file.ArchiveOperations
 import org.gradle.api.tasks.options.Option
+import org.gradle.kotlin.dsl.support.serviceOf
 import org.gradle.process.ExecOperations
 import org.jetbrains.compose.desktop.application.dsl.AotMode
 import org.jetbrains.compose.desktop.application.dsl.TargetFormat
@@ -46,7 +48,7 @@ configurations.configureEach {
     exclude(group = "org.jetbrains.compose.ui", module = "ui-test-junit4")
 }
 
-val releaseVersionName: String = (findProperty("bilbyVersion") as String?) ?: "0.0.0-dev"
+val releaseVersionName: String = providers.gradleProperty("bilbyVersion").getOrElse("0.0.0-dev")
 
 // 原生库与安装包都按构建机的架构出:jpackage 不能交叉打包,mpv 与 Skiko 的原生库也只取构建机那一份。
 // x64 与 arm64 的发行包由 release.yml 各在对应架构的 runner 上构建。
@@ -65,7 +67,7 @@ dependencies {
 }
 
 // 开发者专用的隐蔽虚拟桌面截图工具链:完全隔离在独立 sourceSet 里,不进 :desktop:jar 与任何发行包。
-val screenshot by sourceSets.creating {
+val screenshot = sourceSets.create("screenshot") {
     kotlin.srcDir("src/screenshot/kotlin")
     resources.srcDir("src/screenshot/resources")
     compileClasspath += sourceSets.main.get().output
@@ -92,17 +94,20 @@ val mpvRuntimeJar = configurations.detachedConfiguration(dependencies.create(mpv
 val zstdJniJar = configurations.detachedConfiguration(
     dependencies.create("${libs.zstd.jni.get()}:$zstdClassifier"),
 ).apply { isTransitive = false }
+val bundledAppResourcesDir = layout.buildDirectory.dir("appResources/common")
 val bundledAppResources = tasks.register<Sync>("bundledAppResources") {
-    from({ mpvRuntimeJar.map { zipTree(it) } }) {
+    // 局部变量保存 ArchiveOperations,避免 Provider.map 闭包捕获脚本顶层对象影响 Configuration Cache。
+    val archiveOps = serviceOf<ArchiveOperations>()
+    from(mpvRuntimeJar.elements.map { files -> files.map { archiveOps.zipTree(it.asFile) } }) {
         include("*.dll", "*.txt")
         into("mpv")
     }
-    from({ zstdJniJar.map { zipTree(it) } }) {
+    from(zstdJniJar.elements.map { files -> files.map { archiveOps.zipTree(it.asFile) } }) {
         include("**/*.dll")
         eachFile { path = "zstd/$name" }
         includeEmptyDirs = false
     }
-    into(layout.buildDirectory.dir("appResources/common"))
+    into(bundledAppResourcesDir)
 }
 tasks.matching { it.name == "prepareAppResources" }.configureEach { dependsOn(bundledAppResources) }
 
@@ -495,12 +500,13 @@ tasks.register<WriteDevLaunchArgsTask>("prepareDevLaunch") {
         buildList {
             add("--enable-native-access=ALL-UNNAMED")
             add("-XX:+ExplicitGCInvokesConcurrent")
+            add("-Dcompose.application.configure.swing.globals=true")
             add("-Dbilby.version=$releaseVersionName")
             add("-Dbilby.upgrade-code=$msiUpgradeUuid")
             providers.gradleProperty("bilbyDebug").orNull?.let { add("-Dbilby.debug=$it") }
         },
     )
-    appResourcesDir.set(bundledAppResources.map { it.destinationDir.absolutePath })
+    appResourcesDir.set(bundledAppResourcesDir.map { it.asFile.absolutePath })
     runtimeClasspath.from(tasks.named("jar"))
     runtimeClasspath.from(configurations.named("runtimeClasspath"))
     outputDir.set(layout.buildDirectory.dir("dev-launch"))

@@ -11,7 +11,7 @@ val localProperties = Properties().apply {
  * 这种对不上的发布。CI 传 `-PbilbyVersion=0.2.0`(取自 `v0.2.0` 这个 tag),本机不传时
  * 用 0.0.0-dev,一眼能认出这不是发布包。
  */
-val releaseVersionName: String = (findProperty("bilbyVersion") as String?) ?: "0.0.0-dev"
+val releaseVersionName: String = providers.gradleProperty("bilbyVersion").getOrElse("0.0.0-dev")
 
 /**
  * versionCode 从版本号推出来:`major*10000 + minor*100 + patch`。发布页上三个 ABI 变体

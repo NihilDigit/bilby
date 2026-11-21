@@ -36,9 +36,37 @@ include(":sqlite-woa64")
 // 弹幕引擎(https://github.com/NihilDigit/tdanmaku)已发布到 Maven Central,按坐标解析,
 // 见版本目录里的 `tdanmaku`。
 //
-// 本地并排存在 `../tdanmaku` 且不在 CI 环境时自动启用复合构建,让开发期直接联调隔壁仓库源码;
-// 干净 clone 或 CI(无 `../tdanmaku` 目录 / `CI` 环境变量存在)则走 Maven Central 坐标。
+// 本地并排存在 `../tdanmaku` 且不在 CI 环境时,若两边 AGP 版本一致则自动启用复合构建,
+// 让开发期直接联调隔壁仓库源码;若 AGP 版本不一致则自动回退到 Maven Central 坐标,避免 Android
+// 构建触发 "Using multiple versions of the Android Gradle plugin in the same build is not allowed"。
+// 可通过 `-Pbilby.localTdanmaku=true|false` 显式覆写。
 // 注意:若 Bilby 使用了隔壁尚未发版的新 API,打 v tag 发版前仍须先发版 tdanmaku 并升级版本目录。
-if (System.getenv("CI").isNullOrEmpty() && file("../tdanmaku").isDirectory) {
-    includeBuild("../tdanmaku")
+fun readAgpVersion(toml: File): String? {
+    if (!toml.isFile) return null
+    val match = Regex("""(?m)^\s*agp\s*=\s*"([^"]+)"""").find(toml.readText())
+    return match?.groupValues?.get(1)
+}
+
+val tdanmakuDir = file("../tdanmaku")
+val localTdanmakuOverride = providers.gradleProperty("bilby.localTdanmaku").orNull?.toBooleanStrictOrNull()
+val isCiEnv = !providers.environmentVariable("CI").orNull.isNullOrEmpty()
+val shouldIncludeLocalTdanmaku = when {
+    localTdanmakuOverride != null -> localTdanmakuOverride && tdanmakuDir.isDirectory
+    isCiEnv || !tdanmakuDir.isDirectory -> false
+    else -> {
+        val localAgp = readAgpVersion(file("gradle/libs.versions.toml"))
+        val tdanmakuAgp = readAgpVersion(File(tdanmakuDir, "gradle/libs.versions.toml"))
+        if (localAgp != null && tdanmakuAgp != null && localAgp != tdanmakuAgp) {
+            logger.lifecycle(
+                "Skipping composite build ../tdanmaku (AGP $tdanmakuAgp != Bilby AGP $localAgp); " +
+                    "resolving dev.nihildigit:tdanmaku from Maven Central. Pass -Pbilby.localTdanmaku=true to force.",
+            )
+            false
+        } else {
+            true
+        }
+    }
+}
+if (shouldIncludeLocalTdanmaku) {
+    includeBuild(tdanmakuDir)
 }

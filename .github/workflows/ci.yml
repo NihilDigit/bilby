@@ -50,10 +50,13 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends xvfb xauth
 
-      # 单测都在 :shared。Android 目标的宿主测试(含 Robolectric)与桌面 JVM 测试各跑一遍,
-      # 公共代码的用例两边都会执行。:app 只是打包入口,没有单测。
-      - name: Test
-        run: xvfb-run --auto-servernum ./gradlew :shared:testAndroidHostTest :shared:desktopTest
+      # 单测都在 :shared。Android 目标(JDK 21)与桌面 JVM 目标(JDK 25)分两次调用,
+      # 避免并行编译同时拉起两套 Kotlin Daemon 叠加内存占用。:app 只是打包入口,没有单测。
+      - name: Test Android
+        run: ./gradlew :shared:testAndroidHostTest
+
+      - name: Test Desktop
+        run: xvfb-run --auto-servernum ./gradlew :shared:desktopTest
 
       # 失败时要能看到是哪个用例、断言差在哪,光看日志行不够。
       - name: Upload test report

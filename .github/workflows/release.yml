@@ -137,9 +137,12 @@ jobs:
           KEYSTORE_BASE64: ${{ secrets.BILBY_KEYSTORE_BASE64 }}
         run: echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/bilby.jks"
 
-      # 单测都在 :shared,见 ci.yml 的同名步骤。
-      - name: Test
-        run: ./gradlew :shared:testAndroidHostTest :shared:desktopTest -PbilbyVersion=${{ steps.version.outputs.name }}
+      # 单测都在 :shared,分两次调用避免 Android(JDK 21)与桌面(JDK 25)同时拉起双 Kotlin Daemon。
+      - name: Test Android
+        run: ./gradlew :shared:testAndroidHostTest -PbilbyVersion=${{ steps.version.outputs.name }}
+
+      - name: Test Desktop
+        run: ./gradlew :shared:desktopTest -PbilbyVersion=${{ steps.version.outputs.name }}
 
       - name: Build
         env:
