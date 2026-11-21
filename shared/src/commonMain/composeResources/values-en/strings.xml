@@ -1196,4 +1196,22 @@
     <string name="offline_delete_creator_confirm_title">Delete all cached videos from this creator?</string>
     <string name="offline_delete_group_confirm_message">%1$d videos (%2$s) will be removed from this device and will need to be downloaded again.</string>
     <string name="offline_unknown_up">Unknown creator</string>
+
+    <!-- Queue load all & edge resistance -->
+    <string name="queue_load_all">Load all</string>
+    <string name="queue_load_all_stop">Stop</string>
+    <string name="queue_loaded_summary">%1$d loaded</string>
+    <string name="queue_loaded_summary_total">%1$d / %2$d loaded</string>
+    <string name="queue_loading_all_summary">Loading all  %1$d loaded</string>
+    <string name="queue_loading_all_summary_total">Loading all  %1$d / %2$d</string>
+    <string name="queue_edge_pull_before">Pull down for earlier items</string>
+    <string name="queue_edge_pull_before_count">%1$d earlier  Pull down to load</string>
+    <string name="queue_edge_pull_after">Pull up for more items</string>
+    <string name="queue_edge_pull_after_count">%1$d more  Pull up to load</string>
+    <string name="queue_edge_release_before">Release to load earlier items</string>
+    <string name="queue_edge_release_after">Release to load more items</string>
+    <string name="queue_edge_scroll_before">Scroll up for earlier items</string>
+    <string name="queue_edge_scroll_before_count">%1$d earlier  Scroll up to load</string>
+    <string name="queue_edge_scroll_after">Scroll down for more items</string>
+    <string name="queue_edge_scroll_after_count">%1$d more  Scroll down to load</string>
 </resources>

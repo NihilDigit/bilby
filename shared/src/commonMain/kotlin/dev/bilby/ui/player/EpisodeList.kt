@@ -1,17 +1,23 @@
 package dev.bilby.ui.player
 
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.Animatable
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.indication
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.calculateEndPadding
+import androidx.compose.foundation.layout.calculateStartPadding
 import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -31,6 +37,7 @@ import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.RepeatOne
 import androidx.compose.material.icons.filled.Shuffle
+import androidx.compose.material.icons.filled.UnfoldMore
 import androidx.compose.material.icons.outlined.PauseCircleOutline
 import androidx.compose.material.icons.outlined.SkipNext
 import androidx.compose.material3.ButtonDefaults
@@ -55,19 +62,32 @@ import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
+import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.PointerIcon
 import androidx.compose.ui.input.pointer.pointerHoverIcon
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Velocity
 import androidx.compose.ui.unit.dp
 import dev.bilby.data.PlayEndMode
 import dev.bilby.data.QueueOrder
@@ -81,14 +101,19 @@ import dev.bilby.ui.components.InlineProgress
 import dev.bilby.ui.components.ListCover
 import dev.bilby.ui.components.ListScrollbar
 import dev.bilby.ui.components.LoadingSpinner
+import dev.bilby.ui.components.LocalPointerSource
 import dev.bilby.ui.components.PlayingIndicator
 import dev.bilby.ui.components.menuItemShape
 import dev.bilby.ui.theme.Dimens
 import dev.bilby.ui.theme.Spacing
 import dev.bilby.ui.theme.interactiveCard
+import dev.bilby.ui.theme.rememberReducedMotion
 import dev.bilby.ui.theme.tabular
-import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlin.math.abs
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 import org.jetbrains.compose.resources.StringResource
 
 /**
@@ -313,7 +338,7 @@ fun buildEpisodeRows(
 }
 
 /**
- * 队列两头还能不能续、正不正在续、是否续取失败及续取动作。
+ * 队列两头还能不能续、正不正在续、是否续取失败、续取动作以及整队列加载控制。
  */
 @Stable
 class QueueEdges(
@@ -326,6 +351,10 @@ class QueueEdges(
     val errorAfter: Boolean = false,
     val remainingBefore: Int? = null,
     val remainingAfter: Int? = null,
+    val loadingAll: Boolean = false,
+    val onLoadAll: (() -> Unit)? = null,
+    val onCancelLoadAll: (() -> Unit)? = null,
+    val totalCount: Int? = null,
 )
 
 /** 正在播的那一条在清单里的下标,没有则 -1。滚动定位与「N / M」都用它。 */
@@ -336,6 +365,7 @@ fun List<EpisodeRow>.currentIndex(): Int = indexOfFirst { it.isCurrent }
  *
  * 听视频的队列 Sheet、完整队列面板与全屏切集面板共用它。
  */
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 fun EpisodeList(
     rows: List<EpisodeRow>,
@@ -364,48 +394,207 @@ fun EpisodeList(
     val resolvedRemainingAfter = remainingAfter ?: edges?.remainingAfter
     val showBeforeEdge = edges != null && (edges.loadingBefore || hasErrorBefore || edges.canLoadBefore)
     val showAfterEdge = edges != null && (edges.loadingAfter || hasErrorAfter || edges.canLoadAfter)
+    val showLoadAllBar = edges != null &&
+        edges.onLoadAll != null &&
+        (edges.loadingAll || edges.canLoadBefore || edges.canLoadAfter)
 
-    var initialCenterDone by remember(currentBvid) { mutableStateOf(currentIndex < 0) }
-    val latestShowBefore by rememberUpdatedState(showBeforeEdge)
-
-    // 列表按自然顺序摆着不动,切集时让高亮那条滚到中间。只在当前条换了时居中,不看条数。
-    LaunchedEffect(currentBvid) {
-        if (currentIndex < 0) {
-            initialCenterDone = true
-            return@LaunchedEffect
+    val knownTotal = remember(
+        edges?.totalCount,
+        edges?.canLoadBefore,
+        edges?.canLoadAfter,
+        resolvedRemainingBefore,
+        resolvedRemainingAfter,
+        rows.size,
+    ) {
+        val candidate = edges?.totalCount ?: run {
+            val before = if (edges?.canLoadBefore == true) resolvedRemainingBefore else 0
+            val after = if (edges?.canLoadAfter == true) resolvedRemainingAfter else 0
+            if (before != null && after != null) rows.size + before + after else null
         }
-        try {
-            snapshotFlow { state.layoutInfo.totalItemsCount }.first { it > 0 }
-            // 顶上若有续取状态行则多占一个下标。
-            val target = currentIndex + if (latestShowBefore) 1 else 0
-            state.scrollToItem(target)
-            val info = state.layoutInfo
-            val row = info.visibleItemsInfo.firstOrNull { it.index == target } ?: return@LaunchedEffect
-            state.scrollToItem(target, -(info.viewportSize.height - row.size) / 2)
-        } finally {
-            initialCenterDone = true
+        candidate?.takeIf { it > rows.size }
+    }
+
+    val latestShowBefore by rememberUpdatedState(showBeforeEdge)
+    val latestEdges by rememberUpdatedState(edges)
+    val latestErrBefore by rememberUpdatedState(hasErrorBefore)
+    val latestErrAfter by rememberUpdatedState(hasErrorAfter)
+
+    val pointerSource = LocalPointerSource.current
+    val isTouchLike = pointerSource.isTouchLike
+    val haptics = LocalHapticFeedback.current
+    val latestHaptics by rememberUpdatedState(haptics)
+    val reducedMotion = rememberReducedMotion()
+    val latestReducedMotion by rememberUpdatedState(reducedMotion)
+    val fastSpring = MaterialTheme.motionScheme.fastSpatialSpec<Float>()
+    val latestFastSpring by rememberUpdatedState(fastSpring)
+    val density = LocalDensity.current
+    val touchThresholdPx = with(density) { QueueEdgeTouchThreshold.toPx() }
+    val pointerThresholdPx = with(density) { QueueEdgePointerThreshold.toPx() }
+    val wheelStepPx = with(density) { QueueEdgeWheelStep.toPx() }
+    val latestWheelStepPx by rememberUpdatedState(wheelStepPx)
+
+    val scope = rememberCoroutineScope()
+    val resistance = remember(state) { QueueEdgeResistanceLogic(touchThresholdPx, pointerThresholdPx) }
+    resistance.touchThresholdPx = touchThresholdPx
+    resistance.pointerThresholdPx = pointerThresholdPx
+
+    val topProgressAnim = remember(state) { Animatable(0f) }
+    val bottomProgressAnim = remember(state) { Animatable(0f) }
+    var decayJob by remember(state) { mutableStateOf<Job?>(null) }
+
+    fun springBack(before: Boolean? = null) {
+        decayJob?.cancel()
+        if (before == null || before == true) {
+            scope.launch {
+                if (latestReducedMotion) {
+                    topProgressAnim.snapTo(0f)
+                } else {
+                    topProgressAnim.animateTo(0f, latestFastSpring)
+                }
+            }
+        }
+        if (before == null || before == false) {
+            scope.launch {
+                if (latestReducedMotion) {
+                    bottomProgressAnim.snapTo(0f)
+                } else {
+                    bottomProgressAnim.animateTo(0f, latestFastSpring)
+                }
+            }
         }
     }
 
-    if (edges != null) {
-        val latest by rememberUpdatedState(edges)
-        val latestErrBefore by rememberUpdatedState(hasErrorBefore)
-        val latestErrAfter by rememberUpdatedState(hasErrorAfter)
-        val latestCentered by rememberUpdatedState(initialCenterDone)
-        LaunchedEffect(state) {
-            snapshotFlow {
-                if (!latestCentered) return@snapshotFlow false to false
-                val info = state.layoutInfo
-                val visible = info.visibleItemsInfo
-                val atTop = visible.firstOrNull()?.index == 0
-                val atBottom = info.totalItemsCount > 0 && visible.lastOrNull()?.index == info.totalItemsCount - 1
-                // 续取失败锁存期间严禁自动重试,防止 -412 风控紧循环(CLAUDE.md)。
-                val wantBefore = atTop && latest.canLoadBefore && !latest.loadingBefore && !latestErrBefore
-                val wantAfter = atBottom && latest.canLoadAfter && !latest.loadingAfter && !latestErrAfter
-                wantBefore to wantAfter
-            }.distinctUntilChanged().collect { (wantBefore, wantAfter) ->
-                if (wantBefore) latest.onLoad(true)
-                if (wantAfter) latest.onLoad(false)
+    fun schedulePointerDecay() {
+        decayJob?.cancel()
+        decayJob = scope.launch {
+            delay(QueueEdgePointerDecayMillis)
+            resistance.reset()
+            if (latestReducedMotion) {
+                topProgressAnim.snapTo(0f)
+                bottomProgressAnim.snapTo(0f)
+            } else {
+                launch { topProgressAnim.animateTo(0f, latestFastSpring) }
+                launch { bottomProgressAnim.animateTo(0f, latestFastSpring) }
+            }
+        }
+    }
+
+    // 列表按自然顺序摆着不动,切集时让高亮那条滚到中间。只在当前条换了时居中,不看条数。
+    LaunchedEffect(currentBvid) {
+        if (currentIndex < 0) return@LaunchedEffect
+        snapshotFlow { state.layoutInfo.totalItemsCount }.first { it > 0 }
+        // 顶上若有续取状态行则多占一个下标。
+        val target = currentIndex + if (latestShowBefore) 1 else 0
+        state.scrollToItem(target)
+        val info = state.layoutInfo
+        val row = info.visibleItemsInfo.firstOrNull { it.index == target } ?: return@LaunchedEffect
+        state.scrollToItem(target, -(info.viewportSize.height - row.size) / 2)
+    }
+
+    LaunchedEffect(edges?.loadingBefore, edges?.loadingAll, showBeforeEdge, hasErrorBefore) {
+        if (!showBeforeEdge || edges?.loadingBefore == true || edges?.loadingAll == true || hasErrorBefore) {
+            resistance.reset(before = true)
+            topProgressAnim.snapTo(0f)
+        }
+    }
+    LaunchedEffect(edges?.loadingAfter, edges?.loadingAll, showAfterEdge, hasErrorAfter) {
+        if (!showAfterEdge || edges?.loadingAfter == true || edges?.loadingAll == true || hasErrorAfter) {
+            resistance.reset(before = false)
+            bottomProgressAnim.snapTo(0f)
+        }
+    }
+
+    val resistanceConnection = remember(state) {
+        object : NestedScrollConnection {
+            override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
+                if (source != NestedScrollSource.UserInput || available.y == 0f) return Offset.Zero
+                val touch = pointerSource.isTouchLike
+                val prevTop = resistance.topRawPx
+                val prevBottom = resistance.bottomRawPx
+                val consumedY = resistance.onPreScroll(available.y, touch)
+                if (resistance.topRawPx != prevTop || resistance.bottomRawPx != prevBottom) {
+                    val topP = resistance.topProgress(touch)
+                    val bottomP = resistance.bottomProgress(touch)
+                    decayJob?.cancel()
+                    scope.launch {
+                        topProgressAnim.snapTo(topP)
+                        bottomProgressAnim.snapTo(bottomP)
+                    }
+                }
+                return Offset(0f, consumedY)
+            }
+
+            override fun onPostScroll(
+                consumed: Offset,
+                available: Offset,
+                source: NestedScrollSource,
+            ): Offset {
+                // 惯性甩动(SideEffect)绝不触发越界续取，保证快速滑到边界自然停住。
+                if (source != NestedScrollSource.UserInput) return Offset.Zero
+                val currentEdges = latestEdges ?: return Offset.Zero
+                val canBefore = currentEdges.canLoadBefore &&
+                    !currentEdges.loadingBefore &&
+                    !currentEdges.loadingAll &&
+                    !latestErrBefore
+                val canAfter = currentEdges.canLoadAfter &&
+                    !currentEdges.loadingAfter &&
+                    !currentEdges.loadingAll &&
+                    !latestErrAfter
+                val touch = pointerSource.isTouchLike
+                val outcome = resistance.onPostScroll(
+                    consumedY = consumed.y,
+                    availableY = available.y,
+                    isTouchLike = touch,
+                    canLoadBefore = canBefore,
+                    canLoadAfter = canAfter,
+                )
+                if (outcome.crossedTouchThreshold) {
+                    latestHaptics.performHapticFeedback(HapticFeedbackType.GestureThresholdActivate)
+                }
+                if (outcome.triggeredBefore != null) {
+                    decayJob?.cancel()
+                    scope.launch {
+                        topProgressAnim.snapTo(0f)
+                        bottomProgressAnim.snapTo(0f)
+                    }
+                    currentEdges.onLoad(outcome.triggeredBefore)
+                } else if (outcome.consumed) {
+                    decayJob?.cancel()
+                    val topP = resistance.topProgress(touch)
+                    val bottomP = resistance.bottomProgress(touch)
+                    scope.launch {
+                        topProgressAnim.snapTo(topP)
+                        bottomProgressAnim.snapTo(bottomP)
+                    }
+                    if (!touch) schedulePointerDecay()
+                }
+                return Offset(0f, outcome.consumedY)
+            }
+
+            override suspend fun onPreFling(available: Velocity): Velocity {
+                if (!pointerSource.isTouchLike) return Velocity.Zero
+                val currentEdges = latestEdges ?: return Velocity.Zero
+                val hadPull = resistance.topRawPx > 0f || resistance.bottomRawPx > 0f
+                val canBefore = currentEdges.canLoadBefore &&
+                    !currentEdges.loadingBefore &&
+                    !currentEdges.loadingAll &&
+                    !latestErrBefore
+                val canAfter = currentEdges.canLoadAfter &&
+                    !currentEdges.loadingAfter &&
+                    !currentEdges.loadingAll &&
+                    !latestErrAfter
+                val triggeredBefore = resistance.onTouchRelease(canBefore, canAfter)
+                if (triggeredBefore != null) {
+                    decayJob?.cancel()
+                    topProgressAnim.snapTo(0f)
+                    bottomProgressAnim.snapTo(0f)
+                    currentEdges.onLoad(triggeredBefore)
+                    return available
+                }
+                if (hadPull) {
+                    springBack()
+                }
+                return Velocity.Zero
             }
         }
     }
@@ -413,69 +602,241 @@ fun EpisodeList(
     // 视频与分 P 摊平成一组分段:分 P 是当前那条的内部结构,排在同一组里,首尾圆角才落在
     // 整份清单的两头,而不是分 P 前后各断开一次。
     val segmentCount = rows.size + rows.sumOf { it.parts.size }
-    Box(modifier = modifier) {
-        LazyColumn(
-            state = state,
-            modifier = Modifier.fillMaxWidth(),
-            contentPadding = contentPadding,
+    val layoutDirection = LocalLayoutDirection.current
+    Column(modifier = modifier) {
+        if (showLoadAllBar && edges != null) {
+            QueueLoadAllBar(
+                loadedCount = rows.size,
+                totalCount = knownTotal,
+                loadingAll = edges.loadingAll,
+                onLoadAll = { edges.onLoadAll?.invoke() },
+                onCancelLoadAll = edges.onCancelLoadAll,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(
+                        start = contentPadding.calculateStartPadding(layoutDirection),
+                        end = contentPadding.calculateEndPadding(layoutDirection),
+                        bottom = Spacing.Tight,
+                    ),
+            )
+        }
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .weight(1f, fill = false)
+                .nestedScroll(resistanceConnection)
+                .pointerInput(state) {
+                    awaitPointerEventScope {
+                        while (true) {
+                            val event = awaitPointerEvent(PointerEventPass.Main)
+                            if (event.type != PointerEventType.Scroll) continue
+                            val change = event.changes.firstOrNull() ?: continue
+                            if (change.isConsumed) continue
+                            val deltaY = change.scrollDelta.y
+                            if (deltaY == 0f || abs(change.scrollDelta.x) > abs(deltaY)) continue
+                            val currentEdges = latestEdges ?: continue
+                            val canBefore = currentEdges.canLoadBefore &&
+                                !currentEdges.loadingBefore &&
+                                !currentEdges.loadingAll &&
+                                !latestErrBefore
+                            val canAfter = currentEdges.canLoadAfter &&
+                                !currentEdges.loadingAfter &&
+                                !currentEdges.loadingAll &&
+                                !latestErrAfter
+                            val outcome = resistance.onWheelBoundaryScroll(
+                                scrollDeltaY = deltaY,
+                                wheelStepPx = latestWheelStepPx,
+                                atTop = !state.canScrollBackward,
+                                atBottom = !state.canScrollForward,
+                                canLoadBefore = canBefore,
+                                canLoadAfter = canAfter,
+                            )
+                            if (outcome.consumed) {
+                                change.consume()
+                                if (outcome.triggeredBefore != null) {
+                                    decayJob?.cancel()
+                                    scope.launch {
+                                        topProgressAnim.snapTo(0f)
+                                        bottomProgressAnim.snapTo(0f)
+                                    }
+                                    currentEdges.onLoad(outcome.triggeredBefore)
+                                } else {
+                                    val topP = resistance.topProgress(isTouchLike = false)
+                                    val bottomP = resistance.bottomProgress(isTouchLike = false)
+                                    scope.launch {
+                                        topProgressAnim.snapTo(topP)
+                                        bottomProgressAnim.snapTo(bottomP)
+                                    }
+                                    schedulePointerDecay()
+                                }
+                            } else if (topProgressAnim.value > 0f || bottomProgressAnim.value > 0f) {
+                                springBack()
+                            }
+                        }
+                    }
+                },
         ) {
-            if (showBeforeEdge && edges != null) {
-                item(key = "edge-before", contentType = "edge") {
-                    QueueEdgeRow(
-                        before = true,
-                        loading = edges.loadingBefore,
-                        error = hasErrorBefore,
-                        remainingCount = resolvedRemainingBefore,
-                        onLoad = { edges.onLoad(true) },
-                    )
+            LazyColumn(
+                state = state,
+                modifier = Modifier.fillMaxWidth(),
+                contentPadding = contentPadding,
+            ) {
+                if (showBeforeEdge && edges != null) {
+                    item(key = "edge-before", contentType = "edge") {
+                        QueueEdgeRow(
+                            before = true,
+                            loading = edges.loadingBefore,
+                            error = hasErrorBefore,
+                            remainingCount = resolvedRemainingBefore,
+                            overscrollProgress = topProgressAnim.value,
+                            isTouchLike = isTouchLike,
+                            onRetry = { edges.onLoad(true) },
+                        )
+                    }
+                }
+                var segment = 0
+                rows.forEachIndexed { videoIndex, row ->
+                    val rowSegment = segment++
+                    item(key = row.bvid, contentType = "video") {
+                        QueueRowItem(
+                            row = row,
+                            playing = playing,
+                            index = rowSegment,
+                            count = segmentCount,
+                            onClick = { onSelect(EpisodeTarget.Video(row.bvid)) },
+                            videoIndex = videoIndex,
+                            videoCount = rows.size,
+                            editActions = editActions,
+                            editing = editing,
+                        )
+                    }
+                    // 二级:当前这条的分 P。**key 带上 bvid**,否则连播走到另一条多 P 视频时,
+                    // 两组分 P 的 cid 都是 Long,复用会把上一条的选中态带过来。
+                    val firstPartSegment = segment
+                    segment += row.parts.size
+                    itemsIndexed(
+                        row.parts,
+                        key = { _, part -> "${row.bvid}-${part.cid}" },
+                        contentType = { _, _ -> "part" },
+                    ) { i, part ->
+                        PartListItem(
+                            part = part,
+                            index = firstPartSegment + i,
+                            count = segmentCount,
+                            onClick = { onSelect(EpisodeTarget.Part(part.cid)) },
+                        )
+                    }
+                }
+                if (showAfterEdge && edges != null) {
+                    item(key = "edge-after", contentType = "edge") {
+                        QueueEdgeRow(
+                            before = false,
+                            loading = edges.loadingAfter,
+                            error = hasErrorAfter,
+                            remainingCount = resolvedRemainingAfter,
+                            overscrollProgress = bottomProgressAnim.value,
+                            isTouchLike = isTouchLike,
+                            onRetry = { edges.onLoad(false) },
+                        )
+                    }
                 }
             }
-            var segment = 0
-            rows.forEachIndexed { videoIndex, row ->
-                val rowSegment = segment++
-                item(key = row.bvid, contentType = "video") {
-                    QueueRowItem(
-                        row = row,
-                        playing = playing,
-                        index = rowSegment,
-                        count = segmentCount,
-                        onClick = { onSelect(EpisodeTarget.Video(row.bvid)) },
-                        videoIndex = videoIndex,
-                        videoCount = rows.size,
-                        editActions = editActions,
-                        editing = editing,
-                    )
-                }
-                // 二级:当前这条的分 P。**key 带上 bvid**,否则连播走到另一条多 P 视频时,
-                // 两组分 P 的 cid 都是 Long,复用会把上一条的选中态带过来。
-                val firstPartSegment = segment
-                segment += row.parts.size
-                itemsIndexed(
-                    row.parts,
-                    key = { _, part -> "${row.bvid}-${part.cid}" },
-                    contentType = { _, _ -> "part" },
-                ) { i, part ->
-                    PartListItem(
-                        part = part,
-                        index = firstPartSegment + i,
-                        count = segmentCount,
-                        onClick = { onSelect(EpisodeTarget.Part(part.cid)) },
-                    )
-                }
+            ListScrollbar(state, Modifier.align(Alignment.CenterEnd))
+        }
+    }
+}
+
+/**
+ * 队列顶部的整队列加载条：展示当前已加载条数，提供一键「加载全部」与加载中的「停止」取消动作。
+ * 遵循 M3E 强调梯度：次级工具动作采用 `surfaceContainerHigh` 轻容器配主色 `TextButton`，
+ * 数字一律套用 `.tabular`。
+ */
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
+@Composable
+private fun QueueLoadAllBar(
+    loadedCount: Int,
+    totalCount: Int?,
+    loadingAll: Boolean,
+    onLoadAll: () -> Unit,
+    onCancelLoadAll: (() -> Unit)?,
+    modifier: Modifier = Modifier,
+) {
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+        shape = MaterialTheme.shapes.medium,
+        modifier = modifier,
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(min = Dimens.MinTouchTarget)
+                .padding(start = Spacing.Cozy, end = Spacing.Hair),
+        ) {
+            if (loadingAll) {
+                LoadingSpinner()
             }
-            if (showAfterEdge && edges != null) {
-                item(key = "edge-after", contentType = "edge") {
-                    QueueEdgeRow(
-                        before = false,
-                        loading = edges.loadingAfter,
-                        error = hasErrorAfter,
-                        remainingCount = resolvedRemainingAfter,
-                        onLoad = { edges.onLoad(false) },
+            val summaryText = when {
+                loadingAll && totalCount != null -> stringResource(
+                    Res.string.queue_loading_all_summary_total,
+                    loadedCount,
+                    totalCount,
+                )
+                loadingAll -> stringResource(Res.string.queue_loading_all_summary, loadedCount)
+                totalCount != null -> stringResource(Res.string.queue_loaded_summary_total, loadedCount, totalCount)
+                else -> stringResource(Res.string.queue_loaded_summary, loadedCount)
+            }
+            Text(
+                text = summaryText,
+                style = MaterialTheme.typography.bodySmall.tabular,
+                color = if (loadingAll) {
+                    MaterialTheme.colorScheme.onSurface
+                } else {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                },
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f),
+            )
+            if (loadingAll) {
+                if (onCancelLoadAll != null) {
+                    TextButton(
+                        onClick = onCancelLoadAll,
+                        contentPadding = PaddingValues(horizontal = Spacing.Tight),
+                        modifier = Modifier
+                            .defaultMinSize(minWidth = 1.dp)
+                            .pointerHoverIcon(PointerIcon.Hand),
+                    ) {
+                        Text(
+                            text = stringResource(Res.string.queue_load_all_stop),
+                            maxLines = 1,
+                            softWrap = false,
+                        )
+                    }
+                }
+            } else {
+                TextButton(
+                    onClick = onLoadAll,
+                    contentPadding = PaddingValues(horizontal = Spacing.Tight),
+                    modifier = Modifier
+                        .defaultMinSize(minWidth = 1.dp)
+                        .pointerHoverIcon(PointerIcon.Hand),
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.UnfoldMore,
+                        contentDescription = null,
+                        modifier = Modifier.size(Dimens.IconInline),
+                    )
+                    Text(
+                        text = stringResource(Res.string.queue_load_all),
+                        maxLines = 1,
+                        softWrap = false,
+                        modifier = Modifier.padding(start = Spacing.Hair),
                     )
                 }
             }
         }
-        ListScrollbar(state, Modifier.align(Alignment.CenterEnd))
     }
 }
 
@@ -690,10 +1051,11 @@ fun QueueRowItem(
 }
 
 /**
- * 队列边界三态透明提示行:
+ * 队列边界三态指示行:
  * 1. 加载中:`InlineProgress` + 正在加载前/后条目;
  * 2. 失败态:整宽可点重试(`queue_edge_load_failed` + `action_retry`);
- * 3. 待续取:`ExpandLess`/`ExpandMore` + 剩余条数提示,支持点击立即加载。
+ * 3. 待续取(越界阻力态):非按钮式边界阻力条，随触屏继续拖拉或滚轮继续越界滚动平滑推进底部进度条，
+ *    触屏达到阈值后切换为 `primaryContainer` 成对强调色提示松手加载。
  */
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
@@ -702,7 +1064,9 @@ private fun QueueEdgeRow(
     loading: Boolean,
     error: Boolean,
     remainingCount: Int?,
-    onLoad: () -> Unit,
+    overscrollProgress: Float,
+    isTouchLike: Boolean,
+    onRetry: () -> Unit,
 ) {
     when {
         loading -> {
@@ -726,7 +1090,8 @@ private fun QueueEdgeRow(
                 modifier = Modifier
                     .fillMaxWidth()
                     .clip(MaterialTheme.shapes.medium)
-                    .clickable(role = Role.Button, onClick = onLoad)
+                    .pointerHoverIcon(PointerIcon.Hand)
+                    .clickable(role = Role.Button, onClick = onRetry)
                     .heightIn(min = Dimens.MinTouchTarget)
                     .padding(horizontal = Spacing.Comfortable, vertical = Spacing.Tight),
                 verticalAlignment = Alignment.CenterVertically,
@@ -746,44 +1111,108 @@ private fun QueueEdgeRow(
         }
 
         else -> {
-            val label = if (before) {
-                if (remainingCount != null && remainingCount > 0) {
-                    stringResource(Res.string.queue_edge_has_before_count, remainingCount)
+            val clampedProgress = overscrollProgress.coerceIn(0f, 1f)
+            val armed = isTouchLike && overscrollProgress >= 1f
+            val pulling = clampedProgress > 0.01f
+            val reducedMotion = rememberReducedMotion()
+            val containerColor by animateColorAsState(
+                targetValue = when {
+                    armed -> MaterialTheme.colorScheme.primaryContainer
+                    pulling -> MaterialTheme.colorScheme.surfaceContainerHigh
+                    else -> MaterialTheme.colorScheme.surfaceContainerLow
+                },
+                animationSpec = MaterialTheme.motionScheme.fastEffectsSpec(),
+                label = "queueEdgeBg",
+            )
+            val contentColor by animateColorAsState(
+                targetValue = when {
+                    armed -> MaterialTheme.colorScheme.onPrimaryContainer
+                    pulling -> MaterialTheme.colorScheme.onSurface
+                    else -> MaterialTheme.colorScheme.onSurfaceVariant
+                },
+                animationSpec = MaterialTheme.motionScheme.fastEffectsSpec(),
+                label = "queueEdgeFg",
+            )
+            val label = when {
+                armed -> stringResource(
+                    if (before) Res.string.queue_edge_release_before else Res.string.queue_edge_release_after,
+                )
+                isTouchLike && before -> if (remainingCount != null && remainingCount > 0) {
+                    stringResource(Res.string.queue_edge_pull_before_count, remainingCount)
                 } else {
-                    stringResource(Res.string.queue_edge_has_before)
+                    stringResource(Res.string.queue_edge_pull_before)
                 }
-            } else {
-                if (remainingCount != null && remainingCount > 0) {
-                    stringResource(Res.string.queue_edge_has_after_count, remainingCount)
+                isTouchLike -> if (remainingCount != null && remainingCount > 0) {
+                    stringResource(Res.string.queue_edge_pull_after_count, remainingCount)
                 } else {
-                    stringResource(Res.string.queue_edge_has_after)
+                    stringResource(Res.string.queue_edge_pull_after)
+                }
+                before -> if (remainingCount != null && remainingCount > 0) {
+                    stringResource(Res.string.queue_edge_scroll_before_count, remainingCount)
+                } else {
+                    stringResource(Res.string.queue_edge_scroll_before)
+                }
+                else -> if (remainingCount != null && remainingCount > 0) {
+                    stringResource(Res.string.queue_edge_scroll_after_count, remainingCount)
+                } else {
+                    stringResource(Res.string.queue_edge_scroll_after)
                 }
             }
-            Row(
+            val extraStretch = if (isTouchLike && !reducedMotion) {
+                QueueEdgeMaxStretch * clampedProgress
+            } else {
+                0.dp
+            }
+            Box(
                 modifier = Modifier
                     .fillMaxWidth()
+                    .padding(vertical = Spacing.Hair)
                     .clip(MaterialTheme.shapes.medium)
-                    .clickable(role = Role.Button, onClick = onLoad)
-                    .heightIn(min = Dimens.MinTouchTarget)
-                    .padding(horizontal = Spacing.Comfortable, vertical = Spacing.Tight),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(Spacing.Hair, Alignment.CenterHorizontally),
+                    .background(containerColor),
             ) {
-                Icon(
-                    imageVector = if (before) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.size(Dimens.IconInline),
-                )
-                Text(
-                    text = label,
-                    style = MaterialTheme.typography.labelMediumEmphasized.tabular,
-                    color = MaterialTheme.colorScheme.primary,
-                )
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = QueueEdgeMinHeight + extraStretch)
+                        .padding(horizontal = Spacing.Comfortable, vertical = Spacing.Tight),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(Spacing.Hair, Alignment.CenterHorizontally),
+                ) {
+                    Icon(
+                        imageVector = if (before) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
+                        contentDescription = null,
+                        tint = if (armed || pulling) contentColor else MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(Dimens.IconInline),
+                    )
+                    Text(
+                        text = label,
+                        style = MaterialTheme.typography.labelMediumEmphasized.tabular,
+                        color = contentColor,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                if (pulling) {
+                    Box(
+                        modifier = Modifier
+                            .align(if (before) Alignment.TopCenter else Alignment.BottomCenter)
+                            .fillMaxWidth(clampedProgress)
+                            .height(QueueEdgeProgressHeight)
+                            .background(MaterialTheme.colorScheme.primary, CircleShape),
+                    )
+                }
             }
         }
     }
 }
+
+private val QueueEdgeMinHeight = 40.dp
+private val QueueEdgeMaxStretch = 12.dp
+private val QueueEdgeProgressHeight = 3.dp
+private val QueueEdgeTouchThreshold = 120.dp
+private val QueueEdgePointerThreshold = 160.dp
+private val QueueEdgeWheelStep = 64.dp
+private const val QueueEdgePointerDecayMillis = 1200L
 
 /**
  * 二级行,和视频行同在一组分段里。**只有文字**,不给封面:分 P 共用整条视频的一张封面,每行

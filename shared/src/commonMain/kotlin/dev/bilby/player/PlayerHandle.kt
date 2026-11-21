@@ -93,6 +93,12 @@ sealed interface PlaybackCommand {
     /** 完整队列滚到一头,往那头续取。 */
     data class ExtendQueue(val before: Boolean) : PlaybackCommand
 
+    /** 顺序加载当前队列来源尚未读取的全部前后页，直到见底、出错或被 [CancelLoadAllQueue] 取消。 */
+    data object LoadAllQueue : PlaybackCommand
+
+    /** 取消正在进行的 [LoadAllQueue]；已加载的条目原样保留。 */
+    data object CancelLoadAllQueue : PlaybackCommand
+
     data class OpenLive(
         val roomId: Long,
         val qn: Int,

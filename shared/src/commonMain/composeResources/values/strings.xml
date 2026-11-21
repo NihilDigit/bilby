@@ -1259,4 +1259,22 @@
     <string name="offline_delete_creator_confirm_title">删除该 UP 主的全部缓存?</string>
     <string name="offline_delete_group_confirm_message">共 %1$d 个视频（%2$s），文件将从本机移除，重新缓存需再次下载。</string>
     <string name="offline_unknown_up">未知 UP 主</string>
+
+    <!-- 队列全部加载与边界阻力 -->
+    <string name="queue_load_all">加载全部</string>
+    <string name="queue_load_all_stop">停止</string>
+    <string name="queue_loaded_summary">已加载 %1$d 条</string>
+    <string name="queue_loaded_summary_total">已加载 %1$d / %2$d 条</string>
+    <string name="queue_loading_all_summary">正在加载全部  已加载 %1$d 条</string>
+    <string name="queue_loading_all_summary_total">正在加载全部  %1$d / %2$d 条</string>
+    <string name="queue_edge_pull_before">继续下拉加载前面条目</string>
+    <string name="queue_edge_pull_before_count">前面还有 %1$d 条  继续下拉加载</string>
+    <string name="queue_edge_pull_after">继续上拉加载后续条目</string>
+    <string name="queue_edge_pull_after_count">后面还有 %1$d 条  继续上拉加载</string>
+    <string name="queue_edge_release_before">松手加载前面条目</string>
+    <string name="queue_edge_release_after">松手加载后续条目</string>
+    <string name="queue_edge_scroll_before">继续向上滚动加载前面条目</string>
+    <string name="queue_edge_scroll_before_count">前面还有 %1$d 条  继续向上滚动加载</string>
+    <string name="queue_edge_scroll_after">继续向下滚动加载后续条目</string>
+    <string name="queue_edge_scroll_after_count">后面还有 %1$d 条  继续向下滚动加载</string>
 </resources>

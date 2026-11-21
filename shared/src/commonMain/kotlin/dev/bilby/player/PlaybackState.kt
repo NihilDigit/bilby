@@ -72,6 +72,8 @@ data class QueueState(
     /** 那一头最近一次续取失败，暂停自动触发，等待用户手动点击重试。 */
     val errorBefore: Boolean = false,
     val errorAfter: Boolean = false,
+    /** 正在顺序加载整份队列的全部前后页（[PlaybackCommand.LoadAllQueue]）。 */
+    val loadingAll: Boolean = false,
     /**
      * 当前条在整份来源里是第几条(1 起)与来源总条数。不知道时为 null,「N / M」不显示 ——
      * 队列只读了来源的一段,[size] 是已读的条数,拿它当 M 会让三千条的 UP 读成"共 40 条"。
@@ -87,6 +89,7 @@ data class QueueState(
     val hasAfter: Boolean get() = canExtendAfter
     val loadingBefore: Boolean get() = extendingBefore
     val loadingAfter: Boolean get() = extendingAfter
+    val canLoadAll: Boolean get() = !detached && (canExtendBefore || canExtendAfter)
 
     val displayPosition: Int?
         get() = sourcePosition ?: currentIndex.takeIf { it in items.indices }?.let { it + 1 }
@@ -147,6 +150,8 @@ internal class QueuePagination {
         private set
     var errorAfter: Boolean = false
         private set
+    var loadingAll: Boolean = false
+        private set
 
     fun reset() {
         offsetOfFirst = null
@@ -157,6 +162,7 @@ internal class QueuePagination {
         loadingAfter = false
         errorBefore = false
         errorAfter = false
+        loadingAll = false
     }
 
     fun snapshot(): QueuePaginationSnapshot = QueuePaginationSnapshot(
@@ -177,6 +183,7 @@ internal class QueuePagination {
         loadingAfter = false
         errorBefore = snapshot.errorBefore
         errorAfter = snapshot.errorAfter
+        loadingAll = false
     }
 
     fun bindFeedMeta(
@@ -190,6 +197,7 @@ internal class QueuePagination {
         loadingAfter = false
         errorBefore = false
         errorAfter = false
+        loadingAll = false
         hasBefore = feedHasBefore
         hasAfter = feedHasAfter
         sourceTotal = feedTotal
@@ -203,22 +211,41 @@ internal class QueuePagination {
         reconcileClosedWindow(playlistSize)
     }
 
-    fun beginExtend(before: Boolean): Boolean = if (before) {
-        if (loadingBefore || !hasBefore) {
-            false
+    fun beginExtend(before: Boolean, fromLoadAll: Boolean = false): Boolean {
+        if (!fromLoadAll && loadingAll) return false
+        return if (before) {
+            if (loadingBefore || !hasBefore) {
+                false
+            } else {
+                loadingBefore = true
+                errorBefore = false
+                true
+            }
         } else {
-            loadingBefore = true
-            errorBefore = false
-            true
+            if (loadingAfter || !hasAfter) {
+                false
+            } else {
+                loadingAfter = true
+                errorAfter = false
+                true
+            }
         }
-    } else {
-        if (loadingAfter || !hasAfter) {
-            false
-        } else {
-            loadingAfter = true
-            errorAfter = false
-            true
-        }
+    }
+
+    fun beginLoadAll(): Boolean {
+        if (loadingAll || (!hasBefore && !hasAfter)) return false
+        loadingAll = true
+        loadingBefore = false
+        loadingAfter = false
+        errorBefore = false
+        errorAfter = false
+        return true
+    }
+
+    fun finishLoadAll() {
+        loadingAll = false
+        loadingBefore = false
+        loadingAfter = false
     }
 
     fun cancelExtend(before: Boolean? = null) {
@@ -273,6 +300,7 @@ internal class QueuePagination {
         loadingAfter = false
         errorBefore = false
         errorAfter = false
+        loadingAll = false
         hasBefore = false
         hasAfter = false
         offsetOfFirst = if (playlistSize > 0) 0 else null
