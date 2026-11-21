@@ -18,7 +18,6 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Fullscreen
 import androidx.compose.material.icons.filled.FullscreenExit
-import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -54,8 +53,6 @@ import dev.bilby.resources.*
 import dev.bilby.stringResource
 import dev.bilby.ui.components.BilbyTooltip
 import dev.bilby.ui.components.LoadingSpinner
-import dev.bilby.ui.components.LocalPageRefreshRegistry
-import dev.bilby.ui.components.LocalPointerSource
 
 /**
  * 桌面端紧凑标题栏融合契约(照 Chrome / Piko):界面声明自己能容纳窗口按钮与拖动区后,窗口不再画单独一条
@@ -89,7 +86,7 @@ val LocalWindowCaption = compositionLocalOf<WindowCaption?> { null }
 
 /**
  * 桌面端应用级全屏期间的右上角槽位跟踪器：供顶栏 [rememberCaptionSlot] 在实际渲染
- * `[刷新] [退出全屏]` 时登记自身，使宿主窗口在无顶栏槽位的界面（如登录页、单栏窄播放页）
+ * `[退出全屏]` 时登记自身，使宿主窗口在无顶栏槽位的界面（如登录页、单栏窄播放页）
  * 能可靠展示兜底退出全屏按钮，避免用户被困在全屏中。
  */
 @Stable
@@ -147,7 +144,7 @@ class CaptionSlot(
     private val rawButtons: (@Composable () -> Unit)? = null,
 ) {
     /**
-     * 将与标题栏同视觉体系的动作按钮(如全屏、刷新)紧贴窗口控制按钮(`— ❐ ×`)左侧排布:
+     * 将与标题栏同视觉体系的窗口动作按钮(如全屏/退出全屏)紧贴窗口控制按钮(`— ❐ ×`)左侧排布:
      * 拖动留白落在整组按钮之前,动作按钮与系统三键共用 [CaptionButtonSpacing],中间无额外断层。
      * 处于无标题栏全屏态时([rawButtons] 为空或仅含退出全屏),仍原样渲染 [leading]。
      */
@@ -239,8 +236,11 @@ fun rememberCaptionSlot(
 }
 
 /**
- * 桌面窗口右上角与系统三键(`— ❐ ×`)平级的通用窗口动作组:
- * `[刷新(仅非触控模式且当前最上层页面注册了刷新能力时显示)] [全屏/退出全屏(仅桌面窗口支持时显示)]`。
+ * 桌面窗口右上角与系统三键(`— ❐ ×`)平级的纯粹窗口级控制动作:
+ * 仅渲染 `[全屏/退出全屏(仅桌面窗口支持时显示)]`。
+ *
+ * 页面刷新按钮统一锚定在各可刷新顶栏左侧(`TopBarRefreshButton`),确保切换全屏隐藏 `— ❐ ×`
+ * 时刷新按钮坐标绝不跳动,也不与页面右侧操作按钮发生拥挤。
  */
 @Composable
 fun CaptionUtilityButtons(
@@ -250,23 +250,7 @@ fun CaptionUtilityButtons(
     buttonHeight: Dp = CaptionButtonSize,
     buttonShape: Shape = CircleShape,
 ) {
-    val isTouch = LocalPointerSource.current.isTouchLike
-    val pageRefresh = LocalPageRefreshRegistry.current
     val appFullscreen = LocalAppFullscreen.current
-    if (!isTouch && pageRefresh.canRefresh) {
-        val refreshLabel = stringResource(Res.string.action_refresh)
-        BilbyTooltip(text = refreshLabel, shortcut = "F5") {
-            CaptionActionButton(
-                icon = Icons.Filled.Refresh,
-                contentDescription = refreshLabel,
-                loading = pageRefresh.refreshing,
-                width = buttonWidth,
-                height = buttonHeight,
-                shape = buttonShape,
-                onClick = { pageRefresh.trigger() },
-            )
-        }
-    }
     if (showFullscreen && appFullscreen != null) {
         val isWindowFullscreen = appFullscreen.isFullscreen
         val fullscreenLabel = stringResource(
@@ -291,7 +275,7 @@ fun CaptionUtilityButtons(
 }
 
 /**
- * 紧邻桌面窗口控制按钮(`— ❐ ×`)排布的无边框标题栏动作按钮(如应用全屏、刷新)。
+ * 紧邻桌面窗口控制按钮(`— ❐ ×`)排布的无边框标题栏动作按钮(如应用全屏/退出全屏)。
  * 与桌面圆形窗口按钮保持同一尺寸([CaptionButtonSize])、圆形热区、透明静息态、
  * 悬停(`8%`)/按下(`12%`)底色与非活动窗口变灰规则。
  */

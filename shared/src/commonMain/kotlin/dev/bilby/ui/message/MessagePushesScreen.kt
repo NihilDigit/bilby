@@ -28,7 +28,6 @@ import dev.bilby.data.WhisperSession
 import dev.bilby.ui.components.BilbyTopBar
 import dev.bilby.ui.components.PagedColumn
 import dev.bilby.ui.components.PersonRowSkeleton
-import dev.bilby.ui.components.RefreshAction
 import dev.bilby.ui.components.RefreshBox
 import dev.bilby.ui.errorTextRes
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -107,9 +106,9 @@ private fun MessagePushesScreen(
                     title = stringResource(Res.string.message_up_pushes),
                     onBack = onBack,
                     scrollBehavior = scrollBehavior,
-                ) {
-                    RefreshAction(refreshing = state.refreshing, onRefresh = onRefresh)
-                }
+                    refreshing = state.refreshing,
+                    onRefresh = onRefresh,
+                )
             }
         },
     ) { insets ->

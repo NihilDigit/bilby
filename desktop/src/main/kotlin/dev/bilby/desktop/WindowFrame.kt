@@ -188,7 +188,7 @@ internal fun FrameWindowScope.WindowFrame(
             }
 
             // 应用全屏兜底:登录页、窄屏单栏播放页等未挂载顶栏右上角槽位的界面,在右上角常驻显示
-            // `[刷新(仅非触控且当前页可刷新)] [退出全屏]`,确保用户在任何界面都不会被困在全屏中。
+            // `[退出全屏]`,确保用户在任何界面都不会被困在全屏中。
             if (showFullscreenFallback) {
                 Surface(
                     color = MaterialTheme.colorScheme.surfaceContainerHigh,

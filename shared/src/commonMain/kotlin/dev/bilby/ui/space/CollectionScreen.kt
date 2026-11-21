@@ -32,8 +32,8 @@ import dev.bilby.stringResource
 import dev.bilby.ui.CaptionDragHeight
 import dev.bilby.ui.LocalWindowCaption
 import dev.bilby.ui.components.BilbyTooltip
-import dev.bilby.ui.components.RefreshAction
 import dev.bilby.ui.components.RefreshBox
+import dev.bilby.ui.components.TopBarRefreshButton
 import dev.bilby.ui.errorTextRes
 import dev.bilby.ui.padScaffoldExceptBottom
 import dev.bilby.ui.rememberCaptionSlot
@@ -185,17 +185,19 @@ fun CollectionScreen(
                     }
                 },
                 navigationIcon = {
-                    BilbyTooltip(text = backLabel, shortcut = "Alt+←") {
-                        IconButton(onClick = onBack) {
-                            Icon(
-                                imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                                contentDescription = backLabel,
-                            )
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        BilbyTooltip(text = backLabel, shortcut = "Alt+←") {
+                            IconButton(onClick = onBack) {
+                                Icon(
+                                    imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                                    contentDescription = backLabel,
+                                )
+                            }
                         }
+                        TopBarRefreshButton(refreshing = state.refreshing, onRefresh = onRefresh)
                     }
                 },
                 actions = {
-                    RefreshAction(refreshing = state.refreshing, onRefresh = onRefresh)
                     captionSlot.buttons?.invoke()
                 },
                 scrollBehavior = scrollBehavior,

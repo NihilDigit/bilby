@@ -78,7 +78,6 @@ import dev.bilby.ui.components.MetaSeparator
 import dev.bilby.ui.components.PagedColumn
 import dev.bilby.ui.components.PagedLayout
 import dev.bilby.ui.components.PaneTitle
-import dev.bilby.ui.components.RefreshAction
 import dev.bilby.ui.components.RefreshBox
 import dev.bilby.ui.components.SearchField
 import dev.bilby.ui.components.SortMenu
@@ -521,7 +520,6 @@ fun FollowingsScreen(
                 onSelectSource = onSelectSource,
                 onOpenGroupManager = onOpenGroupManager,
                 onSelectOrder = onSelectOrder,
-                onRefresh = onRefresh,
             )
         }
         Row(modifier = Modifier.weight(1f).fillMaxWidth()) {
@@ -757,7 +755,7 @@ fun FollowingsSearchField(query: String, onSearch: (String) -> Unit, modifier: M
 
 /**
  * 宽屏的筛选行,常驻不随名单滚走。左栏在时,「特别关注」四个字占着左栏那一截,
- * 分组芯片从网格左缘起排;排序与刷新靠右,是这批人怎么排、要不要重取,和筛选分开放。
+ * 分组芯片从网格左缘起排;排序靠右,刷新统一锚定在顶栏左侧([BilbyTopBar])。
  *
  * 常驻而不跟着滚:窄屏跟着滚是为了省竖向空间,宽屏多占一行的代价小,筛选随时够得着更有用。
  */
@@ -769,7 +767,6 @@ private fun WideFilterRow(
     onSelectSource: (FollowSource) -> Unit,
     onOpenGroupManager: () -> Unit,
     onSelectOrder: (FollowOrder) -> Unit,
-    onRefresh: () -> Unit,
 ) {
     Row(
         modifier = Modifier.fillMaxWidth().height(WideFilterRowHeight).padding(end = Spacing.Tight),
@@ -794,7 +791,6 @@ private fun WideFilterRow(
                 modifier = Modifier.padding(end = Spacing.Hair),
             )
         }
-        RefreshAction(state.refreshing, onRefresh)
     }
 }
 
@@ -806,8 +802,8 @@ private val WideFilterRowHeight = 56.dp
  *
  * @param hideSpecialChip 左栏常驻时不再给「特别关注」芯片,两处说同一件事。正选着它的时候
  *   例外,否则选中态无处可见。
- * @param packed 「管理分组」紧跟在最后一枚芯片后面,不钉在右端。宽屏那一行的右端是排序与刷新,
- *   钉在右端就和它们挤成一堆,读不出它管的是左边那排分组。
+ * @param packed 「管理分组」紧跟在最后一枚芯片后面,不钉在右端。宽屏那一行的右端是排序,
+ *   钉在右端就和它挤成一堆,读不出它管的是左边那排分组。
  */
 @Composable
 private fun GroupChipRow(

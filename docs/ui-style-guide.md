@@ -158,7 +158,7 @@ Android 与桌面端已统一到同一代 Compose 与 Material 3 API 表面（�
 
 ### 2.5 顶栏、空间头图 Hero 与个人页书架
 
-- **常规页面**：使用紧凑单行 `BilbyTopBar`（路牌定位，配 `pinnedScrollBehavior`）。首页顶栏标题「订阅」采用 `headlineSmallEmphasized`，右侧动作区提供「推送」「关注动态」入口（键鼠模式旁置刷新钮）；常访横条左侧 `LiveNowSlot` 采用 `2.dp` `primary` 直播光环胶囊加底部重叠 `primaryContainer`「N 直播」胶囊。
+- **常规页面**：使用紧凑单行 `BilbyTopBar`（路牌定位，配 `pinnedScrollBehavior`）；键鼠模式下的刷新按钮统一锚定在顶栏左侧（`[←] [↻] [标题]` / `[订阅] [↻]` / `[简介] [评论 N] [↻]`），与右侧窗口控制键解耦、切全屏坐标零跳动。首页顶栏标题「订阅」采用 `headlineSmallEmphasized`，右侧动作区提供「推送」「关注动态」「夜间静息」入口；常访横条左侧 `LiveNowSlot` 采用 `2.dp` `primary` 直播光环胶囊加底部重叠 `primaryContainer`「N 直播」胶囊。
 - **个人空间全幅头图 Hero（`SpaceScreen`）**：
   - 顶部铺开 `148.dp`（窄屏）/ `188.dp`（宽屏）`top_photo` 横幅（上覆顶栏可读性暗角，下接向 `surface` 过渡的渐变；无头图时退回柔和主题色阶渐变）。
   - `72.dp` `AvatarHero` 带 `3.dp` `surface` 描边跨压横幅下沿，右侧基线对齐关注按钮；下方展示 `headlineSmallEmphasized` 昵称、`LevelBadge`、单击即复制的 `UID` 胶囊、`.tabular` 粉丝/投稿计数、点击就地展开的个人签名，以及 `primaryContainer` 直播间入口卡。

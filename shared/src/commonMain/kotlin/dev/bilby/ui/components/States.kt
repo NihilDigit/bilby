@@ -39,13 +39,14 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.pointer.PointerIcon
+import androidx.compose.ui.input.pointer.pointerHoverIcon
 import dev.bilby.stringResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import dev.bilby.resources.*
-import dev.bilby.ui.LocalIsDesktopWindow
 import dev.bilby.ui.theme.Spacing
 import dev.bilby.ui.theme.rememberReducedMotion
 
@@ -179,7 +180,7 @@ fun FullScreenLoading(modifier: Modifier = Modifier) {
 
 /**
  * 下拉刷新。统一经此封装挂载 M3E [PullToRefreshBox] 与 `PullToRefreshDefaults.LoadingIndicator`,
- * 仅在触摸/触控笔输入时启用下拉手势,鼠标场景改由顶栏 [RefreshAction] 触发。
+ * 仅在触摸/触控笔输入时启用下拉手势,鼠标场景改由顶栏左侧 [TopBarRefreshButton] 触发。
  */
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
@@ -208,26 +209,53 @@ fun RefreshBox(
 }
 
 /**
- * 顶栏上的刷新按钮：
- * - 始终通过 [RegisterPageRefresh] 登记当前页面的刷新能力（供 `F5` / `Ctrl+R` 与桌面右上角窗口动作区调用）。
- * - 桌面窗口（[LocalIsDesktopWindow]）中刷新已统一收归至右上角与全屏/窗口控制键平级的位置（同样仅在非触控模式下显示），此处不再绘制行内图标按钮。
- * - 非桌面端仅在键鼠模式（`!isTouchLike`）下绘制行内刷新按钮；触屏端由 [RefreshBox] 下拉手势承担，避免双入口。
+ * 顶栏左侧固定锚位刷新按钮：
+ * - [registerShortcut] 为 true 时始终通过 [RegisterPageRefresh] 登记当前页面的刷新能力（供 `F5` / `Ctrl+R` 调用）。
+ * - 仅在非触控指针模式（`!LocalPointerSource.current.isTouchLike`）下渲染；触屏端由 [RefreshBox] 下拉手势承担，避免双入口。
+ * - 使用标准 M3 48dp [IconButton] 与 `onSurfaceVariant` 着色，与相邻返回箭头尺寸、基线和交互节奏严格一致；
+ *   固定停靠在顶栏左侧（`[←] [↻] [Title]` / `[订阅] [↻]` / `[简介] [评论 N] [↻]`），切换全屏时坐标绝不跳动。
  */
 @Composable
-fun RefreshAction(refreshing: Boolean, onRefresh: () -> Unit) {
-    RegisterPageRefresh(refreshing = refreshing, onRefresh = onRefresh)
-    if (LocalIsDesktopWindow.current) return
+fun TopBarRefreshButton(
+    refreshing: Boolean,
+    onRefresh: () -> Unit,
+    modifier: Modifier = Modifier,
+    registerShortcut: Boolean = true,
+) {
+    if (registerShortcut) {
+        RegisterPageRefresh(refreshing = refreshing, onRefresh = onRefresh)
+    }
     if (LocalPointerSource.current.isTouchLike) return
+    val refreshLabel = stringResource(Res.string.action_refresh)
     if (refreshing) {
-        Box(modifier = Modifier.size(48.dp), contentAlignment = Alignment.Center) { LoadingSpinner() }
+        Box(modifier = modifier.size(48.dp), contentAlignment = Alignment.Center) {
+            LoadingSpinner()
+        }
     } else {
-        val refreshLabel = stringResource(Res.string.action_refresh)
         BilbyTooltip(text = refreshLabel, shortcut = "F5") {
-            IconButton(onClick = onRefresh) {
-                Icon(Icons.Filled.Refresh, contentDescription = refreshLabel)
+            IconButton(
+                onClick = onRefresh,
+                modifier = modifier.pointerHoverIcon(PointerIcon.Hand),
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.Refresh,
+                    contentDescription = refreshLabel,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
         }
     }
+}
+
+/**
+ * 内联场景（如独立评论区 `SortBar`）的刷新按钮：
+ * - 始终通过 [RegisterPageRefresh] 登记当前页面的刷新能力（供 `F5` / `Ctrl+R` 调用）。
+ * - 仅在非触控模式（`!isTouchLike`）下绘制，触屏端由下拉手势承担，避免双入口。
+ * - 顶栏场景应直接使用左侧锚位的 [TopBarRefreshButton]（或经 `BilbyTopBar(refreshing, onRefresh)` 接入）。
+ */
+@Composable
+fun RefreshAction(refreshing: Boolean, onRefresh: () -> Unit) {
+    TopBarRefreshButton(refreshing = refreshing, onRefresh = onRefresh)
 }
 
 /**

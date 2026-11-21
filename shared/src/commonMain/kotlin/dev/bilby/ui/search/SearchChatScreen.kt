@@ -129,9 +129,11 @@ import dev.bilby.ui.components.EmptyState
 import dev.bilby.ui.components.KeepScrolledToBottom
 import dev.bilby.ui.components.ListScrollbar
 import dev.bilby.ui.components.LocalEditableFocusTracker
+import dev.bilby.ui.components.LocalPointerSource
 import dev.bilby.ui.components.SearchField
 import dev.bilby.ui.components.SidePanelLayout
 import dev.bilby.ui.components.SidePanelToggle
+import dev.bilby.ui.components.TopBarRefreshButton
 import dev.bilby.ui.components.rememberBottomFollow
 import dev.bilby.ui.theme.BilbyTheme
 import dev.bilby.ui.theme.LocalIsDarkTheme
@@ -222,6 +224,8 @@ fun SearchChatScreen(
     onBackToLanding: () -> Unit = {},
     /** 快捷键(`Ctrl+F` / `/`)请求聚焦主搜索框的计数器。 */
     focusSearchNonce: Int = 0,
+    refreshing: Boolean = false,
+    onRefresh: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     val windowSize = rememberBilbyWindowSize()
@@ -265,6 +269,8 @@ fun SearchChatScreen(
                 onBackToLanding()
             },
             focusSearchNonce = focusSearchNonce,
+            refreshing = refreshing,
+            onRefresh = onRefresh,
         )
     }
 
@@ -423,6 +429,8 @@ private fun NormalSearch(
     searchLanding: Boolean = true,
     onBackToLanding: () -> Unit = {},
     focusSearchNonce: Int = 0,
+    refreshing: Boolean = false,
+    onRefresh: (() -> Unit)? = null,
 ) {
     var barFocused by remember { mutableStateOf(false) }
     var panelFocused by remember { mutableStateOf(false) }
@@ -568,6 +576,8 @@ private fun NormalSearch(
             showBack = showBackToLanding || (!wide && !inLanding && focused),
             wide = wide,
             inLanding = inLanding,
+            refreshing = refreshing,
+            onRefresh = onRefresh.takeIf { state.query.isNotEmpty() },
             trailing = panelToggle.takeUnless { inLanding },
             dropdown = dropdown,
             focusRequester = searchFocusRequester,
@@ -799,6 +809,8 @@ private fun SearchBarRow(
     trailing: (@Composable () -> Unit)?,
     /** 着陆页中部的搜索栏不接管窗口标题栏槽位,避免与 [LandingTopBar] 重复渲染窗口按钮。 */
     inLanding: Boolean = false,
+    refreshing: Boolean = false,
+    onRefresh: (() -> Unit)? = null,
     /** 宽屏展开态接在框下面的那一截(补全或历史),见 [DockedSurface]。 */
     dropdown: (@Composable (Modifier) -> Unit)? = null,
     focusRequester: FocusRequester? = null,
@@ -806,12 +818,14 @@ private fun SearchBarRow(
 ) {
     val captionSlot = if (inLanding) EmptyCaptionSlot else rememberCaptionSlot()
     val hasTrailing = trailing != null || captionSlot.buttons != null
+    val showRefresh = !inLanding && onRefresh != null && !LocalPointerSource.current.isTouchLike
+    val hasLeading = showBack || showRefresh
     Row(
         verticalAlignment = Alignment.Top,
         modifier = captionSlot.modifier
             .fillMaxWidth()
             .padding(
-                start = if (showBack) Spacing.Hair else Spacing.Comfortable,
+                start = if (hasLeading) Spacing.Hair else Spacing.Comfortable,
                 end = if (hasTrailing) Spacing.Hair else Spacing.Comfortable,
             )
             // 宽屏与着陆页的上边距由外层给,框与侧栏卡片同一条上沿。
@@ -824,6 +838,13 @@ private fun SearchBarRow(
                     Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = backLabel)
                 }
             }
+        }
+        if (!inLanding && onRefresh != null) {
+            TopBarRefreshButton(
+                refreshing = refreshing,
+                onRefresh = onRefresh,
+                registerShortcut = false,
+            )
         }
         // 宽屏框居中、限宽;顶栏模式下两侧留出的大片空白登记为窗口拖动区,侧栏开关与窗口按钮在行尾。
         if (wide) {

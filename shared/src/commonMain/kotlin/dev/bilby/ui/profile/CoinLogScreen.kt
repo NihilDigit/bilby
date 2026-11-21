@@ -45,7 +45,6 @@ import dev.bilby.ui.components.BilbyTopBar
 import dev.bilby.ui.components.CoinGlyph
 import dev.bilby.ui.components.PagedColumn
 import dev.bilby.ui.components.PagedLayout
-import dev.bilby.ui.components.RefreshAction
 import dev.bilby.ui.components.RefreshBox
 import dev.bilby.ui.components.SkeletonLine
 import dev.bilby.ui.components.skeleton
@@ -95,9 +94,9 @@ fun CoinLogScreen(
                 title = stringResource(Res.string.coin_log_title),
                 onBack = onBack,
                 scrollBehavior = scrollBehavior,
-            ) {
-                RefreshAction(refreshing = state.refreshing, onRefresh = onRefresh)
-            }
+                refreshing = state.refreshing,
+                onRefresh = onRefresh,
+            )
         },
     ) { insets ->
         AdaptiveListContent(modifier = Modifier.padScaffoldExceptBottom(insets)) { columns ->
