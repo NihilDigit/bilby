@@ -173,9 +173,14 @@ fun CommentSection(
     refreshEnabled: Boolean = true,
     /**
      * 是否在列表顶部绘制独立的排序栏([SortBar])。桌面/宽屏双栏播放页已将排序按钮并入顶部标签行、
-     * 刷新按钮并入窗口标题栏时传 `false`，消除几乎空白的第二行。
+     * 刷新按钮并入标签行评论标签右侧时传 `false`，消除几乎空白的第二行。
      */
     showInlineSortBar: Boolean = true,
+    /**
+     * 是否在 [SortBar] 中绘制内联刷新按钮。当外层标签行（如双栏 `VideoTabs`）已代为托管左侧刷新按钮时传 `false`，
+     * 避免出现双份刷新入口；独立评论页（如动态详情、听视频评论面板）默认随 [showInlineSortBar] 保留。
+     */
+    showInlineRefresh: Boolean = showInlineSortBar,
     /**
      * 是否向 [dev.bilby.ui.components.PageRefreshRegistry] 登记评论区刷新。
      * 在分页容器(`HorizontalPager`)里传当前是否处于激活页，避免停留在简介页时标题栏仍显示评论刷新按钮。
@@ -361,7 +366,7 @@ fun CommentSection(
                         SortBar(
                             sort = state.sort,
                             onSort = onSort,
-                            refreshEnabled = refreshEnabled && registerPageRefresh,
+                            refreshEnabled = showInlineRefresh && refreshEnabled && registerPageRefresh,
                             refreshing = state.refreshing,
                             onRefresh = onRefresh,
                         )

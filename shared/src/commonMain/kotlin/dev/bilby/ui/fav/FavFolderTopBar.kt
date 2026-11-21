@@ -58,9 +58,9 @@ import dev.bilby.ui.CaptionDragHeight
 import dev.bilby.ui.LocalWindowCaption
 import dev.bilby.ui.components.BilbyTooltip
 import dev.bilby.ui.components.LocalPointerSource
-import dev.bilby.ui.components.RefreshAction
 import dev.bilby.ui.components.RegisterPageSearch
 import dev.bilby.ui.components.SearchField
+import dev.bilby.ui.components.TopBarRefreshButton
 import dev.bilby.ui.components.menuItemShape
 import dev.bilby.ui.rememberCaptionSlot
 import dev.bilby.ui.theme.tabular
@@ -110,14 +110,17 @@ fun FavFolderTopBar(
     val isTouch = LocalPointerSource.current.isTouchLike
 
     val navigationIcon: @Composable () -> Unit = {
-        val backLabel = stringResource(Res.string.action_back)
-        BilbyTooltip(text = backLabel, shortcut = "Alt+←") {
-            IconButton(onClick = onBack) {
-                Icon(
-                    Icons.AutoMirrored.Filled.ArrowBack,
-                    contentDescription = backLabel,
-                )
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            val backLabel = stringResource(Res.string.action_back)
+            BilbyTooltip(text = backLabel, shortcut = "Alt+←") {
+                IconButton(onClick = onBack) {
+                    Icon(
+                        Icons.AutoMirrored.Filled.ArrowBack,
+                        contentDescription = backLabel,
+                    )
+                }
             }
+            TopBarRefreshButton(refreshing = refreshing, onRefresh = onRefresh)
         }
     }
 
@@ -260,7 +263,6 @@ fun FavFolderTopBar(
                 content = appBarRowContent,
             )
         }
-        RefreshAction(refreshing, onRefresh)
         captionSlot.buttons?.invoke()
     }
 

@@ -676,8 +676,8 @@ fun VideoScreen(
      *
      * @param refreshEnabled 播放器收起着的时候下滑的意思是"把它拉回来",不是刷新(见 CommentSection)。
      */
-    val commentsPane: @Composable (Modifier, Boolean, Boolean, Boolean) -> Unit =
-        { paneModifier, refreshEnabled, showInlineSortBar, registerPageRefresh ->
+    val commentsPane: @Composable (Modifier, Boolean, Boolean, Boolean, Boolean) -> Unit =
+        { paneModifier, refreshEnabled, showInlineSortBar, showInlineRefresh, registerPageRefresh ->
             paneStates.SaveableStateProvider(CommentsStateKey) {
                 CommentSection(
                     state = commentState,
@@ -685,6 +685,7 @@ fun VideoScreen(
                     onRefresh = onCommentRefresh,
                     refreshEnabled = refreshEnabled,
                     showInlineSortBar = showInlineSortBar,
+                    showInlineRefresh = showInlineRefresh,
                     registerPageRefresh = registerPageRefresh,
                     onLoadMore = onCommentLoadMore,
                     onExpandReplies = onExpandReplies,
@@ -750,7 +751,7 @@ fun VideoScreen(
                 subtitleLan = subtitleLan,
                 onSelectSubtitle = onSelectSubtitle,
                 subtitleCues = subtitleCues,
-                comments = { paneModifier -> commentsPane(paneModifier, true, true, true) },
+                comments = { paneModifier -> commentsPane(paneModifier, true, true, true, true) },
                 // 听视频这一屏是普通页面(封面 + 控件),不是全出血的媒体,所以要像导航层那样
                 // 躲开横向挖孔 —— 播放页整个目的地被排除在 `CutoutSafe` 之外,这里没人替它做。
                 modifier = listenModifier,
@@ -1233,12 +1234,13 @@ fun VideoScreen(
                 onLoadTags = onLoadTags,
                 onTagClick = onTagClick,
                 commentTotal = commentState.total,
-                comments = { commentModifier, showInlineSortBar, registerPageRefresh ->
+                comments = { commentModifier, showInlineSortBar, showInlineRefresh, registerPageRefresh ->
                     // 画面收起着的时候下滑先把它拉回来,那一下不该被读成刷新。
                     commentsPane(
                         commentModifier,
                         commentsRefreshEnabled,
                         showInlineSortBar,
+                        showInlineRefresh,
                         registerPageRefresh,
                     )
                 },
@@ -1248,6 +1250,8 @@ fun VideoScreen(
                         onSort = onCommentSort,
                     )
                 },
+                commentsRefreshing = commentState.refreshing,
+                onRefreshComments = onCommentRefresh,
                 // 点闪光:没问过就发起检索,问过就只是把 sheet 再打开 —— 再点一次重跑
                 // 会把已有结果冲掉,而用户此刻多半只是想再看一眼。
                 onFindRelated = onFindRelated?.let { find ->

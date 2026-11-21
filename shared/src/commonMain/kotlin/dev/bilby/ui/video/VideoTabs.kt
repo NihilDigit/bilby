@@ -241,6 +241,7 @@ import dev.bilby.ui.components.ContextMenuBox
 import dev.bilby.ui.components.CopyableIdPill
 import dev.bilby.ui.components.LocalPointerSource
 import dev.bilby.ui.components.SelectableTextDialog
+import dev.bilby.ui.components.TopBarRefreshButton
 import dev.bilby.ui.components.menuItemShape
 import dev.bilby.ui.components.rememberCopyAction
 import kotlinx.coroutines.delay
@@ -308,7 +309,7 @@ data class QueueUiState(
 
 private const val VideoTabIntro = 0
 private const val VideoTabComments = 1
-private val TabBarInlineSortMinWidth = 420.dp
+private val TabBarInlineSortMinWidth = 440.dp
 
 const val VideoTabCount = 2
 
@@ -335,11 +336,19 @@ fun VideoTabs(
     commentTotal: Int,
     /**
      * 评论页的内容。由 VideoScreen 搭好,听视频那一屏用的是同一份,见那里的 commentsPane。
-     * `showInlineSortBar` 为 false 时表示排序菜单已并入顶部标签行；`registerPageRefresh` 标明评论页此刻是否为激活页。
+     * `showInlineSortBar` 为 false 时表示排序菜单已并入顶部标签行；`showInlineRefresh` 为 false 时表示
+     * 刷新按钮已并入顶部标签行左侧锚位；`registerPageRefresh` 标明评论页此刻是否为激活页。
      */
-    comments: @Composable (modifier: Modifier, showInlineSortBar: Boolean, registerPageRefresh: Boolean) -> Unit,
+    comments: @Composable (
+        modifier: Modifier,
+        showInlineSortBar: Boolean,
+        showInlineRefresh: Boolean,
+        registerPageRefresh: Boolean,
+    ) -> Unit,
     /** 双栏无弹幕胶囊且处于评论页时，并入顶部标签行的轻量排序菜单。 */
     commentHeaderAction: (@Composable () -> Unit)? = null,
+    commentsRefreshing: Boolean = false,
+    onRefreshComments: (() -> Unit)? = null,
     onFindRelated: (() -> Unit)?,
     /** 写弹幕,见 [DanmakuInput]。 */
     danmakuInput: DanmakuInput,
@@ -432,6 +441,7 @@ fun VideoTabs(
         val onCommentsTab = pagerState.currentPage == VideoTabComments
         var stripWidth by remember { mutableStateOf(0.dp) }
         val hasDesktopCaption = LocalWindowCaption.current != null
+        val hoistRefreshToTabBar = !showDanmakuCapsule && onRefreshComments != null
         val hoistSortToTabBar = !showDanmakuCapsule &&
             commentHeaderAction != null &&
             (!hasDesktopCaption || stripWidth == 0.dp || stripWidth >= TabBarInlineSortMinWidth)
@@ -465,6 +475,13 @@ fun VideoTabs(
                         pagerState = pagerState,
                         onSelect = { index -> scope.launch { pagerState.animateScrollToPage(index) } },
                     )
+                    if (onCommentsTab && onRefreshComments != null) {
+                        TopBarRefreshButton(
+                            refreshing = commentsRefreshing,
+                            onRefresh = onRefreshComments,
+                            registerShortcut = false,
+                        )
+                    }
                     Spacer(
                         modifier = Modifier
                             .weight(1f)
@@ -600,6 +617,7 @@ fun VideoTabs(
                 else -> comments(
                     Modifier.fillMaxSize(),
                     !hoistSortToTabBar,
+                    !hoistRefreshToTabBar,
                     pagerState.currentPage == VideoTabComments,
                 )
             }

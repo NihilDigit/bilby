@@ -55,7 +55,6 @@ import dev.bilby.ui.components.BilbyTopBar
 import dev.bilby.ui.components.BiliRichText
 import dev.bilby.ui.components.PagedColumn
 import dev.bilby.ui.components.PersonRowSkeleton
-import dev.bilby.ui.components.RefreshAction
 import dev.bilby.ui.components.RefreshBox
 import dev.bilby.ui.components.SquareCover
 import dev.bilby.ui.formatRelativeTime
@@ -120,21 +119,21 @@ fun MessageScreen(
         modifier = modifier.nestedScroll(scrollBehavior.nestedScrollConnection),
         topBar = {
             MessageIslandTopBarTheme {
+                // 刷新按钮跟着当前这一格走:五格各有自己的 refreshing/onRefresh,顶栏只有一个入口。
+                val tabRefreshing = when (state.tab) {
+                    MessageTab.Whispers -> state.whispers.refreshing
+                    MessageTab.Replies -> state.replies.refreshing
+                    MessageTab.Mentions -> state.mentions.refreshing
+                    MessageTab.Likes -> state.likes.refreshing
+                    MessageTab.Notices -> state.notices.refreshing
+                }
                 BilbyTopBar(
                     title = stringResource(Res.string.message_title),
                     onBack = onBack,
                     scrollBehavior = scrollBehavior,
-                ) {
-                    // 刷新按钮跟着当前这一格走:五格各有自己的 refreshing/onRefresh,顶栏只有一个入口。
-                    val tabRefreshing = when (state.tab) {
-                        MessageTab.Whispers -> state.whispers.refreshing
-                        MessageTab.Replies -> state.replies.refreshing
-                        MessageTab.Mentions -> state.mentions.refreshing
-                        MessageTab.Likes -> state.likes.refreshing
-                        MessageTab.Notices -> state.notices.refreshing
-                    }
-                    RefreshAction(refreshing = tabRefreshing, onRefresh = { onRefresh(state.tab) })
-                }
+                    refreshing = tabRefreshing,
+                    onRefresh = { onRefresh(state.tab) },
+                )
             }
         },
     ) { insets ->

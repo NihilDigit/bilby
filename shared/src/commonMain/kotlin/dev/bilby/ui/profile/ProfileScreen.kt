@@ -112,6 +112,7 @@ import dev.bilby.ui.components.MediaBadge
 import dev.bilby.ui.components.MetaSeparator
 import dev.bilby.ui.components.SkeletonLine
 import dev.bilby.ui.components.SkeletonPulse
+import dev.bilby.ui.components.TopBarRefreshButton
 import dev.bilby.ui.components.VideoCommonMenuItems
 import dev.bilby.ui.components.VideoRowUi
 import dev.bilby.ui.components.menuItemShape
@@ -305,6 +306,7 @@ fun ProfileScreen(
     onRetryHistory: () -> Unit,
     onRetryToView: () -> Unit,
     onRetryFavFolders: () -> Unit,
+    onRefresh: (() -> Unit)? = null,
     /** 每变一次就回到顶部。重按底栏上当前这一格时由 MainActivity 递增。 */
     scrollToTop: Int = 0,
     /** `< 600dp` 底栏形态展示账号身份卡与快捷动作；`>= 600dp` 侧边导航栏常驻账号，页内仅作「媒体库」货架。 */
@@ -324,6 +326,9 @@ fun ProfileScreen(
     val wide = rememberBilbyWindowSize().isAtLeast(BilbyWindowSize.Expanded)
     val pinnedHeader = LocalIsDesktopWindow.current
     val headerTitle = stringResource(if (showAccountHeader) Res.string.tab_profile else Res.string.tab_library)
+    val headerRefreshing = (state.history.loading && state.history.items.isNotEmpty()) ||
+        (state.toView.loading && state.toView.items.isNotEmpty()) ||
+        (state.favFolders.loading && state.favFolders.items.isNotEmpty())
 
     Column(
         modifier = modifier
@@ -331,7 +336,11 @@ fun ProfileScreen(
             .padding(contentPadding),
     ) {
         if (pinnedHeader) {
-            ProfileHeader(title = headerTitle)
+            ProfileHeader(
+                title = headerTitle,
+                refreshing = headerRefreshing,
+                onRefresh = onRefresh,
+            )
         }
         Column(
             modifier = Modifier
@@ -340,7 +349,11 @@ fun ProfileScreen(
                 .verticalScroll(scrollState),
         ) {
             if (!pinnedHeader) {
-                ProfileHeader(title = headerTitle)
+                ProfileHeader(
+                    title = headerTitle,
+                    refreshing = headerRefreshing,
+                    onRefresh = onRefresh,
+                )
             }
             if (showAccountHeader) {
                 AccountCard(
@@ -368,12 +381,16 @@ fun ProfileScreen(
 }
 
 /**
- * 个人页顶栏:与订阅页 [FeedHeader] 保持一致的轻量结构——左侧页面标题加桌面拖动区，
+ * 个人页顶栏:与订阅页 [FeedHeader] 保持一致的轻量结构——左侧页面标题及键鼠刷新按钮、中间桌面拖动区，
  * 右侧仅保留窗口控制按钮。
  */
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
-private fun ProfileHeader(title: String) {
+private fun ProfileHeader(
+    title: String,
+    refreshing: Boolean = false,
+    onRefresh: (() -> Unit)? = null,
+) {
     val captionSlot = rememberCaptionSlot()
     Row(
         modifier = captionSlot.modifier
@@ -386,20 +403,27 @@ private fun ProfileHeader(title: String) {
             ),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
+        Text(
+            text = title,
+            style = MaterialTheme.typography.headlineSmallEmphasized,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.windowDragArea(captionSlot.atTop),
+        )
+        if (onRefresh != null) {
+            TopBarRefreshButton(
+                refreshing = refreshing,
+                onRefresh = onRefresh,
+                registerShortcut = false,
+                modifier = Modifier.padding(start = Spacing.Hair),
+            )
+        }
+        Spacer(
             modifier = Modifier
                 .weight(1f)
                 .height(CaptionDragHeight)
                 .windowDragArea(captionSlot.atTop),
-        ) {
-            Text(
-                text = title,
-                style = MaterialTheme.typography.headlineSmallEmphasized,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-        }
+        )
         captionSlot.buttons?.invoke()
     }
 }

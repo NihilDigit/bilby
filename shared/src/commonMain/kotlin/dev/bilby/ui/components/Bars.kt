@@ -86,6 +86,8 @@ fun BilbyTopBar(
     scrollBehavior: TopAppBarScrollBehavior? = null,
     center: (@Composable () -> Unit)? = null,
     subtitle: String? = null,
+    refreshing: Boolean = false,
+    onRefresh: (() -> Unit)? = null,
     actions: @Composable RowScope.() -> Unit = {},
 ) {
     LocalWindowCaption.current?.Host()
@@ -95,6 +97,8 @@ fun BilbyTopBar(
             title = title,
             subtitle = subtitle,
             onBack = onBack,
+            refreshing = refreshing,
+            onRefresh = onRefresh,
             scrollBehavior = scrollBehavior,
             dragTitleArea = captionSlot.atTop && center == null,
             actions = {
@@ -131,6 +135,8 @@ fun BilbySearchTopBar(
     onBack: (() -> Unit)? = null,
     scrollBehavior: TopAppBarScrollBehavior? = null,
     subtitle: String? = null,
+    refreshing: Boolean = false,
+    onRefresh: (() -> Unit)? = null,
     searchEnabled: Boolean = true,
     focusRequestNonce: Int = 0,
     actions: @Composable RowScope.() -> Unit = {},
@@ -143,6 +149,8 @@ fun BilbySearchTopBar(
             onBack = onBack,
             scrollBehavior = scrollBehavior,
             subtitle = subtitle,
+            refreshing = refreshing,
+            onRefresh = onRefresh,
             actions = {
                 val searchLabel = stringResource(Res.string.fav_search)
                 BilbyTooltip(text = searchLabel, shortcut = "Ctrl+F") {
@@ -183,14 +191,21 @@ fun BilbySearchTopBar(
             )
         },
         navigationIcon = {
-            if (onBack != null) {
-                val backLabel = stringResource(Res.string.action_back)
-                BilbyTooltip(text = backLabel, shortcut = "Alt+←") {
-                    IconButton(onClick = onBack) {
-                        Icon(
-                            Icons.AutoMirrored.Filled.ArrowBack,
-                            contentDescription = backLabel,
-                        )
+            if (onBack != null || onRefresh != null) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    if (onBack != null) {
+                        val backLabel = stringResource(Res.string.action_back)
+                        BilbyTooltip(text = backLabel, shortcut = "Alt+←") {
+                            IconButton(onClick = onBack) {
+                                Icon(
+                                    Icons.AutoMirrored.Filled.ArrowBack,
+                                    contentDescription = backLabel,
+                                )
+                            }
+                        }
+                    }
+                    if (onRefresh != null) {
+                        TopBarRefreshButton(refreshing = refreshing, onRefresh = onRefresh)
                     }
                 }
             }
@@ -217,6 +232,8 @@ private fun SmallTopBar(
     scrollBehavior: TopAppBarScrollBehavior?,
     dragTitleArea: Boolean,
     subtitle: String? = null,
+    refreshing: Boolean = false,
+    onRefresh: (() -> Unit)? = null,
     actions: @Composable RowScope.() -> Unit,
 ) {
     LaunchedEffect(title) {
@@ -256,15 +273,22 @@ private fun SmallTopBar(
             }
         },
         navigationIcon = {
-            if (onBack != null) {
-                val backLabel = stringResource(Res.string.action_back)
-                BilbyTooltip(text = backLabel, shortcut = "Alt+←") {
-                    IconButton(onClick = onBack) {
-                        // AutoMirrored:supportsRtl 开着,RTL 语言下返回箭头必须翻过来。
-                        Icon(
-                            Icons.AutoMirrored.Filled.ArrowBack,
-                            contentDescription = backLabel,
-                        )
+            if (onBack != null || onRefresh != null) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    if (onBack != null) {
+                        val backLabel = stringResource(Res.string.action_back)
+                        BilbyTooltip(text = backLabel, shortcut = "Alt+←") {
+                            IconButton(onClick = onBack) {
+                                // AutoMirrored:supportsRtl 开着,RTL 语言下返回箭头必须翻过来。
+                                Icon(
+                                    Icons.AutoMirrored.Filled.ArrowBack,
+                                    contentDescription = backLabel,
+                                )
+                            }
+                        }
+                    }
+                    if (onRefresh != null) {
+                        TopBarRefreshButton(refreshing = refreshing, onRefresh = onRefresh)
                     }
                 }
             }

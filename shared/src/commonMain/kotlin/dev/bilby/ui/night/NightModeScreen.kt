@@ -91,7 +91,6 @@ import dev.bilby.ui.components.EmptyState
 import dev.bilby.ui.components.LocalPointerSource
 import dev.bilby.ui.components.PagedColumn
 import dev.bilby.ui.components.PagedLayout
-import dev.bilby.ui.components.RefreshAction
 import dev.bilby.ui.components.RefreshBox
 import dev.bilby.ui.components.VideoCommonMenuItems
 import dev.bilby.ui.components.VideoGridCard
@@ -215,6 +214,8 @@ fun NightModeScreen(
                 title = topTitle,
                 subtitle = topSubtitle,
                 scrollBehavior = scrollBehavior,
+                refreshing = state.refreshing,
+                onRefresh = onRefresh.takeIf { state.allowedUps.isNotEmpty() },
                 actions = {
                     val offlineLabel = stringResource(Res.string.offline_title)
                     BilbyTooltip(text = offlineLabel) {
@@ -230,12 +231,6 @@ fun NightModeScreen(
                         IconButton(onClick = onOpenSettings) {
                             Icon(Icons.Outlined.Settings, contentDescription = settingsLabel)
                         }
-                    }
-                    if (state.allowedUps.isNotEmpty()) {
-                        RefreshAction(
-                            refreshing = state.refreshing,
-                            onRefresh = onRefresh,
-                        )
                     }
                 },
             )

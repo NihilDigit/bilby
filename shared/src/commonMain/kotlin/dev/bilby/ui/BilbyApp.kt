@@ -280,7 +280,6 @@ import dev.bilby.ui.search.SearchResultActions
 import dev.bilby.ui.search.SearchResultScreen
 import dev.bilby.ui.search.SearchResultViewModel
 import dev.bilby.ui.search.SearchTab
-import dev.bilby.ui.components.RefreshAction
 import dev.bilby.ui.player.LocalPlayerLayoutPrefs
 import dev.bilby.ui.player.PlayerGestureOptions
 import dev.bilby.ui.settings.AboutSettingsPage
@@ -3015,10 +3014,20 @@ private fun SearchPane(
     val searchLanding by remember(container.settings) {
         container.settings.appearancePrefs.map { it.searchLanding }.distinctUntilChanged()
     }.collectAsStateWithLifecycle(initialValue = true)
-    RegisterPageRefresh(refreshing = state.normal.videos.loading && state.normal.videos.items.isNotEmpty(), onRefresh = vm::refresh)
+    val activeNormalList = when (state.normal.tab) {
+        SearchTab.Video -> state.normal.videos
+        SearchTab.User -> state.normal.users
+        SearchTab.Article -> state.normal.articles
+    }
+    val normalRefreshing = activeNormalList.loading && activeNormalList.items.isNotEmpty()
+    if (state.normal.query.isNotEmpty()) {
+        RegisterPageRefresh(refreshing = normalRefreshing, onRefresh = vm::refresh)
+    }
     SearchChatScreen(
         state = state,
         focusSearchNonce = focusSearchNonce,
+        refreshing = normalRefreshing,
+        onRefresh = vm::refresh,
         searchHistory = history,
         onHistoryClick = vm::searchFromHistory,
         onHistoryRemove = vm::removeSearchHistory,
@@ -3086,15 +3095,19 @@ private fun SearchResultRoute(
     Scaffold(
         modifier = Modifier.nestedScroll(scrollBehavior.nestedScrollConnection),
         topBar = {
-            BilbyTopBar(title = keyword, onBack = onBack, scrollBehavior = scrollBehavior) {
-                // 与列表里的下拉同一个判据,按当前那一栏取,见 SearchResults 里的 RefreshBox。
-                val list = when (state.tab) {
-                    SearchTab.Video -> state.videos
-                    SearchTab.User -> state.users
-                    SearchTab.Article -> state.articles
-                }
-                RefreshAction(refreshing = list.loading && list.items.isNotEmpty(), onRefresh = vm::retry)
+            // 与列表里的下拉同一个判据,按当前那一栏取,见 SearchResults 里的 RefreshBox。
+            val list = when (state.tab) {
+                SearchTab.Video -> state.videos
+                SearchTab.User -> state.users
+                SearchTab.Article -> state.articles
             }
+            BilbyTopBar(
+                title = keyword,
+                onBack = onBack,
+                scrollBehavior = scrollBehavior,
+                refreshing = list.loading && list.items.isNotEmpty(),
+                onRefresh = vm::retry,
+            )
         },
     ) { insets ->
         SearchResultScreen(
@@ -3174,6 +3187,7 @@ private fun ProfilePane(
         onRetryHistory = vm::retryHistory,
         onRetryToView = vm::retryToView,
         onRetryFavFolders = vm::retryFavFolders,
+        onRefresh = vm::refresh,
     )
 }
 
@@ -3370,7 +3384,6 @@ private fun HistoryRoute(
         factory = viewModelFactory { initializer { HistoryViewModel(container.historyRepository) } },
     )
     val state by vm.state.collectAsStateWithLifecycle()
-    RegisterPageRefresh(refreshing = state.refreshing, onRefresh = vm::refresh)
 
     // null 表示不在多选态。空集合是多选态里的合法状态 —— 顶栏的「选择」要在一条都没选的
     // 时候就进得去。
@@ -3438,6 +3451,8 @@ private fun HistoryRoute(
                         },
                         onBack = onBack,
                         scrollBehavior = scrollBehavior,
+                        refreshing = state.refreshing,
+                        onRefresh = vm::refresh,
                         focusRequestNonce = searchFocusNonce,
                         actions = {
                             IconButton(
@@ -3487,7 +3502,6 @@ private fun HistoryRoute(
                                     )
                                 }
                             }
-                            RefreshAction(state.refreshing, vm::refresh)
                         },
                     )
                 } else {
@@ -4097,6 +4111,8 @@ private fun ToViewListRoute(
                 },
                 onBack = onBack,
                 scrollBehavior = scrollBehavior,
+                refreshing = state.loading && state.items.isNotEmpty(),
+                onRefresh = vm::refresh,
                 focusRequestNonce = searchFocusNonce,
                 actions = {
                     IconButton(
@@ -4108,7 +4124,6 @@ private fun ToViewListRoute(
                             contentDescription = stringResource(Res.string.toview_clear_invalid),
                         )
                     }
-                    RefreshAction(refreshing = state.loading && state.items.isNotEmpty(), onRefresh = vm::refresh)
                 },
             )
         },
@@ -4260,7 +4275,7 @@ private fun FollowingsRoute(
     LaunchedEffect(state.source, state.order, state.query, state.items.isEmpty()) {
         scrollBehavior.state.contentOffset = 0f
     }
-    // 宽屏时刷新与排序进名单上方的筛选行(见 WideFilterRow),搜索框换到顶栏正中:
+    // 宽屏时排序进名单上方的筛选行(见 WideFilterRow),搜索框换到顶栏正中,刷新统一锚定在顶栏左侧:
     // 放在筛选行里,48dp 的输入框和 32dp 的芯片挤在一条线上,高低不齐。
     val wide = rememberBilbyWindowSize().isAtLeast(BilbyWindowSize.Expanded)
     Scaffold(
@@ -4270,6 +4285,8 @@ private fun FollowingsRoute(
                 title = stringResource(Res.string.followings_title),
                 onBack = onBack,
                 scrollBehavior = scrollBehavior,
+                refreshing = state.refreshing,
+                onRefresh = vm::refresh,
                 center = if (wide) {
                     {
                         // 外层定一半宽,里面再封顶。反过来写 fillMaxWidth(0.5f).widthIn(max) 封不住,
@@ -4296,7 +4313,6 @@ private fun FollowingsRoute(
                             onSelect = vm::selectOrder,
                         )
                     }
-                    RefreshAction(state.refreshing, vm::refresh)
                 },
             )
         },
@@ -4479,7 +4495,6 @@ private fun CollectionRoute(
         },
     )
     val state by vm.state.collectAsStateWithLifecycle()
-    RegisterPageRefresh(refreshing = state.refreshing, onRefresh = vm::refresh)
     CollectionScreen(
         title = key.name,
         state = state,
@@ -4506,7 +4521,6 @@ private fun OtherDynamicsRoute(
         },
     )
     val state by vm.state.collectAsStateWithLifecycle()
-    RegisterPageRefresh(refreshing = state.refreshing, onRefresh = vm::refresh)
     OtherDynamicsScreen(
         state = state,
         onBack = onBack,
@@ -4613,10 +4627,6 @@ private fun FavFoldersRoute(
             searchFocusNonce++
         },
     )
-    RegisterPageRefresh(
-        refreshing = if (state.appliedKeyword.isNotBlank()) state.searchRefreshing else state.refreshing,
-        onRefresh = if (state.appliedKeyword.isNotBlank()) vm::refreshSearch else vm::refresh,
-    )
     // 从某个收藏夹返回时这一页重新进组合,那正是列表最可能过期的时候。判据见 onEnter。
     LaunchedEffect(Unit) { vm.onEnter() }
     // 见 [SearchResultRoute]。
@@ -4643,6 +4653,8 @@ private fun FavFoldersRoute(
                 },
                 onBack = onBack,
                 scrollBehavior = scrollBehavior,
+                refreshing = if (state.appliedKeyword.isNotBlank()) state.searchRefreshing else state.refreshing,
+                onRefresh = if (state.appliedKeyword.isNotBlank()) vm::refreshSearch else vm::refresh,
                 focusRequestNonce = searchFocusNonce,
                 actions = {
                     // 新建是这一页的页级操作,放顶栏。它原先是右下角的 FAB:FAB 要让开列表最后一行,
@@ -4650,7 +4662,6 @@ private fun FavFoldersRoute(
                     IconButton(onClick = vm.manager::startCreate) {
                         Icon(Icons.Outlined.Add, contentDescription = stringResource(Res.string.fav_folder_create))
                     }
-                    RefreshAction(state.refreshing, vm::refresh)
                 },
             )
         },

@@ -165,8 +165,8 @@ import dev.bilby.ui.components.PagedColumn
 import dev.bilby.ui.components.PagedLayout
 import dev.bilby.ui.components.PaneTitle
 import dev.bilby.ui.components.PlayingIndicator
-import dev.bilby.ui.components.RefreshAction
 import dev.bilby.ui.components.RefreshBox
+import dev.bilby.ui.components.TopBarRefreshButton
 import dev.bilby.ui.components.SearchField
 import dev.bilby.ui.components.SelectableTextDialog
 import dev.bilby.ui.components.SidePanelLayout
@@ -1337,14 +1337,17 @@ private fun SpaceTopBar(
             }
         },
         navigationIcon = {
-            val backLabel = stringResource(Res.string.action_back)
-            BilbyTooltip(text = backLabel, shortcut = "Alt+←") {
-                IconButton(onClick = onBack) {
-                    Icon(
-                        Icons.AutoMirrored.Filled.ArrowBack,
-                        contentDescription = backLabel,
-                    )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                val backLabel = stringResource(Res.string.action_back)
+                BilbyTooltip(text = backLabel, shortcut = "Alt+←") {
+                    IconButton(onClick = onBack) {
+                        Icon(
+                            Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = backLabel,
+                        )
+                    }
                 }
+                TopBarRefreshButton(refreshing = refreshing, onRefresh = onRefresh)
             }
         },
         actions = {
@@ -1379,7 +1382,6 @@ private fun SpaceTopBar(
                     description = stringResource(Res.string.space_dynamics_sheet_toggle),
                 )
             }
-            RefreshAction(refreshing = refreshing, onRefresh = onRefresh)
             captionSlot.buttons?.invoke()
         },
     )

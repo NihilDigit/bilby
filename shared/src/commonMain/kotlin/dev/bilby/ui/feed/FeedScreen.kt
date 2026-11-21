@@ -46,7 +46,6 @@ import androidx.compose.material.icons.outlined.KeyboardArrowUp
 import androidx.compose.material.icons.outlined.Mail
 import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material.icons.outlined.PeopleAlt
-import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.outlined.Schedule
 import androidx.compose.material.icons.outlined.VisibilityOff
 import androidx.compose.material.icons.outlined.WatchLater
@@ -124,13 +123,13 @@ import dev.bilby.ui.components.FirstScreenState
 import dev.bilby.ui.components.ListFooter
 import dev.bilby.ui.components.ListScrollbar
 import dev.bilby.ui.components.LoadingSpinner
-import dev.bilby.ui.components.LocalPointerSource
 import dev.bilby.ui.components.MediaBadge
 import dev.bilby.ui.components.MetaSeparator
 import dev.bilby.ui.components.PlayingIndicator
 import dev.bilby.ui.components.PrefetchNearEnd
 import dev.bilby.ui.components.RefreshBox
 import dev.bilby.ui.components.RegisterPageRefresh
+import dev.bilby.ui.components.TopBarRefreshButton
 import dev.bilby.ui.components.VideoCommonMenuItems
 import dev.bilby.ui.components.VideoGridCard
 import dev.bilby.ui.components.VideoRow
@@ -495,20 +494,15 @@ private fun FeedList(
     RegisterPageRefresh(refreshing = state.refreshing, onRefresh = onRefresh)
     val density = LocalDensity.current
     var containerWidth by remember { mutableStateOf(0.dp) }
-    val isTouch = LocalPointerSource.current.isTouchLike
     // 宽屏下「推送」「关注动态」入口固定归入左侧导航轨底栏可定制项,不再占用订阅页顶部空间。
     val showHeaderNavActions = !wide
-    val showTileRefresh = !LocalIsDesktopWindow.current && !isTouch
-    val headerActions: (@Composable () -> Unit)? = if (showHeaderNavActions || onEnterNightMode != null || showTileRefresh) {
+    val headerActions: (@Composable () -> Unit)? = if (showHeaderNavActions || onEnterNightMode != null) {
         {
             FeedHeaderActions(
                 onOpenOtherDynamics = onOpenOtherDynamics,
                 onOpenPushes = onOpenPushes,
                 onEnterNightMode = onEnterNightMode,
                 includeNavActions = showHeaderNavActions,
-                includeRefresh = showTileRefresh,
-                refreshing = state.refreshing,
-                onRefresh = onRefresh,
             )
         }
     } else {
@@ -550,7 +544,11 @@ private fun FeedList(
                     ) {
                         if (!pinnedHeader) {
                             item(key = "header", span = FullLine, contentType = "header") {
-                                FeedHeader(actions = headerActions)
+                                FeedHeader(
+                                    refreshing = state.refreshing,
+                                    onRefresh = onRefresh,
+                                    actions = headerActions,
+                                )
                             }
                         }
                         if (showTopUpsRow) {
@@ -637,6 +635,8 @@ private fun FeedList(
             ) {
                 if (pinnedHeader) {
                     FeedHeader(
+                        refreshing = state.refreshing,
+                        onRefresh = onRefresh,
                         actions = headerActions,
                         bottomPadding = if (desktopSplitIslands) Spacing.Hair else 0.dp,
                     )
@@ -697,14 +697,16 @@ private fun FeedList(
 }
 
 /**
- * 列表顶上那一行:左侧为主锚点页名(`headlineSmallEmphasized`)及紧邻的方案 C 小圆角刷新钮(仅键鼠模式)，
- * 右侧承接推送与关注动态入口(宽屏或够宽时内联至此，否则在 UP 排或次行承接)。
+ * 列表顶上那一行:左侧为主锚点页名(`headlineSmallEmphasized`)及紧邻左侧固定锚位的刷新钮(仅键鼠模式),
+ * 右侧承接推送、关注动态与夜间静息模式入口(宽屏下推送/关注动态归入左侧导航轨底栏)。
  *
  * **永远不给它红点、未读计数或带数量的角标。**
  */
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 private fun FeedHeader(
+    refreshing: Boolean,
+    onRefresh: () -> Unit,
     actions: (@Composable () -> Unit)?,
     bottomPadding: Dp = 0.dp,
 ) {
@@ -728,6 +730,12 @@ private fun FeedHeader(
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.windowDragArea(captionSlot.atTop),
         )
+        TopBarRefreshButton(
+            refreshing = refreshing,
+            onRefresh = onRefresh,
+            registerShortcut = false,
+            modifier = Modifier.padding(start = Spacing.Hair),
+        )
         Spacer(
             modifier = Modifier
                 .weight(1f)
@@ -740,9 +748,9 @@ private fun FeedHeader(
 }
 
 /**
- * 推送、关注动态、定时白名单与非桌面端键鼠刷新入口:收口进 M3E [ButtonGroup](`animateWidth` 弹性伸缩 + 窄屏自动折叠溢出菜单),
+ * 推送、关注动态与定时白名单入口:收口进 M3E [ButtonGroup](`animateWidth` 弹性伸缩 + 窄屏自动折叠溢出菜单),
  * 内层延续 `32.dp` 高、`10.dp` 小圆角的轻量 `surfaceContainerLow` 方案 C 视觉;
- * 桌面端全屏与刷新入口统一并入标题栏按钮组。
+ * 键鼠刷新固定锚定在左侧标题「订阅」旁([FeedHeader])。
  */
 @Composable
 private fun FeedHeaderActions(
@@ -750,13 +758,9 @@ private fun FeedHeaderActions(
     onOpenPushes: () -> Unit,
     onEnterNightMode: (() -> Unit)?,
     includeNavActions: Boolean,
-    includeRefresh: Boolean,
-    refreshing: Boolean,
-    onRefresh: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val colorScheme = MaterialTheme.colorScheme
-    val refreshLabel = stringResource(Res.string.action_refresh)
     val pushesLabel = stringResource(Res.string.feed_up_pushes_entry)
     val dynamicsLabel = stringResource(Res.string.dynamic_other_entry)
     val nightModeLabel = stringResource(Res.string.settings_section_night_mode)
@@ -843,35 +847,6 @@ private fun FeedHeaderActions(
                         onClick = {
                             menuState.dismiss()
                             onEnterNightMode()
-                        },
-                    )
-                },
-            )
-        }
-        if (includeRefresh) {
-            customItem(
-                buttonGroupContent = {
-                    val interactionSource = remember { MutableInteractionSource() }
-                    BilbyTooltip(text = refreshLabel, shortcut = "F5") {
-                        FeedToolbarTile(
-                            icon = Icons.Filled.Refresh,
-                            label = null,
-                            contentDescription = refreshLabel,
-                            loading = refreshing,
-                            interactionSource = interactionSource,
-                            modifier = Modifier.animateWidth(interactionSource),
-                            onClick = onRefresh,
-                        )
-                    }
-                },
-                menuContent = { menuState ->
-                    DropdownMenuItem(
-                        text = { Text(refreshLabel) },
-                        leadingIcon = { Icon(Icons.Filled.Refresh, contentDescription = null) },
-                        enabled = !refreshing,
-                        onClick = {
-                            menuState.dismiss()
-                            onRefresh()
                         },
                     )
                 },
