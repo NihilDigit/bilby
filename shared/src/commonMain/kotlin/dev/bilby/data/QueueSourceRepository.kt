@@ -49,12 +49,7 @@ class QueueSourceRepository(
         // 从点开时那一页找起。那一页就在眼前,多给一页余量:点开之后 UP 又发了动态,
         // 这条就挪到了下一页。
         is QueueContext.UpDynamics -> openUpDynamics(context, bvid)
-        is QueueContext.Collection -> openFeed(
-            feed = collectionFeed(context.mid, context.id, context.isSeason, context.page),
-            bvid = bvid,
-            label = collectionLabel(context.isSeason, context.name),
-            source = QueueSource(context.mid, context.id, context.isSeason, context.name),
-        )
+        is QueueContext.Collection -> openCollection(context, bvid)
         is QueueContext.UpArchive -> openUpArchive(context, bvid)
         is QueueContext.NightMode -> openNightMode(context, bvid)
         is QueueContext.FavFolder -> openFavFolder(context, bvid)
@@ -271,9 +266,70 @@ class QueueSourceRepository(
             getString(Res.string.queue_source_series, name)
         }
 
-    private fun collectionFeed(mid: Long, id: Long, isSeason: Boolean, anchorPage: Int, fallbackUpName: String = "") =
+    private suspend fun openCollection(context: QueueContext.Collection, bvid: String): OpenedQueue? {
+        val label = collectionLabel(context.isSeason, context.name)
+        val source = QueueSource(context.mid, context.id, context.isSeason, context.name)
+        if (context.sort == CollectionSort.Default) {
+            return openFeed(
+                feed = collectionFeed(context.mid, context.id, context.isSeason, context.page),
+                bvid = bvid,
+                label = label,
+                source = source,
+            )
+        }
+        if (!context.isSeason) {
+            val reverse = context.sort == CollectionSort.Oldest
+            return openFeed(
+                feed = collectionFeed(context.mid, context.id, isSeason = false, anchorPage = context.page, reverse = reverse),
+                bvid = bvid,
+                label = label,
+                source = source,
+            )
+        }
+        // 合集按时间排序:中小合集(<=300 条)全量拉齐后按发布时间精确排序;超大合集按首屏走向选 sort_reverse。
+        val first = when (val r = spaceRepository.loadCollectionDetail(context.mid, context.id, true, 1, reverse = false)) {
+            is BiliResult.Ok -> r.value
+            else -> {
+                BiliLog.w("队列:拉取合集 ${context.id} 第 1 页失败")
+                return null
+            }
+        }
+        if (first.total <= COLLECTION_FULL_SORT_MAX_ITEMS) {
+            val all = first.items.toMutableList()
+            var page = 2
+            while (all.size < first.total && page <= COLLECTION_FULL_SORT_MAX_PAGES) {
+                val next = when (val r = spaceRepository.loadCollectionDetail(context.mid, context.id, true, page, reverse = false)) {
+                    is BiliResult.Ok -> r.value
+                    else -> break
+                }
+                if (next.items.isEmpty()) break
+                all += next.items
+                page++
+            }
+            val sorted = all.distinctBy { it.bvid }
+                .sortedByCollectionSort(context.sort)
+                .map { it.toQueueItem() }
+            return openFeed(StaticFeed(sorted), bvid, label, source)
+        }
+        val reverse = inferSeasonReverse(first.items, context.sort)
+        return openFeed(
+            feed = collectionFeed(context.mid, context.id, isSeason = true, anchorPage = context.page, reverse = reverse),
+            bvid = bvid,
+            label = label,
+            source = source,
+        )
+    }
+
+    private fun collectionFeed(
+        mid: Long,
+        id: Long,
+        isSeason: Boolean,
+        anchorPage: Int,
+        fallbackUpName: String = "",
+        reverse: Boolean = false,
+    ) =
         PagedFeed(anchorPage, SpaceRepository.COLLECTION_PAGE_SIZE) { page ->
-            when (val r = spaceRepository.loadCollectionDetail(mid, id, isSeason, page)) {
+            when (val r = spaceRepository.loadCollectionDetail(mid, id, isSeason, page, reverse = reverse)) {
                 is BiliResult.Ok -> FeedPage(
                     items = r.value.items.map { it.toQueueItem(fallbackUpName = fallbackUpName) },
                     hasMore = page * SpaceRepository.COLLECTION_PAGE_SIZE < r.value.total && r.value.items.isNotEmpty(),
@@ -442,6 +498,9 @@ class QueueSourceRepository(
         }
 
     private companion object {
+        const val COLLECTION_FULL_SORT_MAX_PAGES = 10
+        const val COLLECTION_FULL_SORT_MAX_ITEMS = COLLECTION_FULL_SORT_MAX_PAGES * SpaceRepository.COLLECTION_PAGE_SIZE
+
         /** 最多看这位 UP 的前几个系列。列表按更新时间排,在播的那个系列排在前面。 */
         const val SERIES_SCAN_LIMIT = 4
 
