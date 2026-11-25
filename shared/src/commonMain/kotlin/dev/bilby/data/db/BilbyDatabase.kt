@@ -43,18 +43,50 @@ interface FeedCacheItemDao {
     }
 }
 
+@Dao
+interface CollectionProgressDao {
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertProgress(entity: CollectionProgressEntity)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertWatched(entity: CollectionWatchedEntity)
+
+    @Query(
+        "UPDATE collection_progress SET lastPositionMillis = :positionMillis, durationMillis = :durationMillis, " +
+            "updatedAt = :updatedAt WHERE mid = :mid AND collectionId = :collectionId AND isSeason = :isSeason AND lastBvid = :bvid",
+    )
+    suspend fun updatePositionIfMatches(
+        mid: Long,
+        collectionId: Long,
+        isSeason: Boolean,
+        bvid: String,
+        positionMillis: Long,
+        durationMillis: Long,
+        updatedAt: Long,
+    )
+
+    @Query("SELECT * FROM collection_progress WHERE mid = :mid AND collectionId = :collectionId AND isSeason = :isSeason LIMIT 1")
+    fun observeProgress(mid: Long, collectionId: Long, isSeason: Boolean): Flow<CollectionProgressEntity?>
+
+    @Query("SELECT bvid FROM collection_watched WHERE mid = :mid AND collectionId = :collectionId AND isSeason = :isSeason")
+    fun observeWatchedBvids(mid: Long, collectionId: Long, isSeason: Boolean): Flow<List<String>>
+}
+
 @Database(
     entities = [
         FeedReadPositionEntity::class,
         FeedCacheItemEntity::class,
+        CollectionProgressEntity::class,
+        CollectionWatchedEntity::class,
     ],
-    version = 9,
+    version = 10,
     exportSchema = false,
 )
 @ConstructedBy(BilbyDatabaseConstructor::class)
 abstract class BilbyDatabase : RoomDatabase() {
     abstract fun feedReadPositionDao(): FeedReadPositionDao
     abstract fun feedCacheItemDao(): FeedCacheItemDao
+    abstract fun collectionProgressDao(): CollectionProgressDao
 
     companion object {
         /** 文件位置与 SQLite 驱动由平台给出 [builder],其余配置两端相同。 */

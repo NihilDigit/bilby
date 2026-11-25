@@ -998,6 +998,11 @@
     <string name="feed_burst_expand_rest">Show %1$d more uploads</string>
     <string name="feed_live_count_badge">%1$d live</string>
     <string name="collection_total_count">%1$d videos</string>
+    <string name="collection_continue_watching">Continue watching</string>
+    <string name="collection_continue_progress">Left off at %1$s</string>
+    <string name="collection_continue_recent">Last watched</string>
+    <string name="collection_badge_last">Last watched</string>
+    <string name="collection_badge_watched">Watched</string>
     <string name="agent_steps_count">%1$d steps searched</string>
     <!-- Library in-page search -->
     <string name="history_search_hint">Search watch history</string>

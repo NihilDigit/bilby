@@ -66,3 +66,36 @@ data class FeedCacheItemEntity(
         const val KIND_ARTICLE = "article"
     }
 }
+
+/**
+ * 合集/系列的最后观看记录，用于合集目录顶部「继续观看」卡片。
+ */
+@Entity(
+    tableName = "collection_progress",
+    primaryKeys = ["mid", "collectionId", "isSeason"],
+)
+data class CollectionProgressEntity(
+    val mid: Long,
+    val collectionId: Long,
+    val isSeason: Boolean,
+    val lastBvid: String,
+    val lastTitle: String,
+    val lastCoverUrl: String,
+    val lastPositionMillis: Long = 0L,
+    val durationMillis: Long = 0L,
+    val updatedAt: Long,
+)
+
+/** 合集/系列内已观看过的视频集合，用于在目录列表项中标注已看状态。 */
+@Entity(
+    tableName = "collection_watched",
+    primaryKeys = ["mid", "collectionId", "isSeason", "bvid"],
+    indices = [androidx.room.Index(value = ["mid", "collectionId", "isSeason"])],
+)
+data class CollectionWatchedEntity(
+    val mid: Long,
+    val collectionId: Long,
+    val isSeason: Boolean,
+    val bvid: String,
+    val watchedAt: Long,
+)

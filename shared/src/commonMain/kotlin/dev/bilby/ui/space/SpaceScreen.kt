@@ -2341,6 +2341,8 @@ internal fun VideoListTab(
     onVideoClick: (SpaceVideoItem) -> Unit,
     modifier: Modifier = Modifier,
     header: (@Composable () -> Unit)? = null,
+    lastWatchedBvid: String? = null,
+    watchedBvids: Set<String> = emptySet(),
     @Suppress("UNUSED_PARAMETER") columns: GridCells = GridCells.Fixed(1),
 ) {
     val density = LocalDensity.current
@@ -2396,7 +2398,13 @@ internal fun VideoListTab(
                 }
             },
         ) { item ->
-            val typeBadge = chargingBadgeText(item.chargingOnly)
+            val typeBadge = chargingBadgeText(item.chargingOnly).ifEmpty {
+                when {
+                    item.bvid == lastWatchedBvid -> stringResource(Res.string.collection_badge_last)
+                    item.bvid in watchedBvids -> stringResource(Res.string.collection_badge_watched)
+                    else -> ""
+                }
+            }
             val rowUi = remember(item, typeBadge) {
                 VideoRowUi(
                     title = item.title,

@@ -9,6 +9,7 @@ import dev.bilby.api.DeviceFingerprint
 import dev.bilby.api.WbiSigner
 import dev.bilby.data.AccountRepository
 import dev.bilby.data.ArticleRepository
+import dev.bilby.data.CollectionProgressRepository
 import dev.bilby.data.DanmakusRepository
 import dev.bilby.data.DynamicFeedStore
 import dev.bilby.data.DynamicRepository
@@ -136,6 +137,11 @@ class AppContainer(
 
     val feedCacheRepository: FeedCacheRepository by lazy {
         FeedCacheRepository(database.feedCacheItemDao())
+    }
+
+    /** 合集/系列观看进度与已看记录。 */
+    val collectionProgressRepository: CollectionProgressRepository by lazy {
+        CollectionProgressRepository(database)
     }
 
     /**
