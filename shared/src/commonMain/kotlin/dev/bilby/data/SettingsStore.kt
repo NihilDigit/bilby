@@ -20,6 +20,7 @@ import dev.nihildigit.danmaku.DanmakuDensity
 import dev.nihildigit.danmaku.DanmakuFrameRateCap
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.launch
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.Json
@@ -380,11 +381,54 @@ class SettingsStore(private val store: DataStore<Preferences>) {
      * 不是"还没设置过"才关;换视频后按语言代码去找同名轨,找不到就照样关掉,不自动挑一条。
      */
     val subtitlePrefs: Flow<SubtitlePrefs> = store.data.map { p ->
-        SubtitlePrefs(lan = p[KEY_SUBTITLE_LAN].orEmpty())
+        SubtitlePrefs(
+            lan = p[KEY_SUBTITLE_LAN].orEmpty(),
+            fontScale = (p[KEY_SUBTITLE_FONT_SCALE] ?: SubtitlePrefs.DEFAULT_FONT_SCALE)
+                .coerceIn(SubtitlePrefs.MIN_FONT_SCALE, SubtitlePrefs.MAX_FONT_SCALE),
+            backgroundAlpha = (p[KEY_SUBTITLE_BG_ALPHA] ?: SubtitlePrefs.DEFAULT_BG_ALPHA)
+                .coerceIn(SubtitlePrefs.MIN_BG_ALPHA, SubtitlePrefs.MAX_BG_ALPHA),
+            bottomOffsetDp = (p[KEY_SUBTITLE_BOTTOM_OFFSET] ?: SubtitlePrefs.DEFAULT_BOTTOM_OFFSET_DP)
+                .coerceIn(SubtitlePrefs.MIN_BOTTOM_OFFSET_DP, SubtitlePrefs.MAX_BOTTOM_OFFSET_DP),
+            bilingualSecondaryStyle = p[KEY_SUBTITLE_BILINGUAL_STYLE] ?: true,
+        )
     }
 
     suspend fun saveSubtitleLan(lan: String) {
         store.edit { p -> p[KEY_SUBTITLE_LAN] = lan }
+    }
+
+    suspend fun saveSubtitleFontScale(scale: Float) {
+        store.edit { p ->
+            p[KEY_SUBTITLE_FONT_SCALE] = scale.coerceIn(SubtitlePrefs.MIN_FONT_SCALE, SubtitlePrefs.MAX_FONT_SCALE)
+        }
+    }
+
+    suspend fun saveSubtitleBackgroundAlpha(alpha: Float) {
+        store.edit { p ->
+            p[KEY_SUBTITLE_BG_ALPHA] = alpha.coerceIn(SubtitlePrefs.MIN_BG_ALPHA, SubtitlePrefs.MAX_BG_ALPHA)
+        }
+    }
+
+    suspend fun saveSubtitleBottomOffsetDp(offsetDp: Int) {
+        store.edit { p ->
+            p[KEY_SUBTITLE_BOTTOM_OFFSET] = offsetDp.coerceIn(
+                SubtitlePrefs.MIN_BOTTOM_OFFSET_DP,
+                SubtitlePrefs.MAX_BOTTOM_OFFSET_DP,
+            )
+        }
+    }
+
+    suspend fun saveSubtitleBilingualStyle(enabled: Boolean) {
+        store.edit { p -> p[KEY_SUBTITLE_BILINGUAL_STYLE] = enabled }
+    }
+
+    suspend fun resetSubtitleStyle() {
+        store.edit { p ->
+            p.remove(KEY_SUBTITLE_FONT_SCALE)
+            p.remove(KEY_SUBTITLE_BG_ALPHA)
+            p.remove(KEY_SUBTITLE_BOTTOM_OFFSET)
+            p.remove(KEY_SUBTITLE_BILINGUAL_STYLE)
+        }
     }
 
     /**
@@ -814,6 +858,10 @@ class SettingsStore(private val store: DataStore<Preferences>) {
         private val KEY_SB_SERVER = stringPreferencesKey("sponsorblock_server")
 
         private val KEY_SUBTITLE_LAN = stringPreferencesKey("subtitle_lan")
+        private val KEY_SUBTITLE_FONT_SCALE = floatPreferencesKey("subtitle_font_scale")
+        private val KEY_SUBTITLE_BG_ALPHA = floatPreferencesKey("subtitle_bg_alpha")
+        private val KEY_SUBTITLE_BOTTOM_OFFSET = intPreferencesKey("subtitle_bottom_offset_dp")
+        private val KEY_SUBTITLE_BILINGUAL_STYLE = booleanPreferencesKey("subtitle_bilingual_style")
         private val KEY_DANMAKU_ENABLED = booleanPreferencesKey("danmaku_enabled")
         private val KEY_DANMAKU_OPACITY = floatPreferencesKey("danmaku_opacity")
         private val KEY_DANMAKU_SCROLL_SHOW_AREA = floatPreferencesKey("danmaku_scroll_show_area")
@@ -1097,8 +1145,59 @@ data class SponsorBlockPrefs(
     val serverUrl: String = SettingsStore.DEFAULT_SB_SERVER,
 )
 
-/** 空字符串是关(默认值)。非空时是某条字幕轨的语言代码,如 `ai-zh`。 */
-data class SubtitlePrefs(val lan: String = "")
+/** 字幕轨与外观样式偏好。空 [lan] 是关(默认值),非空时是语言代码(如 `ai-zh`)。 */
+data class SubtitlePrefs(
+    val lan: String = "",
+    val fontScale: Float = DEFAULT_FONT_SCALE,
+    val backgroundAlpha: Float = DEFAULT_BG_ALPHA,
+    val bottomOffsetDp: Int = DEFAULT_BOTTOM_OFFSET_DP,
+    val bilingualSecondaryStyle: Boolean = true,
+) {
+    companion object {
+        const val DEFAULT_FONT_SCALE = 1f
+        const val MIN_FONT_SCALE = 0.75f
+        const val MAX_FONT_SCALE = 1.6f
+        const val DEFAULT_BG_ALPHA = 0.55f
+        const val MIN_BG_ALPHA = 0f
+        const val MAX_BG_ALPHA = 0.9f
+        const val DEFAULT_BOTTOM_OFFSET_DP = 0
+        const val MIN_BOTTOM_OFFSET_DP = 0
+        const val MAX_BOTTOM_OFFSET_DP = 80
+    }
+}
+
+interface SubtitlePrefsEditor {
+    fun setFontScale(scale: Float)
+    fun setBackgroundAlpha(alpha: Float)
+    fun setBottomOffsetDp(offsetDp: Int)
+    fun setBilingualSecondaryStyle(enabled: Boolean)
+    fun resetStyle()
+}
+
+class StoredSubtitlePrefsEditor(
+    private val settings: SettingsStore,
+    private val scope: kotlinx.coroutines.CoroutineScope,
+) : SubtitlePrefsEditor {
+    override fun setFontScale(scale: Float) {
+        scope.launch { settings.saveSubtitleFontScale(scale) }
+    }
+
+    override fun setBackgroundAlpha(alpha: Float) {
+        scope.launch { settings.saveSubtitleBackgroundAlpha(alpha) }
+    }
+
+    override fun setBottomOffsetDp(offsetDp: Int) {
+        scope.launch { settings.saveSubtitleBottomOffsetDp(offsetDp) }
+    }
+
+    override fun setBilingualSecondaryStyle(enabled: Boolean) {
+        scope.launch { settings.saveSubtitleBilingualStyle(enabled) }
+    }
+
+    override fun resetStyle() {
+        scope.launch { settings.resetSubtitleStyle() }
+    }
+}
 
 /**
  * 弹幕设置。[scrollShowArea] 是**滚动与顶部**弹幕能占画面高度的比例(界面上的 25/50/75/100%

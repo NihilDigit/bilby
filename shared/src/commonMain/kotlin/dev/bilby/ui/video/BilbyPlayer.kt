@@ -41,16 +41,25 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.em
+import dev.bilby.data.SubtitlePrefs
+import dev.bilby.data.SubtitlePrefsEditor
 import dev.bilby.player.PlayerHandle
 import dev.bilby.player.SleepTimerMode
 import dev.bilby.player.SleepTimerState
 import dev.bilby.player.audioQualityLabel
+import dev.bilby.player.cuesAt
 import dev.bilby.resources.*
 import dev.bilby.stringResource
 import dev.bilby.formatDurationMillis
@@ -176,6 +185,8 @@ fun BilbyPlayer(
     onSubtitleTrackChange: (String) -> Unit = {},
     /** 选中轨的正文,按 fromMillis 升序。 */
     subtitleCues: List<SubtitleCue> = emptyList(),
+    subtitlePrefs: SubtitlePrefs = SubtitlePrefs(),
+    subtitleEditor: SubtitlePrefsEditor? = null,
     /**
      * 弹幕设置整体传入,不拆成一条一条的平行参数——理由见 [dev.bilby.ui.video.VideoViewModel]
      * 的 `danmakuPrefs`。其中 `enabled` 是总开关,关闭时 [DanmakuHost] 整个不进组合,帧循环
@@ -424,7 +435,8 @@ fun BilbyPlayer(
                 SubtitleOverlayLayer(
                     subtitleCues = subtitleCues,
                     progress = progressState,
-                    subtitleBottomTarget = subtitleBottomTarget,
+                    subtitleBottomTarget = subtitleBottomTarget + if (pip) 0.dp else subtitlePrefs.bottomOffsetDp.dp,
+                    subtitlePrefs = subtitlePrefs,
                     pip = pip,
                     modifier = Modifier.align(Alignment.BottomCenter),
                 )
@@ -554,6 +566,8 @@ fun BilbyPlayer(
                     subtitleTracks = subtitleTracks,
                     currentSubtitleLan = currentSubtitleLan,
                     onSubtitleTrackChange = onSubtitleTrackChange,
+                    subtitlePrefs = subtitlePrefs,
+                    subtitleEditor = subtitleEditor,
                     audioOptions = audioOptions,
                     currentAudio = currentAudio,
                     onAudioChange = onAudioChange,
@@ -579,35 +593,77 @@ private fun SubtitleOverlayLayer(
     subtitleCues: List<SubtitleCue>,
     progress: PlayerProgressState,
     subtitleBottomTarget: Dp,
+    subtitlePrefs: SubtitlePrefs = SubtitlePrefs(),
     pip: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
     val maxDuration = remember(subtitleCues) { subtitleCues.maxCueDurationMillis() }
     val posMillis = progress.displayPositionMillis
-    val text = remember(subtitleCues, maxDuration, posMillis) {
-        subtitleCues.activeSubtitleText(posMillis, maxDuration)
+    val lines = remember(subtitleCues, maxDuration, posMillis) {
+        subtitleCues.cuesAt(posMillis, maxDuration)
+            .flatMap { it.text.trim().lines() }
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
+            .distinct()
     }
     val subtitleBottom by animateDpAsState(
         targetValue = subtitleBottomTarget,
         animationSpec = MaterialTheme.motionScheme.fastSpatialSpec(),
         label = "subtitle-bottom",
     )
-    text?.let { subtitleText ->
+    if (lines.isNotEmpty()) {
         val subtitleShape = MaterialTheme.shapes.small
+        val baseTypography = if (pip) MaterialTheme.typography.bodySmall else MaterialTheme.typography.bodyLarge
+        val scale = if (pip) 1f else subtitlePrefs.fontScale
+        val bgAlpha = subtitlePrefs.backgroundAlpha.coerceIn(0f, 1f)
+        val textShadow = if (bgAlpha < 0.25f) {
+            Shadow(color = Color.Black.copy(alpha = 0.85f), offset = Offset(0f, 1.5f), blurRadius = 4f)
+        } else {
+            null
+        }
+        val textStyle = baseTypography.copy(
+            fontSize = baseTypography.fontSize * scale,
+            lineHeight = baseTypography.lineHeight * scale,
+            shadow = textShadow,
+        )
+        val annotated = remember(lines, pip, subtitlePrefs.bilingualSecondaryStyle) {
+            buildAnnotatedString {
+                lines.forEachIndexed { index, line ->
+                    if (index > 0) append('\n')
+                    if (index > 0 && !pip && subtitlePrefs.bilingualSecondaryStyle) {
+                        withStyle(
+                            SpanStyle(
+                                color = Color(0xFFDCE2EC),
+                                fontSize = 0.86.em,
+                            ),
+                        ) {
+                            append(line)
+                        }
+                    } else {
+                        append(line)
+                    }
+                }
+            }
+        }
+        val backgroundModifier = if (bgAlpha > 0.01f) {
+            Modifier
+                .clip(subtitleShape)
+                .background(Color.Black.copy(alpha = bgAlpha))
+                .border(HudSpecularBorderWidth, HudSpecularBorderColor.copy(alpha = bgAlpha.coerceAtMost(0.4f)), subtitleShape)
+        } else {
+            Modifier
+        }
         Box(
             modifier = modifier
                 .padding(bottom = subtitleBottom)
                 .padding(horizontal = if (pip) Spacing.Tight else Spacing.Loose),
         ) {
             Text(
-                subtitleText,
-                style = if (pip) MaterialTheme.typography.bodySmall else MaterialTheme.typography.bodyLarge,
+                text = annotated,
+                style = textStyle,
                 color = FixedColors.OnMedia,
                 textAlign = TextAlign.Center,
-                modifier = Modifier
-                    .clip(subtitleShape)
-                    .background(FixedColors.ScrimOnMedia)
-                    .border(HudSpecularBorderWidth, HudSpecularBorderColor, subtitleShape)
+                modifier = backgroundModifier
                     .padding(
                         horizontal = if (pip) Spacing.Tight else Spacing.Cozy,
                         vertical = if (pip) Spacing.Hair else 6.dp,

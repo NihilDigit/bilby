@@ -65,6 +65,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import dev.bilby.data.DanmakuPrefs
 import dev.bilby.data.DanmakuPrefsEditor
 import dev.bilby.data.SettingsStore
+import dev.bilby.data.SubtitlePrefs
+import dev.bilby.data.SubtitlePrefsEditor
 import dev.bilby.data.QualityOption
 import dev.bilby.player.SleepTimerMode
 import dev.bilby.player.SleepTimerState
@@ -110,6 +112,8 @@ internal fun PlayerSettingsContent(
     subtitleTracks: List<SubtitleTrack>,
     currentSubtitleLan: String,
     onSubtitleTrackChange: (String) -> Unit,
+    subtitlePrefs: SubtitlePrefs = SubtitlePrefs(),
+    subtitleEditor: SubtitlePrefsEditor? = null,
     modifier: Modifier = Modifier,
     /** 这次下发了的音轨 id,从高到低。只有一条或拿不到时这一段不画。 */
     audioOptions: List<Int> = emptyList(),
@@ -185,6 +189,9 @@ internal fun PlayerSettingsContent(
                 label = { it?.displayName ?: offLabel },
                 columns = columns,
             )
+            if (subtitleEditor != null) {
+                SubtitleStyleControls(prefs = subtitlePrefs, editor = subtitleEditor)
+            }
         }
 
         if (only == null && onSleepTimer != null) {
@@ -245,9 +252,10 @@ internal fun BoxScope.PlayerSettingsHost(
 ) {
     val sheetTitle = if (only == PlayerSettingsSection.SleepTimer) null else playerSettingsTitle(only)
     if (isFullscreen) {
-        // 窄的那一档只给一列短选项的单选段;弹幕、倍速、定时关闭分别带滑块、连体按钮或三列钟面预设,窄了挤不开。
+        // 窄的那一档只给一列短选项的单选段;弹幕、字幕(含滑块)、倍速、定时关闭需要更宽面板。
         val narrow = only != null &&
             only != PlayerSettingsSection.Danmaku &&
+            only != PlayerSettingsSection.Subtitle &&
             only != PlayerSettingsSection.Speed &&
             only != PlayerSettingsSection.SleepTimer
         PlayerSidePanel(visible = open, onDismiss = onDismiss, narrow = narrow) {
@@ -644,6 +652,103 @@ private fun PanelColumn(modifier: Modifier, content: @Composable ColumnScope.() 
             ),
         content = content,
     )
+}
+
+@Composable
+private fun SubtitleStyleControls(
+    prefs: SubtitlePrefs,
+    editor: SubtitlePrefsEditor,
+) {
+    var fontScale by remember(prefs.fontScale) { mutableFloatStateOf(prefs.fontScale) }
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        SectionTitle(stringResource(Res.string.settings_subtitle_font_scale), Modifier.weight(1f))
+        Text(
+            stringResource(Res.string.settings_danmaku_opacity_value, (fontScale * 100).roundToInt()),
+            style = MaterialTheme.typography.labelLarge.tabular,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+    Slider(
+        value = fontScale,
+        onValueChange = { fontScale = (it * 20f).roundToInt() / 20f },
+        onValueChangeFinished = { editor.setFontScale(fontScale) },
+        valueRange = SubtitlePrefs.MIN_FONT_SCALE..SubtitlePrefs.MAX_FONT_SCALE,
+    )
+
+    var bgAlpha by remember(prefs.backgroundAlpha) { mutableFloatStateOf(prefs.backgroundAlpha) }
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        SectionTitle(stringResource(Res.string.settings_subtitle_bg_alpha), Modifier.weight(1f))
+        Text(
+            stringResource(Res.string.settings_danmaku_opacity_value, (bgAlpha * 100).roundToInt()),
+            style = MaterialTheme.typography.labelLarge.tabular,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+    Slider(
+        value = bgAlpha,
+        onValueChange = { bgAlpha = (it * 20f).roundToInt() / 20f },
+        onValueChangeFinished = { editor.setBackgroundAlpha(bgAlpha) },
+        valueRange = SubtitlePrefs.MIN_BG_ALPHA..SubtitlePrefs.MAX_BG_ALPHA,
+    )
+
+    var offsetDp by remember(prefs.bottomOffsetDp) { mutableFloatStateOf(prefs.bottomOffsetDp.toFloat()) }
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        SectionTitle(stringResource(Res.string.settings_subtitle_bottom_offset), Modifier.weight(1f))
+        Text(
+            stringResource(Res.string.settings_subtitle_bottom_offset_value, offsetDp.roundToInt()),
+            style = MaterialTheme.typography.labelLarge.tabular,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+    Slider(
+        value = offsetDp,
+        onValueChange = { offsetDp = (it / 4f).roundToInt() * 4f },
+        onValueChangeFinished = { editor.setBottomOffsetDp(offsetDp.roundToInt()) },
+        valueRange = SubtitlePrefs.MIN_BOTTOM_OFFSET_DP.toFloat()..SubtitlePrefs.MAX_BOTTOM_OFFSET_DP.toFloat(),
+    )
+
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier
+            .fillMaxWidth()
+            .toggleable(
+                value = prefs.bilingualSecondaryStyle,
+                role = Role.Switch,
+                onValueChange = editor::setBilingualSecondaryStyle,
+            )
+            .padding(vertical = Spacing.Tight),
+    ) {
+        Column(modifier = Modifier.weight(1f).padding(end = Spacing.Cozy)) {
+            Text(
+                text = stringResource(Res.string.settings_subtitle_bilingual_style),
+                style = MaterialTheme.typography.bodyMedium,
+            )
+            Text(
+                text = stringResource(Res.string.settings_subtitle_bilingual_style_subtitle),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        Switch(
+            checked = prefs.bilingualSecondaryStyle,
+            onCheckedChange = null,
+        )
+    }
+
+    val isCustomStyle = abs(prefs.fontScale - SubtitlePrefs.DEFAULT_FONT_SCALE) >= 0.01f ||
+        abs(prefs.backgroundAlpha - SubtitlePrefs.DEFAULT_BG_ALPHA) >= 0.01f ||
+        prefs.bottomOffsetDp != SubtitlePrefs.DEFAULT_BOTTOM_OFFSET_DP ||
+        !prefs.bilingualSecondaryStyle
+    if (isCustomStyle) {
+        Row(
+            horizontalArrangement = Arrangement.End,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            TextButton(onClick = editor::resetStyle) {
+                Text(stringResource(Res.string.settings_subtitle_reset))
+            }
+        }
+    }
 }
 
 /**

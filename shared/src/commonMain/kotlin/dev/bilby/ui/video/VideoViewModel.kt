@@ -24,6 +24,9 @@ import dev.bilby.data.DanmakuPrefs
 import dev.bilby.data.DanmakuPrefsEditor
 import dev.bilby.data.SettingsStore
 import dev.bilby.data.StoredDanmakuPrefsEditor
+import dev.bilby.data.StoredSubtitlePrefsEditor
+import dev.bilby.data.SubtitlePrefs
+import dev.bilby.data.SubtitlePrefsEditor
 import dev.bilby.data.SponsorBlockRepository
 import dev.bilby.data.FollowState
 import dev.bilby.data.RelationRepository
@@ -707,6 +710,12 @@ class VideoViewModel(
         object : DanmakuPrefsEditor by StoredDanmakuPrefsEditor(settings, persistScope) {
             override fun setEnabled(enabled: Boolean) = setDanmakuEnabled(enabled)
         }
+
+    /** 字幕样式偏好(字号、底色透明度、底部抬高、双语副行柔和样式),实时生效并落盘。 */
+    val subtitlePrefs: StateFlow<SubtitlePrefs> = settings.subtitlePrefs
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), SubtitlePrefs())
+
+    val subtitleEditor: SubtitlePrefsEditor = StoredSubtitlePrefsEditor(settings, persistScope)
 
     /**
      * 弹幕池随 cid 变,原因和字幕轨、SponsorBlock 片段一样:播放器全 app 共用,队列走到
