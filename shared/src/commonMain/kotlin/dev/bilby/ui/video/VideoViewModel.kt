@@ -32,6 +32,7 @@ import dev.bilby.data.ToViewRepository
 import dev.bilby.data.SponsorSegment
 import dev.bilby.player.SubtitleCue
 import dev.bilby.player.SubtitleTrack
+import dev.bilby.player.findBestMatch
 import dev.nihildigit.danmaku.Danmaku
 import dev.nihildigit.danmaku.DanmakuMode
 import dev.nihildigit.danmaku.SpecialDanmaku
@@ -382,7 +383,10 @@ class VideoViewModel(
     private val _subtitleTracks = MutableStateFlow<List<SubtitleTrack>>(emptyList())
     val subtitleTracks: StateFlow<List<SubtitleTrack>> = _subtitleTracks.asStateFlow()
 
-    /** 选中轨的语言代码,空字符串是关(默认)。看视频的控制条和听视频的文稿共用这一份状态。 */
+    /** 用户持久化的首选字幕语言代码(空字符串表示关);切视频时据此做同语言家族匹配。 */
+    private var preferredSubtitleLan = ""
+
+    /** 当前视频实际选中的字幕轨语言代码,空字符串是关(默认)。看视频的控制条和听视频的文稿共用这一份状态。 */
     private val _subtitleLan = MutableStateFlow("")
     val subtitleLan: StateFlow<String> = _subtitleLan.asStateFlow()
 
@@ -581,7 +585,9 @@ class VideoViewModel(
     init {
         // ViewModel 级:偏好跨视频有效,只读一次,[switchTo] 不重读。
         viewModelScope.launch {
-            _subtitleLan.value = settings.subtitlePrefs.first().lan
+            val saved = settings.subtitlePrefs.first().lan
+            preferredSubtitleLan = saved
+            _subtitleLan.value = saved
             subtitleLanLoaded.complete(Unit)
         }
         viewModelScope.launch {
@@ -886,22 +892,25 @@ class VideoViewModel(
     private suspend fun loadSubtitleTracks(target: String, cid: Long) {
         val tracks = subtitleRepository.getTracks(target, cid)
         _subtitleTracks.value = tracks
-        // 换 P 或换视频之后继续用上次选的那条(按语言代码找);找不到就关掉,不自动挑一条——
-        // "默认关"是产品要求,不是"还没设置过"才关。
-        val selectedLan = _subtitleLan.value
-        val track = tracks.firstOrNull { it.lan == selectedLan }
+        // 换 P 或换视频之后继续沿用用户偏好的语言(优先精确匹配,其次同语言家族如 ai-zh ↔ zh-CN);
+        // 偏好为空("默认关")时严格不自动开启。
+        val selectedPref = preferredSubtitleLan
+        val track = tracks.findBestMatch(selectedPref)
         if (track == null) {
+            _subtitleLan.value = ""
             _subtitleCues.value = emptyList()
             return
         }
+        _subtitleLan.value = track.lan
         val cues = subtitleRepository.getCues(track.subtitleUrl)
-        if (_subtitleLan.value == selectedLan) {
+        if (preferredSubtitleLan == selectedPref && _subtitleLan.value == track.lan) {
             _subtitleCues.value = cues
         }
     }
 
     /** 用户在控制条的字幕菜单里选了一条轨(或选了"关")。[lan] 为空字符串表示关。 */
     fun selectSubtitle(lan: String) {
+        preferredSubtitleLan = lan
         _subtitleLan.value = lan
         subtitleCuesJob?.cancel()
         // persistScope:选完字幕紧接着退出页面是常见操作,而退出会取消 viewModelScope,
@@ -914,7 +923,7 @@ class VideoViewModel(
         // 走的是 persistScope,不受这里的取消影响。
         subtitleCuesJob = videoScope.launch {
             val cues = subtitleRepository.getCues(track.subtitleUrl)
-            if (_subtitleLan.value == lan) {
+            if (preferredSubtitleLan == lan && _subtitleLan.value == lan) {
                 _subtitleCues.value = cues
             }
         }

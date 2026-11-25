@@ -426,6 +426,8 @@ fun PlayerShell(
     layoutPrefs: PlayerLayoutPrefs = LocalPlayerLayoutPrefs.current,
     /** 顶栏自定义面板项的业务控件渲染器；null 时走兼容的 [topBarActions]。 */
     topBarControlRenderer: (@Composable RowScope.(PlayerPanelItem.Control) -> Unit)? = null,
+    /** 当前页已开启且有有效字幕正文:控件隐藏播放期间将位置轮询提高到 150ms,避免字幕延迟半秒或漏句。 */
+    activeSubtitles: Boolean = false,
 ) {
     val pipWindow = rememberPipWindow().takeIf { pip }
     // 在小窗里离开了这一页(键盘返回、队列播完退页)时,窗口不能留在右下角那一小块里。
@@ -686,9 +688,11 @@ fun PlayerShell(
         videoAspect = if (!attached) null else player.videoSize.displayAspect()
     }
 
-    val pollInterval =
-        if (controlsVisible || isSeeking) POSITION_POLL_ACTIVE_MILLIS
-        else POSITION_POLL_IDLE_MILLIS
+    val pollInterval = when {
+        controlsVisible || isSeeking -> POSITION_POLL_ACTIVE_MILLIS
+        activeSubtitles && isPlaying -> POSITION_POLL_SUBTITLE_MILLIS
+        else -> POSITION_POLL_IDLE_MILLIS
+    }
     LaunchedEffect(player, pollInterval) {
         while (true) {
             if (progress.dragPositionMillis == null) progress.syncPolledPosition(player.currentPosition)
@@ -2068,6 +2072,9 @@ private fun SeekHudLayer(
 }
 
 private const val POSITION_POLL_ACTIVE_MILLIS = 200L
+
+/** 控件收起但正在显示字幕:150ms 刷新保证字幕与台词同步,同时不触发外层全树重组。 */
+private const val POSITION_POLL_SUBTITLE_MILLIS = 150L
 
 /** 控件收起(含息屏只出声):没人看,只要下次唤出时是对的就行。 */
 private const val POSITION_POLL_IDLE_MILLIS = 500L

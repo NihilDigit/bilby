@@ -80,7 +80,8 @@ import dev.bilby.ui.player.sleepTimerLabel
 import dev.bilby.data.QualityOption
 import dev.bilby.player.SubtitleCue
 import dev.bilby.player.SubtitleTrack
-import dev.bilby.player.cueAt
+import dev.bilby.player.activeSubtitleText
+import dev.bilby.player.maxCueDurationMillis
 import dev.bilby.ui.player.DanmakuFeed
 import dev.bilby.ui.player.DanmakuFontSizeSp
 import dev.bilby.ui.player.DanmakuVoteOverlay
@@ -377,6 +378,7 @@ fun BilbyPlayer(
         },
         embeddedTopActions = embeddedTopActions,
         pip = pip,
+        activeSubtitles = matchesCurrentPage && subtitleCues.isNotEmpty(),
         wheelAdjustsVolume = isFullscreen || twoPane || spaciousEmbedded,
         onToggleDanmaku = danmakuEditor?.let { editor -> { editor.setEnabled(!danmakuPrefs.enabled) } },
         onRequestDanmakuInput = when {
@@ -413,17 +415,20 @@ fun BilbyPlayer(
             //
             // 二分查找,不逐帧线性扫:见 SubtitleCue.kt 上的注释。落在两句之间的空档里时是 null,
             // 什么都不画——句间停顿本来就没有字幕在念。
-            val subtitleBottomTarget = if (controlsVisible && !locked) {
-                maxOf(SubtitleBottomWithControls, controlBarHeight + SubtitleControlsGap)
-            } else {
-                SubtitleBottomBare
+            val subtitleBottomTarget = when {
+                pip -> Spacing.Tight
+                controlsVisible && !locked -> maxOf(SubtitleBottomWithControls, controlBarHeight + SubtitleControlsGap)
+                else -> SubtitleBottomBare
             }
-            SubtitleOverlayLayer(
-                subtitleCues = subtitleCues,
-                progress = progressState,
-                subtitleBottomTarget = subtitleBottomTarget,
-                modifier = Modifier.align(Alignment.BottomCenter),
-            )
+            if (matchesCurrentPage && subtitleCues.isNotEmpty()) {
+                SubtitleOverlayLayer(
+                    subtitleCues = subtitleCues,
+                    progress = progressState,
+                    subtitleBottomTarget = subtitleBottomTarget,
+                    pip = pip,
+                    modifier = Modifier.align(Alignment.BottomCenter),
+                )
+            }
             if (matchesCurrentPage && danmakuPrefs.enabled && !pip && !locked && danmakuVotes.isNotEmpty()) {
                 val compactVote = isCompactVoteContainer(
                     containerWidth = containerWidth,
@@ -574,32 +579,39 @@ private fun SubtitleOverlayLayer(
     subtitleCues: List<SubtitleCue>,
     progress: PlayerProgressState,
     subtitleBottomTarget: Dp,
+    pip: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
+    val maxDuration = remember(subtitleCues) { subtitleCues.maxCueDurationMillis() }
     val posMillis = progress.displayPositionMillis
-    val cue = remember(subtitleCues, posMillis) { subtitleCues.cueAt(posMillis) }
+    val text = remember(subtitleCues, maxDuration, posMillis) {
+        subtitleCues.activeSubtitleText(posMillis, maxDuration)
+    }
     val subtitleBottom by animateDpAsState(
         targetValue = subtitleBottomTarget,
         animationSpec = MaterialTheme.motionScheme.fastSpatialSpec(),
         label = "subtitle-bottom",
     )
-    cue?.let {
+    text?.let { subtitleText ->
         val subtitleShape = MaterialTheme.shapes.small
         Box(
             modifier = modifier
                 .padding(bottom = subtitleBottom)
-                .padding(horizontal = Spacing.Loose),
+                .padding(horizontal = if (pip) Spacing.Tight else Spacing.Loose),
         ) {
             Text(
-                it.text,
-                style = MaterialTheme.typography.bodyLarge,
+                subtitleText,
+                style = if (pip) MaterialTheme.typography.bodySmall else MaterialTheme.typography.bodyLarge,
                 color = FixedColors.OnMedia,
                 textAlign = TextAlign.Center,
                 modifier = Modifier
                     .clip(subtitleShape)
                     .background(FixedColors.ScrimOnMedia)
                     .border(HudSpecularBorderWidth, HudSpecularBorderColor, subtitleShape)
-                    .padding(horizontal = 12.dp, vertical = 6.dp),
+                    .padding(
+                        horizontal = if (pip) Spacing.Tight else Spacing.Cozy,
+                        vertical = if (pip) Spacing.Hair else 6.dp,
+                    ),
             )
         }
     }
