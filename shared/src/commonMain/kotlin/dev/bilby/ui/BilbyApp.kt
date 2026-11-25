@@ -1155,6 +1155,44 @@ private fun BilbyApp(
         }
     }
 
+    // 播放合集/系列视频时(含自动连播切集与暂停),自动同步本地合集观看进度。
+    val playingCollectionSource = appAudioState.queue?.source?.takeIf { it.id > 0L }
+    val playingQueueItem = appAudioState.queue?.current
+    LaunchedEffect(playingCollectionSource, playingQueueItem?.bvid) {
+        val source = playingCollectionSource ?: return@LaunchedEffect
+        val item = playingQueueItem ?: return@LaunchedEffect
+        val pos = (playback.currentPositionMillis() ?: 0L).coerceAtLeast(0L)
+        val dur = (item.durationSeconds * 1000L).coerceAtLeast(0L)
+        container.collectionProgressRepository.recordPlay(
+            mid = source.mid,
+            collectionId = source.id,
+            isSeason = source.isSeason,
+            bvid = item.bvid,
+            title = item.title,
+            coverUrl = item.coverUrl,
+            positionMillis = pos,
+            durationMillis = dur,
+        )
+    }
+    LaunchedEffect(playingCollectionSource, playingQueueItem?.bvid, appAudioState.isPlaying) {
+        val source = playingCollectionSource ?: return@LaunchedEffect
+        val item = playingQueueItem ?: return@LaunchedEffect
+        if (!appAudioState.isPlaying) {
+            val pos = (playback.currentPositionMillis() ?: 0L).coerceAtLeast(0L)
+            val dur = (item.durationSeconds * 1000L).coerceAtLeast(0L)
+            if (pos > 0L) {
+                container.collectionProgressRepository.updatePosition(
+                    mid = source.mid,
+                    collectionId = source.id,
+                    isSeason = source.isSeason,
+                    bvid = item.bvid,
+                    positionMillis = pos,
+                    durationMillis = dur,
+                )
+            }
+        }
+    }
+
     CompositionLocalProvider(LocalQueueActions provides queueMenuActions) {
     Box(
         modifier = Modifier
@@ -4535,7 +4573,13 @@ private fun CollectionRoute(
         key = "collection-${key.mid}-${key.isSeason}-${key.id}",
         factory = viewModelFactory {
             initializer {
-                CollectionViewModel(key.mid, key.id, key.isSeason, container.spaceRepository)
+                CollectionViewModel(
+                    key.mid,
+                    key.id,
+                    key.isSeason,
+                    container.spaceRepository,
+                    container.collectionProgressRepository,
+                )
             }
         },
     )
@@ -4546,9 +4590,24 @@ private fun CollectionRoute(
         onBack = onBack,
         onLoadMore = { vm.loadMore() },
         onRefresh = vm::refresh,
+        onResumeBvid = { resumeBvid ->
+            val index = state.items.indexOfFirst { it.bvid == resumeBvid }
+            val page = if (index >= 0) index / SpaceRepository.COLLECTION_PAGE_SIZE + 1 else 1
+            onVideoClick(resumeBvid, QueueContext.Collection(key.mid, key.id, key.isSeason, key.name, page))
+        },
         onVideoClick = { item ->
             val index = state.items.indexOf(item).coerceAtLeast(0)
             val page = index / SpaceRepository.COLLECTION_PAGE_SIZE + 1
+            container.persistScope.launch {
+                container.collectionProgressRepository.recordPlay(
+                    mid = key.mid,
+                    collectionId = key.id,
+                    isSeason = key.isSeason,
+                    bvid = item.bvid,
+                    title = item.title,
+                    coverUrl = item.coverUrl,
+                )
+            }
             onVideoClick(item.bvid, QueueContext.Collection(key.mid, key.id, key.isSeason, key.name, page))
         },
     )
