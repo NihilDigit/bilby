@@ -331,6 +331,13 @@
     <string name="player_progress">Playback progress</string>
     <string name="player_subtitle">Subtitles</string>
     <string name="player_subtitle_off">Subtitles off</string>
+    <string name="settings_subtitle_font_scale">Subtitle size</string>
+    <string name="settings_subtitle_bg_alpha">Background opacity</string>
+    <string name="settings_subtitle_bottom_offset">Bottom offset</string>
+    <string name="settings_subtitle_bottom_offset_value">+%1$ddp</string>
+    <string name="settings_subtitle_bilingual_style">Soften secondary bilingual line</string>
+    <string name="settings_subtitle_bilingual_style_subtitle">Use slightly smaller size and softer color for secondary bilingual lines</string>
+    <string name="settings_subtitle_reset">Reset style</string>
     <string name="player_danmaku">Danmaku</string>
     <string name="danmaku_send">Send danmaku</string>
     <string name="danmaku_show">Show danmaku</string>

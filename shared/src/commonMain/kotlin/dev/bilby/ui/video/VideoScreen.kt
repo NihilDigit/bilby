@@ -243,6 +243,8 @@ fun VideoScreen(
     subtitleLan: String = "",
     subtitleCues: List<SubtitleCue> = emptyList(),
     onSelectSubtitle: (String) -> Unit = {},
+    subtitlePrefs: dev.bilby.data.SubtitlePrefs = dev.bilby.data.SubtitlePrefs(),
+    subtitleEditor: dev.bilby.data.SubtitlePrefsEditor? = null,
     /** 弹幕总开关,默认关。只在看视频时有意义——听视频没有画面挂弹幕层。 */
     danmakuPrefs: DanmakuPrefs = DanmakuPrefs(),
     danmakuEditor: DanmakuPrefsEditor? = null,
@@ -1021,6 +1023,8 @@ fun VideoScreen(
                     currentSubtitleLan = subtitleLan,
                     onSubtitleTrackChange = onSelectSubtitle,
                     subtitleCues = subtitleCues,
+                    subtitlePrefs = subtitlePrefs,
+                    subtitleEditor = subtitleEditor,
                     danmakuPrefs = danmakuPrefs,
                     danmakuEditor = danmakuEditor,
                     sleepTimer = sleepTimerState,

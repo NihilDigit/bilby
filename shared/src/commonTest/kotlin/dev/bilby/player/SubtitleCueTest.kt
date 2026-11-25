@@ -60,4 +60,37 @@ class SubtitleCueTest {
         assertNull(list.cueAt(3_000))
         assertEquals(1, list.indexNear(3_000))
     }
+
+    @Test
+    fun `长短字幕重叠时前一条不被短字幕提前截断`() {
+        val list = listOf(
+            SubtitleCue(fromMillis = 10_000, toMillis = 15_000, text = "long line"),
+            SubtitleCue(fromMillis = 11_000, toMillis = 12_000, text = "short note"),
+        )
+        assertEquals("long line\nshort note", list.activeSubtitleText(11_500))
+        // 13s 时短字幕已结束,但长字幕仍在有效期内
+        assertEquals("long line", list.activeSubtitleText(13_000))
+        assertEquals("long line", list.cueAt(13_000)?.text)
+    }
+
+    @Test
+    fun `同时开始的双语字幕全部保留显示`() {
+        val list = listOf(
+            SubtitleCue(fromMillis = 2_000, toMillis = 5_000, text = "Hello"),
+            SubtitleCue(fromMillis = 2_000, toMillis = 5_000, text = "你好"),
+        )
+        assertEquals("Hello\n你好", list.activeSubtitleText(3_000))
+    }
+
+    @Test
+    fun `同语言家族字幕轨可跨视频回退匹配,关闭状态不自动开启`() {
+        val tracks = listOf(
+            SubtitleTrack(lan = "zh-CN", displayName = "中文（中国）", isAi = false, subtitleUrl = "https://a"),
+            SubtitleTrack(lan = "ai-en", displayName = "英语（AI）", isAi = true, subtitleUrl = "https://b"),
+        )
+        assertEquals("zh-CN", tracks.findBestMatch("ai-zh")?.lan)
+        assertEquals("ai-en", tracks.findBestMatch("en-US")?.lan)
+        assertNull(tracks.findBestMatch(""))
+        assertNull(tracks.findBestMatch("ja"))
+    }
 }

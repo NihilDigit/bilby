@@ -392,6 +392,13 @@
     <string name="player_progress">播放进度</string>
     <string name="player_subtitle">字幕</string>
     <string name="player_subtitle_off">关闭字幕</string>
+    <string name="settings_subtitle_font_scale">字幕字号</string>
+    <string name="settings_subtitle_bg_alpha">背景不透明度</string>
+    <string name="settings_subtitle_bottom_offset">底部抬高</string>
+    <string name="settings_subtitle_bottom_offset_value">+%1$ddp</string>
+    <string name="settings_subtitle_bilingual_style">双语副行柔和样式</string>
+    <string name="settings_subtitle_bilingual_style_subtitle">同屏双语字幕时，第二行略小并采用柔和字色区分</string>
+    <string name="settings_subtitle_reset">恢复默认样式</string>
     <string name="player_danmaku">弹幕</string>
     <string name="danmaku_send">发弹幕</string>
     <string name="danmaku_show">显示弹幕</string>

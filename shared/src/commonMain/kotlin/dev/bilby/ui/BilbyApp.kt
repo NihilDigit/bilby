@@ -4965,6 +4965,7 @@ private fun VideoPane(
     val subtitleTracks by vm.subtitleTracks.collectAsStateWithLifecycle()
     val subtitleLan by vm.subtitleLan.collectAsStateWithLifecycle()
     val subtitleCues by vm.subtitleCues.collectAsStateWithLifecycle()
+    val subtitlePrefs by vm.subtitlePrefs.collectAsStateWithLifecycle()
     val danmakuPrefs by vm.danmakuPrefs.collectAsStateWithLifecycle()
     val danmakuPool by vm.danmakuPool.collectAsStateWithLifecycle()
     val cached by vm.cached.collectAsStateWithLifecycle()
@@ -5050,6 +5051,8 @@ private fun VideoPane(
         subtitleLan = subtitleLan,
         subtitleCues = subtitleCues,
         onSelectSubtitle = vm::selectSubtitle,
+        subtitlePrefs = subtitlePrefs,
+        subtitleEditor = vm.subtitleEditor,
         staffFollowed = staffFollowed,
         onFollowStaff = vm::followStaff,
         danmakuPrefs = danmakuPrefs,

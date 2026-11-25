@@ -16,14 +16,80 @@ data class SubtitleCue(val fromMillis: Long, val toMillis: Long, val text: Strin
 /**
  * 播放位置命中的那条字幕,`cues` 落在两条之间的空档里(常见,句与句之间有停顿)时返回 null。
  *
- * 二分而不是线性扫:一条长视频几千条 cue,跟着 500ms 的位置轮询线性扫是白烧 CPU。要求
+ * 二分而不是线性扫:一条长视频几千条 cue,跟着位置轮询线性扫是白烧 CPU。要求
  * `cues` 按 `fromMillis` 升序——接口本来就是顺序给的,取正文时不重排。
+ * 若存在长短字幕重叠(例如较长外语行覆盖一条短注释),回溯寻找仍在有效期内的字幕,避免前一条提前消失。
  */
 fun List<SubtitleCue>.cueAt(positionMillis: Long): SubtitleCue? {
     val index = indexNear(positionMillis)
     if (index < 0) return null
     val cue = this[index]
-    return cue.takeIf { positionMillis < it.toMillis }
+    if (positionMillis < cue.toMillis) return cue
+    return cuesAt(positionMillis).lastOrNull()
+}
+
+/** 整条字幕轨中最长单条时长,用于限制 [cuesAt] 向前扫描重叠字幕的窗口。 */
+fun List<SubtitleCue>.maxCueDurationMillis(): Long =
+    maxOfOrNull { (it.toMillis - it.fromMillis).coerceAtLeast(0L) } ?: 0L
+
+/**
+ * 返回播放位置 [positionMillis] 时刻所有生效中的字幕(按原序列升序),
+ * 正确处理双语/多说话人同时段或长短字幕重叠,不因后开始的短字幕结束而截断前一条。
+ */
+fun List<SubtitleCue>.cuesAt(
+    positionMillis: Long,
+    maxCueDurationMillis: Long = maxCueDurationMillis(),
+): List<SubtitleCue> {
+    val index = indexNear(positionMillis)
+    if (index < 0) return emptyList()
+    val earliestFrom = positionMillis - maxCueDurationMillis.coerceAtLeast(0L)
+    val active = mutableListOf<SubtitleCue>()
+    var i = index
+    while (i >= 0) {
+        val cue = this[i]
+        if (cue.fromMillis < earliestFrom) break
+        if (positionMillis >= cue.fromMillis && positionMillis < cue.toMillis) {
+            active.add(cue)
+        }
+        i--
+    }
+    if (active.size > 1) active.reverse()
+    return active
+}
+
+/** 将同一时刻生效的多条字幕拼成展示文本,连续重复内容去重;无生效字幕时返回 null。 */
+fun List<SubtitleCue>.activeSubtitleText(
+    positionMillis: Long,
+    maxCueDurationMillis: Long = maxCueDurationMillis(),
+): String? {
+    val active = cuesAt(positionMillis, maxCueDurationMillis)
+    if (active.isEmpty()) return null
+    if (active.size == 1) return active[0].text
+    val lines = mutableListOf<String>()
+    for (cue in active) {
+        if (lines.lastOrNull() != cue.text) lines.add(cue.text)
+    }
+    return lines.joinToString("\n")
+}
+
+/**
+ * 按用户偏好的语言代码挑选最匹配字幕轨:
+ * - [preferredLan] 为空时严格返回 null(保持关闭);
+ * - 优先精确匹配 `lan`;
+ * - 若无精确匹配(例如上次选了 `ai-zh`,新视频只有 `zh-CN`/`zh-Hans`),按同语言家族回退,
+ *   保持人工字幕优先于 AI 字幕(列表已由 `SubtitleRepository` 排序)。
+ */
+fun List<SubtitleTrack>.findBestMatch(preferredLan: String): SubtitleTrack? {
+    if (preferredLan.isBlank() || isEmpty()) return null
+    firstOrNull { it.lan == preferredLan }?.let { return it }
+    val targetFamily = subtitleLanguageFamily(preferredLan)
+    if (targetFamily.isEmpty()) return null
+    return firstOrNull { subtitleLanguageFamily(it.lan) == targetFamily }
+}
+
+private fun subtitleLanguageFamily(lan: String): String {
+    val normalized = lan.trim().lowercase().removePrefix("ai-")
+    return normalized.substringBefore('-').substringBefore('_')
 }
 
 /**
