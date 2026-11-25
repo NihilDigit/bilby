@@ -6,6 +6,7 @@ import dev.bilby.api.BiliResult
 import dev.bilby.data.db.FeedCacheRepository
 import dev.bilby.data.model.DynamicCard
 import dev.bilby.data.model.FeedEntry
+import dev.bilby.data.model.plainText
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -50,12 +51,35 @@ class DynamicFeedStore(
     private val _other = MutableStateFlow<List<DynamicCard>>(emptyList())
     private val _status = MutableStateFlow(DynamicFeedStatus())
 
-    val home: Flow<List<FeedEntry>> = combine(_home, settings.excludedFeedMids) { items, excluded ->
-        items.filterNot { it.upMid in excluded }
+    val home: Flow<List<FeedEntry>> = combine(
+        _home,
+        settings.excludedFeedMids,
+        settings.contentBlockMatcher,
+    ) { items, excluded, matcher ->
+        items.filterNot { entry ->
+            if (entry.upMid in excluded) return@filterNot true
+            if (matcher.isEmpty) return@filterNot false
+            val title = when (entry) {
+                is FeedEntry.Video -> entry.title
+                is FeedEntry.Article -> entry.title
+            }
+            matcher.matchesVideo(upMid = entry.upMid, upName = entry.upName, title = title)
+        }
     }
 
-    val other: Flow<List<DynamicCard>> = combine(_other, settings.excludedFeedMids) { cards, excluded ->
-        cards.filterNot { it.author.mid in excluded }
+    val other: Flow<List<DynamicCard>> = combine(
+        _other,
+        settings.excludedFeedMids,
+        settings.contentBlockMatcher,
+    ) { cards, excluded, matcher ->
+        cards.filterNot { card ->
+            card.author.mid in excluded ||
+                (!matcher.isEmpty && matcher.matchesVideo(
+                    upMid = card.author.mid,
+                    upName = card.author.name,
+                    title = card.text.plainText(),
+                ))
+        }
     }
 
     val status: StateFlow<DynamicFeedStatus> = _status.asStateFlow()

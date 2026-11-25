@@ -2,7 +2,10 @@ package dev.bilby.ui
 
 import dev.bilby.ui.components.BilbySearchTopBar
 import dev.bilby.ui.components.EditableFocusTracker
+import dev.bilby.ui.components.LocalContentBlockMatcher
 import dev.bilby.ui.components.LocalCopyNotice
+import dev.bilby.ui.components.LocalVideoBlockActions
+import dev.bilby.ui.components.VideoBlockActions
 import dev.bilby.ui.components.LocalEditableFocusTracker
 import dev.bilby.ui.components.LocalPageRefreshRegistry
 import dev.bilby.ui.components.LocalPageSearchRegistry
@@ -289,6 +292,7 @@ import dev.bilby.ui.settings.PlayerCustomizationPage
 import dev.bilby.ui.settings.PlaybackSettingsPage
 import dev.bilby.data.model.ArticleRef
 import dev.bilby.data.model.FeedEntry
+import dev.bilby.ui.settings.BlockRulesPage
 import dev.bilby.ui.settings.ExcludedFeedPage
 import dev.bilby.ui.settings.PrivacySettingsPage
 import dev.bilby.ui.settings.SettingsScreen
@@ -1155,7 +1159,36 @@ private fun BilbyApp(
         }
     }
 
-    CompositionLocalProvider(LocalQueueActions provides queueMenuActions) {
+    val contentBlockMatcher by remember(container) {
+        container.settings.contentBlockMatcher
+    }.collectAsStateWithLifecycle(initialValue = dev.bilby.data.ContentBlockMatcher.EMPTY)
+    val undoLabel = stringResource(Res.string.action_undo)
+    val videoBlockActions = remember(container, snackbarHostState, snackbarScope, undoLabel) {
+        VideoBlockActions { upMid, upName ->
+            snackbarScope.launch {
+                val label = upName.ifBlank { "UID $upMid" }
+                container.settings.addBlockedUp(mid = upMid, name = label)
+                val res = snackbarHostState.showSnackbar(
+                    message = dev.bilby.getString(Res.string.block_up_added, label),
+                    actionLabel = undoLabel,
+                    duration = SnackbarDuration.Short,
+                )
+                if (res == SnackbarResult.ActionPerformed) {
+                    container.settings.removeBlockedUp(upMid)
+                    snackbarHostState.showSnackbar(
+                        dev.bilby.getString(Res.string.block_up_undone, label),
+                        duration = SnackbarDuration.Short,
+                    )
+                }
+            }
+        }
+    }
+
+    CompositionLocalProvider(
+        LocalQueueActions provides queueMenuActions,
+        LocalVideoBlockActions provides videoBlockActions,
+        LocalContentBlockMatcher provides contentBlockMatcher,
+    ) {
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -3350,6 +3383,7 @@ private fun SettingsPageRoute(
                 onRetryHistoryPause = vm::loadHistoryPause,
                 onOpenBlacklist = onOpenBlacklist,
                 onOpenExcludedFeed = { onOpenSection(SettingsSection.ExcludedFeed) },
+                onOpenBlockRules = { onOpenSection(SettingsSection.BlockRules) },
                 onDanmakusArchiveChange = vm::setDanmakusArchive,
                 onBack = onBack,
             )
@@ -3359,6 +3393,14 @@ private fun SettingsPageRoute(
             state = state,
             onRestore = vm::restoreExcludedFeedMid,
             onClearAll = vm::clearExcludedFeedMids,
+            onBack = onBack,
+        )
+
+        SettingsSection.BlockRules -> BlockRulesPage(
+            state = state,
+            onAddKeyword = vm::addBlockedKeyword,
+            onRemoveRule = vm::removeContentBlockRule,
+            onClearAll = vm::clearContentBlockRules,
             onBack = onBack,
         )
 

@@ -799,6 +799,19 @@
 
     <!-- Confirmation for restoring every excluded uploader -->
     <string name="settings_feed_clear_excluded_message">The exclusion list is emptied and posts from these uploaders return to the feed.</string>
+    <string name="menu_block_up">Block this creator</string>
+    <string name="block_up_added">Blocked %1$s in feed and search</string>
+    <string name="block_up_undone">Unblocked %1$s</string>
+    <string name="settings_block_rules">Local content filters</string>
+    <string name="settings_block_rules_subtitle">Hide matching creators and title keywords locally in feed and search</string>
+    <string name="settings_block_rules_count">%1$d rules</string>
+    <string name="settings_block_keyword_hint">Keyword to block in titles or creator names</string>
+    <string name="settings_block_keyword_add">Add</string>
+    <string name="settings_block_rule_up_prefix">Creator</string>
+    <string name="settings_block_rule_remove">Remove</string>
+    <string name="settings_block_rules_empty">No filter rules yet. Long-press any video to block a creator or add keywords here.</string>
+    <string name="settings_block_rules_clear">Clear filter rules</string>
+    <string name="settings_block_rules_clear_message">All blocked creator and keyword rules will be cleared.</string>
 
     <!-- Live room connection notices -->
     <string name="live_notice_disconnected">Disconnected</string>
