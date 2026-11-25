@@ -76,6 +76,43 @@ enum class SpaceArchiveOrder(val apiValue: String) {
     Click("click"), // 最多播放
 }
 
+/**
+ * 合集/系列目录排序方式。
+ *
+ * - [Default]: 保持 UP 主默认顺序(合集 `sort_reverse=false`,系列 `sort=desc`)。
+ * - [Newest]: 按投稿发布时间从新到旧。
+ * - [Oldest]: 按投稿发布时间从旧到新。
+ */
+enum class CollectionSort {
+    Default,
+    Newest,
+    Oldest,
+}
+
+/** 按 [sort] 对合集/系列视频列表做稳定排序。 */
+fun List<SpaceVideoItem>.sortedByCollectionSort(sort: CollectionSort): List<SpaceVideoItem> = when (sort) {
+    CollectionSort.Default -> this
+    CollectionSort.Newest -> sortedByDescending { it.publishedAtEpochSeconds }
+    CollectionSort.Oldest -> sortedBy { it.publishedAtEpochSeconds }
+}
+
+/**
+ * 大型合集无法全量拉取时,根据默认首屏时间戳走向推断 `sort_reverse` 方向:
+ * 若首条发布时间早于或等于末条(合集原本正序),最新需反转(`true`)、最早不反转(`false`);
+ * 若原本就是倒序(首条更新),则相反。
+ */
+fun inferSeasonReverse(defaultFirstPage: List<SpaceVideoItem>, sort: CollectionSort): Boolean {
+    if (sort == CollectionSort.Default) return false
+    if (defaultFirstPage.size < 2) return sort == CollectionSort.Newest
+    val ascendingByDefault = defaultFirstPage.first().publishedAtEpochSeconds <=
+        defaultFirstPage.last().publishedAtEpochSeconds
+    return when (sort) {
+        CollectionSort.Newest -> ascendingByDefault
+        CollectionSort.Oldest -> !ascendingByDefault
+        CollectionSort.Default -> false
+    }
+}
+
 data class SpaceArchivePage(val total: Int, val items: List<SpaceVideoItem>)
 
 /**
@@ -384,12 +421,13 @@ class SpaceRepository(private val client: BiliClient) {
         id: Long,
         isSeason: Boolean,
         page: Int,
+        reverse: Boolean = false,
     ): BiliResult<SpaceCollectionDetailPage> {
         val (url, params) = if (isSeason) {
             "${BiliConstants.WEB_HOST}/x/polymer/web-space/seasons_archives_list" to mapOf(
                 "mid" to mid.toString(),
                 "season_id" to id.toString(),
-                "sort_reverse" to "false",
+                "sort_reverse" to reverse.toString(),
                 "page_size" to COLLECTION_PAGE_SIZE.toString(),
                 "page_num" to page.toString(),
                 "web_location" to "333.1387",
@@ -398,7 +436,7 @@ class SpaceRepository(private val client: BiliClient) {
             "${BiliConstants.WEB_HOST}/x/series/archives" to mapOf(
                 "mid" to mid.toString(),
                 "series_id" to id.toString(),
-                "sort" to "desc",
+                "sort" to if (reverse) "asc" else "desc",
                 "ps" to COLLECTION_PAGE_SIZE.toString(),
                 "pn" to page.toString(),
                 "web_location" to "333.1387",

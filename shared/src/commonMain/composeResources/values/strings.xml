@@ -1060,6 +1060,9 @@
     <string name="feed_burst_expand_rest">展开其余 %1$d 条连发</string>
     <string name="feed_live_count_badge">%1$d 直播</string>
     <string name="collection_total_count">共 %1$d 个视频</string>
+    <string name="collection_sort_default">默认排序</string>
+    <string name="collection_sort_newest">最新发布</string>
+    <string name="collection_sort_oldest">最早发布</string>
     <string name="agent_steps_count">已检索 %1$d 步</string>
     <!-- 媒体库页内搜索 -->
     <string name="history_search_hint">搜索历史记录</string>

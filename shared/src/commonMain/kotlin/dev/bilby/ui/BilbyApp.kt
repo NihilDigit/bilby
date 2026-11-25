@@ -4546,10 +4546,14 @@ private fun CollectionRoute(
         onBack = onBack,
         onLoadMore = { vm.loadMore() },
         onRefresh = vm::refresh,
+        onSortChanged = vm::onSortChanged,
         onVideoClick = { item ->
             val index = state.items.indexOf(item).coerceAtLeast(0)
             val page = index / SpaceRepository.COLLECTION_PAGE_SIZE + 1
-            onVideoClick(item.bvid, QueueContext.Collection(key.mid, key.id, key.isSeason, key.name, page))
+            onVideoClick(
+                item.bvid,
+                QueueContext.Collection(key.mid, key.id, key.isSeason, key.name, page, sort = state.sort),
+            )
         },
     )
 }

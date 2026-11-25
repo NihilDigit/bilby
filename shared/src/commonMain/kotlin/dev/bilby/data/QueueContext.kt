@@ -30,6 +30,7 @@ sealed interface QueueContext {
         val isSeason: Boolean,
         val name: String,
         val page: Int = 1,
+        val sort: CollectionSort = CollectionSort.Default,
     ) : QueueContext
 
     /** 空间页的投稿栏,带着当时的排序与空间内搜索词。 */
