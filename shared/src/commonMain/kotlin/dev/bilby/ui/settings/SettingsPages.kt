@@ -117,6 +117,7 @@ import dev.bilby.resources.*
 import dev.bilby.ui.navigationBarsBottom
 import dev.bilby.ui.padScaffoldExceptBottom
 import dev.bilby.data.CodecPreference
+import dev.bilby.data.ContentBlockRule
 import dev.bilby.data.DEFAULT_NIGHT_END_MINUTE
 import dev.bilby.data.DEFAULT_NIGHT_START_MINUTE
 import dev.bilby.data.LlmConfig
@@ -228,6 +229,8 @@ enum class SettingsSection {
 
     /** 排除的 UP 主名单。从隐私页再降一层,理由见 [ExcludedFeedPage]。 */
     ExcludedFeed,
+    /** 本地内容屏蔽规则（UP 主与关键词）。从隐私页再降一层。 */
+    BlockRules,
     Agent,
     Privacy,
     NightMode,
@@ -1195,6 +1198,7 @@ fun PrivacySettingsPage(
     onRetryHistoryPause: () -> Unit,
     onOpenBlacklist: () -> Unit,
     onOpenExcludedFeed: () -> Unit,
+    onOpenBlockRules: () -> Unit,
     onDanmakusArchiveChange: (Boolean) -> Unit,
     onBack: (() -> Unit)?,
 ) {
@@ -1253,6 +1257,19 @@ fun PrivacySettingsPage(
                     subtitle = stringResource(Res.string.settings_danmakus_archive_subtitle),
                     checked = state.danmakusArchive,
                     onCheckedChange = onDanmakusArchiveChange,
+                )
+            }
+            row { position ->
+                SettingRow(
+                    position = position,
+                    icon = Icons.Outlined.Block,
+                    title = stringResource(Res.string.settings_block_rules),
+                    subtitle = stringResource(Res.string.settings_block_rules_subtitle),
+                    value = state.contentBlockRules.size.takeIf { it > 0 }?.let {
+                        stringResource(Res.string.settings_block_rules_count, it)
+                    },
+                    target = RowTarget.Page,
+                    onClick = onOpenBlockRules,
                 )
             }
             // 一个都没排除过的人不需要看见这个概念。
@@ -1335,6 +1352,118 @@ fun ExcludedFeedPage(
                         onClearAll()
                     },
                 ) { Text(stringResource(Res.string.settings_feed_clear_excluded)) }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmingClearAll = false }) {
+                    Text(stringResource(Res.string.action_cancel))
+                }
+            },
+        )
+    }
+}
+
+/**
+ * 本地内容屏蔽规则：按 UP 主或关键词（匹配标题与 UP 名）在关注动态与搜索结果中实时过滤。
+ */
+@Composable
+fun BlockRulesPage(
+    state: SettingsUiState,
+    onAddKeyword: (String) -> Unit,
+    onRemoveRule: (ContentBlockRule.Kind, String) -> Unit,
+    onClearAll: () -> Unit,
+    onBack: (() -> Unit)?,
+) {
+    var keywordInput by rememberSaveable { mutableStateOf("") }
+    var confirmingClearAll by rememberSaveable { mutableStateOf(false) }
+    val upPrefix = stringResource(Res.string.settings_block_rule_up_prefix)
+    SettingsSubPage(stringResource(Res.string.settings_block_rules), onBack, state.loaded) {
+        androidx.compose.foundation.layout.Row(
+            verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+            horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(Spacing.Tight),
+            modifier = Modifier.padding(horizontal = Spacing.Comfortable, vertical = Spacing.Tight),
+        ) {
+            OutlinedTextField(
+                value = keywordInput,
+                onValueChange = { keywordInput = it },
+                singleLine = true,
+                placeholder = { Text(stringResource(Res.string.settings_block_keyword_hint)) },
+                modifier = Modifier.weight(1f),
+            )
+            Button(
+                enabled = keywordInput.isNotBlank(),
+                onClick = {
+                    val kw = keywordInput.trim()
+                    if (kw.isNotEmpty()) {
+                        onAddKeyword(kw)
+                        keywordInput = ""
+                    }
+                },
+            ) {
+                Text(stringResource(Res.string.settings_block_keyword_add))
+            }
+        }
+        if (state.contentBlockRules.isEmpty()) {
+            Text(
+                text = stringResource(Res.string.settings_block_rules_empty),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(horizontal = Spacing.Comfortable, vertical = Spacing.Cozy),
+            )
+        } else {
+            SettingsGroup {
+                state.contentBlockRules.forEach { rule ->
+                    val title = if (rule.kind == ContentBlockRule.Kind.Up) {
+                        "$upPrefix  ${rule.label}"
+                    } else {
+                        rule.label
+                    }
+                    val icon = if (rule.kind == ContentBlockRule.Kind.Up) {
+                        Icons.Outlined.Person
+                    } else {
+                        Icons.Outlined.Search
+                    }
+                    row { position ->
+                        StaticSettingRow(
+                            position = position,
+                            icon = icon,
+                            title = title,
+                            trailing = {
+                                TextButton(onClick = { onRemoveRule(rule.kind, rule.value) }) {
+                                    Text(stringResource(Res.string.settings_block_rule_remove))
+                                }
+                            },
+                        )
+                    }
+                }
+                if (state.contentBlockRules.size > 1) {
+                    row { position ->
+                        SettingRow(
+                            position = position,
+                            icon = Icons.Outlined.Restore,
+                            title = stringResource(Res.string.settings_block_rules_clear),
+                            onClick = { confirmingClearAll = true },
+                        )
+                    }
+                }
+            }
+        }
+    }
+    if (confirmingClearAll) {
+        AlertDialog(
+            onDismissRequest = { confirmingClearAll = false },
+            title = { Text(stringResource(Res.string.settings_block_rules_clear)) },
+            text = { Text(stringResource(Res.string.settings_block_rules_clear_message)) },
+            confirmButton = {
+                Button(
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.error,
+                        contentColor = MaterialTheme.colorScheme.onError,
+                    ),
+                    onClick = {
+                        confirmingClearAll = false
+                        onClearAll()
+                    },
+                ) { Text(stringResource(Res.string.settings_block_rules_clear)) }
             },
             dismissButton = {
                 TextButton(onClick = { confirmingClearAll = false }) {

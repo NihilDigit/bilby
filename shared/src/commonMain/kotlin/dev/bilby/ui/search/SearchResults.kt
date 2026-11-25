@@ -78,6 +78,7 @@ import dev.bilby.ui.BilbyWindowSize
 import dev.bilby.ui.components.Avatar
 import dev.bilby.ui.components.ContextMenuBox
 import dev.bilby.ui.components.CoverAspectRatio
+import dev.bilby.ui.components.LocalContentBlockMatcher
 import dev.bilby.ui.components.LocalPointerSource
 import dev.bilby.ui.components.PagedColumn
 import dev.bilby.ui.components.PagedLayout
@@ -475,21 +476,33 @@ private fun ResultPage(
                     bottomPadding = bottomPadding,
                 )
 
-                SearchTab.User -> PagedColumn(
-                    layout = layout,
-                    items = state.users.items,
-                    key = { it.mid },
-                    skeletonRow = { PersonRowSkeleton() },
-                    loading = state.users.loading && state.users.items.isEmpty(),
-                    appending = state.users.appending,
-                    hasMore = state.users.hasMore,
-                    error = state.users.error.takeIf { state.users.items.isEmpty() },
-                    emptyText = stringResource(Res.string.search_no_results),
-                    onLoadMore = actions.onLoadMore,
-                    onRetry = actions.onRetry,
-                    contentPadding = listPadding,
-                ) { user ->
-                    UserResultRow(user, onClick = { actions.onUserClick(user.mid) })
+                SearchTab.User -> {
+                    val blockMatcher = LocalContentBlockMatcher.current
+                    val visibleUsers = remember(state.users.items, blockMatcher) {
+                        if (blockMatcher.isEmpty) {
+                            state.users.items
+                        } else {
+                            state.users.items.filterNot { user ->
+                                blockMatcher.matchesUser(mid = user.mid, name = user.name)
+                            }
+                        }
+                    }
+                    PagedColumn(
+                        layout = layout,
+                        items = visibleUsers,
+                        key = { it.mid },
+                        skeletonRow = { PersonRowSkeleton() },
+                        loading = state.users.loading && state.users.items.isEmpty(),
+                        appending = state.users.appending,
+                        hasMore = state.users.hasMore,
+                        error = state.users.error.takeIf { state.users.items.isEmpty() },
+                        emptyText = stringResource(Res.string.search_no_results),
+                        onLoadMore = actions.onLoadMore,
+                        onRetry = actions.onRetry,
+                        contentPadding = listPadding,
+                    ) { user ->
+                        UserResultRow(user, onClick = { actions.onUserClick(user.mid) })
+                    }
                 }
 
                 SearchTab.Article -> PagedColumn(
@@ -531,6 +544,20 @@ private fun VideoResults(
     bottomPadding: Dp,
 ) {
     val videos = state.videos
+    val blockMatcher = LocalContentBlockMatcher.current
+    val visibleVideos = remember(videos.items, blockMatcher) {
+        if (blockMatcher.isEmpty) {
+            videos.items
+        } else {
+            videos.items.filterNot { video ->
+                blockMatcher.matchesVideo(
+                    upMid = video.upMid,
+                    upName = video.upName,
+                    title = video.title,
+                )
+            }
+        }
+    }
     val wideWindow = rememberBilbyWindowSize().isAtLeast(BilbyWindowSize.Expanded)
     val density = LocalDensity.current
     var containerWidth by remember { mutableStateOf(0.dp) }
@@ -566,7 +593,7 @@ private fun VideoResults(
     ) {
         PagedColumn(
             layout = effectiveLayout,
-            items = videos.items,
+            items = visibleVideos,
             key = { it.bvid },
             loading = videos.loading && videos.items.isEmpty(),
             appending = videos.appending,

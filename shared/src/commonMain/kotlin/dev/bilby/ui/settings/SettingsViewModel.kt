@@ -22,6 +22,7 @@ import androidx.lifecycle.viewModelScope
 import dev.bilby.data.CodecPreference
 import dev.bilby.agent.LlmClient
 import dev.bilby.agent.LlmModelInfo
+import dev.bilby.data.ContentBlockRule
 import dev.bilby.data.ExcludedUp
 import dev.bilby.data.LlmConfig
 import dev.bilby.data.NavigationPrefs
@@ -85,6 +86,8 @@ data class SettingsUiState(
     val pbpOutroCompletion: Boolean = true,
     /** 排除的 UP 主,名字已经带上。为空时那一行不显示 —— 没排除过的人不需要看见这个概念。 */
     val excludedFeedUps: List<ExcludedUp> = emptyList(),
+    /** 本地内容屏蔽规则（UP 主与关键词）。 */
+    val contentBlockRules: List<ContentBlockRule> = emptyList(),
     /** 直播间要不要去 danmakus.com 补本场早前的醒目留言。见 SettingsStore.danmakusArchiveEnabled。 */
     val danmakusArchive: Boolean = true,
     val offlineConcurrency: Int = SettingsStore.DEFAULT_OFFLINE_CONCURRENCY,
@@ -295,6 +298,11 @@ class SettingsViewModel(
             }
         }
         viewModelScope.launch {
+            settings.contentBlockRules.collect { rules ->
+                _state.update { it.copy(contentBlockRules = rules) }
+            }
+        }
+        viewModelScope.launch {
             settings.danmakusArchiveEnabled.collect { enabled ->
                 _state.update { it.copy(danmakusArchive = enabled) }
             }
@@ -317,6 +325,18 @@ class SettingsViewModel(
 
     fun restoreExcludedFeedMid(mid: Long) {
         persist { settings.restoreFeedMid(mid) }
+    }
+
+    fun addBlockedKeyword(keyword: String) {
+        persist { settings.addBlockedKeyword(keyword) }
+    }
+
+    fun removeContentBlockRule(kind: ContentBlockRule.Kind, value: String) {
+        persist { settings.removeContentBlockRule(kind, value) }
+    }
+
+    fun clearContentBlockRules() {
+        persist { settings.clearContentBlockRules() }
     }
 
     fun setDanmakusArchive(enabled: Boolean) {

@@ -496,6 +496,67 @@ class SettingsStore(private val store: DataStore<Preferences>) {
         store.edit { p -> p.remove(KEY_EXCLUDED_FEED_MIDS) }
     }
 
+    /** 本地内容屏蔽规则（UP 主与标题/UP 名关键词），用于动态与搜索实时过滤。 */
+    val contentBlockRules: Flow<List<ContentBlockRule>> = store.data.map { p ->
+        decodeContentBlockRules(p[KEY_CONTENT_BLOCK_RULES])
+    }
+
+    val contentBlockMatcher: Flow<ContentBlockMatcher> = contentBlockRules.map(ContentBlockMatcher::fromRules)
+
+    suspend fun addBlockedUp(mid: Long, name: String) {
+        if (mid <= 0L) return
+        val value = mid.toString()
+        val label = name.ifBlank { "UID $mid" }
+        store.edit { p ->
+            val current = decodeContentBlockRules(p[KEY_CONTENT_BLOCK_RULES])
+                .filterNot { it.kind == ContentBlockRule.Kind.Up && it.value == value }
+            val updated = listOf(ContentBlockRule(ContentBlockRule.Kind.Up, value, label)) + current
+            p[KEY_CONTENT_BLOCK_RULES] = encodeContentBlockRules(updated)
+        }
+    }
+
+    suspend fun removeBlockedUp(mid: Long) {
+        removeContentBlockRule(ContentBlockRule.Kind.Up, mid.toString())
+    }
+
+    suspend fun addBlockedKeyword(keyword: String): Boolean {
+        val trimmed = keyword.trim()
+        if (trimmed.isEmpty()) return false
+        val normalized = trimmed.lowercase()
+        store.edit { p ->
+            val current = decodeContentBlockRules(p[KEY_CONTENT_BLOCK_RULES])
+                .filterNot { it.kind == ContentBlockRule.Kind.Keyword && it.value == normalized }
+            val updated = listOf(ContentBlockRule(ContentBlockRule.Kind.Keyword, normalized, trimmed)) + current
+            p[KEY_CONTENT_BLOCK_RULES] = encodeContentBlockRules(updated)
+        }
+        return true
+    }
+
+    suspend fun removeContentBlockRule(kind: ContentBlockRule.Kind, value: String) {
+        store.edit { p ->
+            val updated = decodeContentBlockRules(p[KEY_CONTENT_BLOCK_RULES])
+                .filterNot { it.kind == kind && it.value == value }
+            if (updated.isEmpty()) p.remove(KEY_CONTENT_BLOCK_RULES)
+            else p[KEY_CONTENT_BLOCK_RULES] = encodeContentBlockRules(updated)
+        }
+    }
+
+    suspend fun clearContentBlockRules() {
+        store.edit { p -> p.remove(KEY_CONTENT_BLOCK_RULES) }
+    }
+
+    private fun decodeContentBlockRules(raw: String?): List<ContentBlockRule> {
+        if (raw.isNullOrBlank()) return emptyList()
+        return runCatching {
+            ContentBlockRulesJson.decodeFromString(ListSerializer(ContentBlockRule.serializer()), raw)
+        }.onFailure { cause ->
+            BiliLog.w("解析本地屏蔽规则失败: ${cause.message}", cause)
+        }.getOrDefault(emptyList())
+    }
+
+    private fun encodeContentBlockRules(rules: List<ContentBlockRule>): String =
+        ContentBlockRulesJson.encodeToString(ListSerializer(ContentBlockRule.serializer()), rules)
+
     /**
      * 普通搜索的历史,最近的在前。
      *
@@ -822,6 +883,7 @@ class SettingsStore(private val store: DataStore<Preferences>) {
         private val KEY_DANMAKU_IN_PIP = booleanPreferencesKey("danmaku_in_pip")
         private val KEY_DANMAKU_FONT_SCALE = floatPreferencesKey("danmaku_font_scale")
         private val KEY_EXCLUDED_FEED_MIDS = stringSetPreferencesKey("excluded_feed_mids")
+        private val KEY_CONTENT_BLOCK_RULES = stringPreferencesKey("content_block_rules")
 
         private val KEY_DANMAKUS_ARCHIVE = booleanPreferencesKey("danmakus_archive_enabled")
 
@@ -1165,6 +1227,7 @@ private data class ScheduleRuleDto(
 )
 
 private val NightUpsJson = Json { ignoreUnknownKeys = true }
+private val ContentBlockRulesJson = Json { ignoreUnknownKeys = true }
 private val NightUpsSerializer = ListSerializer(WhitelistedUpDto.serializer())
 private val ScheduleRulesJson = Json { ignoreUnknownKeys = true; encodeDefaults = true }
 private val ScheduleRulesSerializer = ListSerializer(ScheduleRuleDto.serializer())

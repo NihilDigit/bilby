@@ -864,6 +864,19 @@
 
     <!-- 排除名单全部恢复的确认 -->
     <string name="settings_feed_clear_excluded_message">排除名单会清空，这些 UP 主的投稿重新出现在动态里。</string>
+    <string name="menu_block_up">屏蔽这位 UP 主</string>
+    <string name="block_up_added">已屏蔽 %1$s，动态与搜索将自动过滤</string>
+    <string name="block_up_undone">已取消屏蔽 %1$s</string>
+    <string name="settings_block_rules">本地内容屏蔽</string>
+    <string name="settings_block_rules_subtitle">按 UP 主或标题关键词在动态与搜索中本地过滤</string>
+    <string name="settings_block_rules_count">%1$d 条规则</string>
+    <string name="settings_block_keyword_hint">输入要屏蔽的标题或 UP 主关键词</string>
+    <string name="settings_block_keyword_add">添加</string>
+    <string name="settings_block_rule_up_prefix">UP</string>
+    <string name="settings_block_rule_remove">移除</string>
+    <string name="settings_block_rules_empty">暂无屏蔽规则，可长按视频屏蔽 UP 主或在此添加关键词</string>
+    <string name="settings_block_rules_clear">清空屏蔽规则</string>
+    <string name="settings_block_rules_clear_message">已添加的 UP 主与关键词屏蔽规则都会被清除。</string>
 
     <!-- 直播间的连接状态提示 -->
     <string name="live_notice_disconnected">连接已断开</string>

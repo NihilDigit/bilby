@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.PlaylistAdd
 import androidx.compose.material.icons.automirrored.outlined.PlaylistPlay
+import androidx.compose.material.icons.outlined.Block
 import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.Link
 import androidx.compose.material.icons.outlined.Person
@@ -61,11 +62,13 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.round
+import dev.bilby.data.ContentBlockMatcher
 import dev.bilby.player.QueueItem
 import dev.bilby.resources.Res
 import dev.bilby.resources.action_copy_title
 import dev.bilby.resources.action_share
 import dev.bilby.resources.comment_copied
+import dev.bilby.resources.menu_block_up
 import dev.bilby.resources.menu_copy_link
 import dev.bilby.resources.menu_open_space
 import dev.bilby.resources.queue_add
@@ -93,6 +96,16 @@ data class QueueMenuActions(
 )
 
 val LocalQueueActions = staticCompositionLocalOf<QueueMenuActions?> { null }
+
+/** 视频列表项右键/长按本地屏蔽 UP 主动作，由根部 [dev.bilby.ui.BilbyApp] 提供。 */
+data class VideoBlockActions(
+    val blockUp: (upMid: Long, upName: String) -> Unit,
+)
+
+val LocalVideoBlockActions = staticCompositionLocalOf<VideoBlockActions?> { null }
+
+/** 本地内容屏蔽匹配器，供搜索结果等列表实时过滤。 */
+val LocalContentBlockMatcher = staticCompositionLocalOf { ContentBlockMatcher.EMPTY }
 
 /**
  * 桌面右键菜单的动效方案:去掉移动端 `DropdownMenu` 默认的 `0.8 -> 1.0` 缩放弹簧,保留极短的
@@ -316,6 +329,7 @@ fun videoCommonMenuItemCount(
         if (includeQueueActions && LocalQueueActions.current != null) count += 2
         if (title == null || title.isNotBlank()) count += 1
         count += 2
+        if (upMid != 0L && LocalVideoBlockActions.current != null) count += 1
     }
     if (upMid != 0L && onOpenUpSpace != null) count += 1
     return count
@@ -341,6 +355,7 @@ fun VideoCommonMenuItems(
 ) {
     val system = LocalSystemActions.current
     val queueActions = LocalQueueActions.current.takeIf { includeQueueActions }
+    val blockActions = LocalVideoBlockActions.current
     val copyTitle = rememberCopyAction()
     val copyBvid = rememberCopyAction(
         clipLabel = stringResource(Res.string.video_bvid_clip_label),
@@ -416,6 +431,18 @@ fun VideoCommonMenuItems(
             },
             shape = menuItemShape(shareIndex, totalCount),
         )
+        if (upMid != 0L && blockActions != null) {
+            val blockUpIndex = cursor++
+            DropdownMenuItem(
+                onClick = {
+                    close()
+                    blockActions.blockUp(upMid, upName)
+                },
+                text = { Text(stringResource(Res.string.menu_block_up)) },
+                leadingIcon = { Icon(Icons.Outlined.Block, contentDescription = null) },
+                shape = menuItemShape(blockUpIndex, totalCount),
+            )
+        }
     }
     if (upMid != 0L && onOpenUpSpace != null) {
         val spaceIndex = cursor
